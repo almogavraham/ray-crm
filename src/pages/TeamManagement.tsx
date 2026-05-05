@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { sendSignInLinkToEmail } from 'firebase/auth';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { db } from '../lib/firebase';
+import { sendInviteEmail, isEmailJSConfigured } from '../lib/emailjs';
 import {
   UserPlus, Mail, Users, Shield, Clock, RefreshCw, Trash2,
   CheckCircle2, AlertCircle, Loader2, Award,
@@ -9,10 +9,7 @@ import {
 import type { TeamMember, Lead } from '../types';
 import StatusBadge from '../components/StatusBadge';
 
-const ACTION_CODE_SETTINGS = {
-  url: 'https://ray-crm.vercel.app',
-  handleCodeInApp: true,
-};
+const APP_URL = 'https://ray-crm.vercel.app';
 
 interface PendingInvite {
   email: string;
@@ -51,6 +48,7 @@ export default function TeamManagement({
   const [revokingEmail, setRevokingEmail] = useState<string | null>(null);
   const [confirmRemoveMember, setConfirmRemoveMember] = useState<TeamMember | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const emailJSReady = isEmailJSConfigured();
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'invites'), snapshot => {
@@ -82,26 +80,33 @@ export default function TeamManagement({
     setInviteStatus('loading');
     setInviteError('');
     try {
-      await sendSignInLinkToEmail(auth, inviteEmail.trim(), ACTION_CODE_SETTINGS);
-      await setDoc(doc(db, 'invites', inviteEmail.trim().replace('@', '_at_')), {
-        email: inviteEmail.trim(),
+      const email = inviteEmail.trim();
+      const inviteLink = `${APP_URL}?invite=${encodeURIComponent(email)}`;
+
+      if (emailJSReady) {
+        await sendInviteEmail({
+          toEmail:    email,
+          invitedBy:  currentUser || 'מנהל',
+          role:        inviteRole,
+          inviteLink,
+        });
+      }
+
+      await setDoc(doc(db, 'invites', email.replace('@', '_at_')), {
+        email,
         role: inviteRole,
         status: 'pending',
         invitedAt: new Date().toISOString(),
         invitedBy: currentUser || 'מנהל',
       });
-      window.localStorage.setItem('ray-invite-email', inviteEmail.trim());
-      onInvite(inviteEmail.trim(), inviteRole);
+
+      onInvite(email, inviteRole);
       setInviteStatus('sent');
       setInviteEmail('');
       setTimeout(() => setInviteStatus('idle'), 4000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'שגיאה לא ידועה';
-      if (msg.includes('auth/configuration-not-found') || msg.includes('EMAIL_NOT_FOUND') || msg.includes('operation-not-allowed')) {
-        setInviteError('שגיאת הגדרות: Email Link authentication אינו מופעל ב-Firebase Console. יש להפעיל אותו תחת Authentication → Sign-in method.');
-      } else {
-        setInviteError('שגיאה בשליחת ההזמנה: ' + msg);
-      }
+      setInviteError('שגיאה בשליחת ההזמנה: ' + msg);
       setInviteStatus('error');
     }
   };
@@ -109,7 +114,15 @@ export default function TeamManagement({
   const handleResend = async (invite: PendingInvite) => {
     setResendingEmail(invite.email);
     try {
-      await sendSignInLinkToEmail(auth, invite.email, ACTION_CODE_SETTINGS);
+      const inviteLink = `${APP_URL}?invite=${encodeURIComponent(invite.email)}`;
+      if (emailJSReady) {
+        await sendInviteEmail({
+          toEmail:    invite.email,
+          invitedBy:  currentUser || 'מנהל',
+          role:        invite.role,
+          inviteLink,
+        });
+      }
       await setDoc(doc(db, 'invites', invite.email.replace('@', '_at_')), {
         ...invite,
         invitedAt: new Date().toISOString(),
@@ -242,6 +255,13 @@ export default function TeamManagement({
                 dir="ltr"
               />
             </div>
+
+            {!emailJSReady && (
+              <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-4 py-3 flex items-start gap-2 text-right">
+                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                <span>Gmail לא מחובר — ההזמנות יישמרו במערכת אך לא יישלחו מהמייל שלך. חבר Gmail בהגדרות כדי לשלוח מיילים.</span>
+              </div>
+            )}
 
             {inviteStatus === 'error' && inviteError && (
               <div className="mt-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3 flex items-start gap-2 text-right">

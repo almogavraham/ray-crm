@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { X, Mail, Loader2, Copy, Check, ExternalLink, Sparkles } from 'lucide-react';
+import { X, Mail, Loader2, Copy, Check, ExternalLink, Sparkles, Send, CheckCircle2, AlertCircle } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, LeadStatus } from '../types';
 import { getApiKey } from '../lib/apiKey';
+import { sendLeadEmail, isEmailJSConfigured } from '../lib/emailjs';
 
 interface EmailOption {
   id: string;
@@ -86,6 +87,8 @@ export default function EmailModal({ lead, onClose }: EmailModalProps) {
   const [generatedEmail, setGeneratedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [sendStatus, setSendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const emailJSReady = isEmailJSConfigured();
 
   const options = EMAIL_OPTIONS_BY_STATUS[lead.status] || EMAIL_OPTIONS_BY_STATUS['default'];
 
@@ -132,6 +135,25 @@ ${RAY_CONTEXT}
     navigator.clipboard.writeText(generatedEmail);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSend = async () => {
+    if (!generatedEmail || sendStatus === 'sending') return;
+    setSendStatus('sending');
+    try {
+      await sendLeadEmail({
+        toEmail:  lead.email,
+        toName:   lead.contactName,
+        subject:  getSubject(),
+        message:  getBody(),
+        fromName: 'RAY Digital Agency',
+      });
+      setSendStatus('sent');
+      setTimeout(() => setSendStatus('idle'), 4000);
+    } catch {
+      setSendStatus('error');
+      setTimeout(() => setSendStatus('idle'), 4000);
+    }
   };
 
   const getSubject = () => {
@@ -210,21 +232,69 @@ ${RAY_CONTEXT}
                 {generatedEmail || <span className="text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin" />יוצר מייל...</span>}
               </div>
               {generatedEmail && !loading && (
-                <div className="flex items-center gap-2 justify-start">
-                  <a
-                    href={mailtoLink()}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-black hover:bg-neutral-800 text-white text-sm rounded-lg transition-colors"
-                  >
-                    <ExternalLink size={14} />
-                    פתח בתוכנת מייל
-                  </a>
-                  <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-600"
-                  >
-                    {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
-                    {copied ? 'הועתק!' : 'העתק'}
-                  </button>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 justify-start flex-wrap">
+                    {/* Send directly via Gmail (EmailJS) */}
+                    {emailJSReady ? (
+                      <button
+                        onClick={handleSend}
+                        disabled={sendStatus === 'sending' || sendStatus === 'sent'}
+                        className={`flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg transition-colors font-medium ${
+                          sendStatus === 'sent'
+                            ? 'bg-green-500 text-white'
+                            : sendStatus === 'error'
+                            ? 'bg-red-500 text-white'
+                            : sendStatus === 'sending'
+                            ? 'bg-neutral-400 text-white cursor-not-allowed'
+                            : 'bg-black hover:bg-neutral-800 text-white'
+                        }`}
+                      >
+                        {sendStatus === 'sending' && <Loader2 size={14} className="animate-spin" />}
+                        {sendStatus === 'sent'    && <CheckCircle2 size={14} />}
+                        {sendStatus === 'error'   && <AlertCircle size={14} />}
+                        {sendStatus === 'idle'    && <Send size={14} />}
+                        {sendStatus === 'sending' ? 'שולח...'
+                          : sendStatus === 'sent'  ? 'נשלח!'
+                          : sendStatus === 'error' ? 'שגיאה — נסה שוב'
+                          : 'שלח מהמייל שלי'}
+                      </button>
+                    ) : (
+                      <a
+                        href={mailtoLink()}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-black hover:bg-neutral-800 text-white text-sm rounded-lg transition-colors"
+                      >
+                        <ExternalLink size={14} />
+                        פתח בתוכנת מייל
+                      </a>
+                    )}
+                    <button
+                      onClick={handleCopy}
+                      className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-600"
+                    >
+                      {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                      {copied ? 'הועתק!' : 'העתק'}
+                    </button>
+                    {emailJSReady && (
+                      <a
+                        href={mailtoLink()}
+                        className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-400"
+                        title="פתח בתוכנת מייל"
+                      >
+                        <ExternalLink size={14} />
+                      </a>
+                    )}
+                  </div>
+                  {sendStatus === 'sent' && (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600 bg-green-50 px-3 py-2 rounded-lg">
+                      <CheckCircle2 size={13} />
+                      המייל נשלח בהצלחה ל-{lead.email}
+                    </div>
+                  )}
+                  {!emailJSReady && (
+                    <div className="text-xs text-slate-400 text-right">
+                      💡 חבר Gmail כדי לשלוח ישירות — ראה הגדרות
+                    </div>
+                  )}
                 </div>
               )}
             </div>

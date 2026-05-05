@@ -11,6 +11,7 @@ import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
 import LeadModal from './components/LeadModal';
+import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
 import Toast from './components/Toast';
@@ -123,6 +124,12 @@ export default function App() {
   const [toasts, setToasts]           = useState<ToastMessage[]>([]);
   const [fbReady, setFbReady]         = useState(false);
   const initialSyncDone               = useRef(false);
+
+  // ─── Invite via URL param (?invite=email@...) ─────────────────────────────
+  const [inviteEmail, setInviteEmail] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return decodeURIComponent(params.get('invite') || '');
+  });
 
   // ─── Overdue badge ────────────────────────────────────────────────────────
   const overdueBadge = useMemo(() => {
@@ -312,6 +319,19 @@ export default function App() {
     setTeam(prev => prev.filter(m => m.id !== id));
     addToast('חבר הצוות הוסר', 'info');
   };
+  const handleInviteSuccess = (name: string, email: string) => {
+    setInviteEmail('');
+    const exists = team.some(m => m.email === email);
+    if (!exists) {
+      setTeam(prev => [...prev, {
+        id:    Date.now().toString(),
+        name,
+        email,
+        role:  'סוכן',
+      }]);
+    }
+    addToast(`ברוך הבא, ${name}! 🎉`, 'success');
+  };
 
   // ─── Settings handlers ────────────────────────────────────────────────────
   const handleSettingsChange = (s: AppSettings) => {
@@ -423,6 +443,20 @@ export default function App() {
       )}
 
       <Toast toasts={toasts} onRemove={removeToast} />
+
+      {/* Invite acceptance modal — shown when ?invite=email is in URL */}
+      {inviteEmail && (
+        <InviteAcceptance
+          inviteEmail={inviteEmail}
+          onSuccess={handleInviteSuccess}
+          onDismiss={() => {
+            setInviteEmail('');
+            const url = new URL(window.location.href);
+            url.searchParams.delete('invite');
+            window.history.replaceState({}, document.title, url.toString());
+          }}
+        />
+      )}
     </>
     </ErrorBoundary>
   );
