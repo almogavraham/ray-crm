@@ -53,9 +53,10 @@ interface LeadModalProps {
   onClose: () => void;
   onSave: (updated: Lead) => void;
   onUpdate: (updated: Lead) => void;
+  onDelete?: (id: string) => void;
 }
 
-export default function LeadModal({ lead, onClose, onSave, onUpdate }: LeadModalProps) {
+export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }: LeadModalProps) {
   const [data, setData] = useState<Lead>({ ...lead });
   const [activeTab, setActiveTab] = useState<Tab>('details');
   const [newNote, setNewNote] = useState('');
@@ -70,6 +71,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate }: LeadModal
   const [showInsight, setShowInsight] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showEmail, setShowEmail] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [noteRecording, setNoteRecording] = useState(false);
   const noteRecogRef = useRef<unknown>(null);
 
@@ -609,6 +611,29 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate }: LeadModal
                 >
                   {saved ? <><CheckCircle2 size={16} />נשמר!</> : <><Save size={16} />שמור שינויים</>}
                 </button>
+
+                {/* Delete button */}
+                {onDelete && (
+                  <button
+                    onClick={() => {
+                      if (deleteConfirm) {
+                        onDelete(data.id);
+                        onClose();
+                      } else {
+                        setDeleteConfirm(true);
+                        setTimeout(() => setDeleteConfirm(false), 3000);
+                      }
+                    }}
+                    className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all border ${
+                      deleteConfirm
+                        ? 'bg-red-600 text-white border-red-500 shadow-sm shadow-red-500/30'
+                        : 'bg-transparent text-slate-500 border-slate-700 hover:border-red-500 hover:text-red-400'
+                    }`}
+                  >
+                    <Trash2 size={14} />
+                    {deleteConfirm ? 'לחץ שוב לאישור מחיקה' : 'מחק ליד'}
+                  </button>
+                )}
               </>
             )}
 

@@ -20,7 +20,7 @@ import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
 import {
-  collection, doc, setDoc, getDocs, onSnapshot, writeBatch,
+  collection, doc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
 } from 'firebase/firestore';
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -238,6 +238,13 @@ export default function App() {
     saveLead(updated);
   };
 
+  const handleLeadDelete = (id: string) => {
+    setLeads(prev => prev.filter(l => l.id !== id));
+    setSelectedLead(null);
+    deleteDoc(doc(db, 'leads', id)).catch(console.error);
+    addToast('הליד נמחק', 'info');
+  };
+
   const handleAddLead = async (lead: Lead) => {
     const leadWithTimestamp = { ...lead, createdAt: Date.now() } as Lead;
     setLeads(prev => [leadWithTimestamp, ...prev]);
@@ -435,6 +442,7 @@ export default function App() {
           onClose={() => setSelectedLead(null)}
           onSave={handleLeadSave}
           onUpdate={handleLeadUpdate}
+          onDelete={handleLeadDelete}
         />
       )}
 
