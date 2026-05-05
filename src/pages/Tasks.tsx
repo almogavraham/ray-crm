@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import {
   CheckCircle2, Circle, Trash2, Building2, Search,
   AlertTriangle, CalendarClock, CalendarCheck, Plus, X,
@@ -311,7 +312,7 @@ export default function Tasks({
                 { k:'all',       l:'הכל',            icon:<LayoutList size={12}/> },
                 { k:'mine',      l:'שלי',             icon:<User size={12}/> },
                 { k:'delegated', l:'הצוות שלי',       icon:<Users size={12}/> },
-              ] as { k:OwnerFilter; l:string; icon:React.ReactNode }[]).map(o => (
+              ] as { k:OwnerFilter; l:string; icon:ReactNode }[]).map(o => (
                 <button key={o.k} onClick={() => setOwnerFilter(o.k)}
                   className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${ownerFilter === o.k ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                   {o.icon}{o.l}
@@ -881,7 +882,7 @@ function TaskRow({ task, onComplete, onDelete, onLeadClick, isCompleting, isUrge
    STAT CARD
 ═══════════════════════════════════════════════════════════════════════════ */
 function StatCard({ value, label, icon, scheme, onClick }: {
-  value: number; label: string; icon: React.ReactNode;
+  value: number; label: string; icon: ReactNode;
   scheme: 'red' | 'amber' | 'green' | 'slate' | 'indigo';
   onClick?: () => void;
 }) {
