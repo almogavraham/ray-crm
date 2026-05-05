@@ -10,7 +10,7 @@ import type { TeamMember, Lead } from '../types';
 import StatusBadge from '../components/StatusBadge';
 
 const ACTION_CODE_SETTINGS = {
-  url: 'https://chex-crm.vercel.app',
+  url: 'https://ray-crm.vercel.app',
   handleCodeInApp: true,
 };
 
@@ -28,6 +28,7 @@ interface TeamManagementProps {
   currentUser?: string;
   onUpdateRole: (id: string, role: 'מנהל' | 'סוכן') => void;
   onInvite: (email: string, role: 'מנהל' | 'סוכן') => void;
+  onRemoveMember?: (id: string) => void;
 }
 
 type TabKey = 'members' | 'invites' | 'stats' | 'assignment';
@@ -38,6 +39,7 @@ export default function TeamManagement({
   currentUser,
   onUpdateRole,
   onInvite,
+  onRemoveMember,
 }: TeamManagementProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('members');
   const [inviteEmail, setInviteEmail] = useState('');
@@ -47,6 +49,8 @@ export default function TeamManagement({
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [resendingEmail, setResendingEmail] = useState<string | null>(null);
   const [revokingEmail, setRevokingEmail] = useState<string | null>(null);
+  const [confirmRemoveMember, setConfirmRemoveMember] = useState<TeamMember | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'invites'), snapshot => {
@@ -86,7 +90,7 @@ export default function TeamManagement({
         invitedAt: new Date().toISOString(),
         invitedBy: currentUser || 'מנהל',
       });
-      window.localStorage.setItem('chex-invite-email', inviteEmail.trim());
+      window.localStorage.setItem('ray-invite-email', inviteEmail.trim());
       onInvite(inviteEmail.trim(), inviteRole);
       setInviteStatus('sent');
       setInviteEmail('');
@@ -126,6 +130,19 @@ export default function TeamManagement({
       // silently fail revoke
     } finally {
       setRevokingEmail(null);
+    }
+  };
+
+  const handleRemoveMember = async (member: TeamMember) => {
+    setRemovingMemberId(member.id);
+    try {
+      await deleteDoc(doc(db, 'team', member.id));
+      onRemoveMember?.(member.id);
+    } catch {
+      // silently fail
+    } finally {
+      setRemovingMemberId(null);
+      setConfirmRemoveMember(null);
     }
   };
 
@@ -252,29 +269,40 @@ export default function TeamManagement({
                 const stats = agentStats(member.name);
                 return (
                   <div key={member.id} className="flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors">
-                    {/* Role selector */}
-                    {member.isCurrentUser ? (
-                      <span className="bg-amber-100 text-amber-700 text-xs px-3 py-1 rounded-full font-semibold flex items-center gap-1">
-                        <Shield size={11} />
-                        מנהל
-                      </span>
-                    ) : (
-                      <div className="flex rounded-lg overflow-hidden border border-slate-200 text-xs">
-                        {(['מנהל', 'סוכן'] as const).map(role => (
-                          <button
-                            key={role}
-                            onClick={() => onUpdateRole(member.id, role)}
-                            className={`px-3 py-1.5 font-medium transition-colors ${
-                              member.role === role
-                                ? 'bg-indigo-900 text-white'
-                                : 'bg-white text-slate-500 hover:bg-slate-50'
-                            }`}
-                          >
-                            {role}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    {/* Actions: role selector + remove */}
+                    <div className="flex items-center gap-2">
+                      {!member.isCurrentUser && (
+                        <button
+                          onClick={() => setConfirmRemoveMember(member)}
+                          className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="הסר מהצוות"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                      {member.isCurrentUser ? (
+                        <span className="bg-amber-100 text-amber-700 text-xs px-3 py-1 rounded-full font-semibold flex items-center gap-1">
+                          <Shield size={11} />
+                          מנהל
+                        </span>
+                      ) : (
+                        <div className="flex rounded-lg overflow-hidden border border-slate-200 text-xs">
+                          {(['מנהל', 'סוכן'] as const).map(role => (
+                            <button
+                              key={role}
+                              onClick={() => onUpdateRole(member.id, role)}
+                              className={`px-3 py-1.5 font-medium transition-colors ${
+                                member.role === role
+                                  ? 'bg-indigo-900 text-white'
+                                  : 'bg-white text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {role}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Quick stats */}
                     <div className="flex items-center gap-4 text-xs text-slate-500">
@@ -491,6 +519,46 @@ export default function TeamManagement({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── REMOVE MEMBER CONFIRMATION DIALOG ─── */}
+      {confirmRemoveMember && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-right" dir="rtl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 size={18} className="text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">הסרת חבר צוות</h3>
+                <p className="text-sm text-slate-500">פעולה זו אינה ניתנת לביטול</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 mb-6">
+              האם להסיר את <span className="font-semibold text-slate-800">{confirmRemoveMember.name}</span> ({confirmRemoveMember.email}) מהצוות?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmRemoveMember(null)}
+                className="flex-1 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={() => handleRemoveMember(confirmRemoveMember)}
+                disabled={removingMemberId === confirmRemoveMember.id}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-1.5 disabled:opacity-60"
+              >
+                {removingMemberId === confirmRemoveMember.id ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Trash2 size={14} />
+                )}
+                הסר מהצוות
+              </button>
+            </div>
           </div>
         </div>
       )}

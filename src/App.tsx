@@ -308,6 +308,10 @@ export default function App() {
     setTeam(prev => [...prev, newMember]);
     addToast(`הזמנה נשלחה ל-${email}`, 'success');
   };
+  const handleRemoveMember = (id: string) => {
+    setTeam(prev => prev.filter(m => m.id !== id));
+    addToast('חבר הצוות הוסר', 'info');
+  };
 
   // ─── Settings handlers ────────────────────────────────────────────────────
   const handleSettingsChange = (s: AppSettings) => {
@@ -362,7 +366,7 @@ export default function App() {
           <Overview leads={leads} onLeadClick={setSelectedLead} />
         )}
         {page === 'team' && (
-          <TeamManagement team={team} leads={leads} onUpdateRole={handleUpdateRole} onInvite={handleInvite} />
+          <TeamManagement team={team} leads={leads} onUpdateRole={handleUpdateRole} onInvite={handleInvite} onRemoveMember={handleRemoveMember} />
         )}
         {page === 'ai' && (
           <AiAssistant leads={leads} />
