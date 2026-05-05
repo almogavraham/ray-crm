@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
-  MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X,
+  MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
 } from 'lucide-react';
 import type { Lead, LeadStatus } from '../types';
 import StatusBadge from '../components/StatusBadge';
@@ -23,6 +23,7 @@ interface DashboardProps {
   onTaskComplete?: (leadId: string, taskId: string) => void;
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
   onBulkStatusChange?: (leadIds: string[], status: LeadStatus) => void;
+  onBulkDelete?: (leadIds: string[]) => void;
   compact?: boolean;
 }
 
@@ -41,7 +42,7 @@ function parseDate(d: string | undefined): number {
 
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard({
-  leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, compact = false,
+  leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete, compact = false,
 }: DashboardProps) {
   const [search,       setSearch]       = useState('');
   const [activeStatus, setActiveStatus] = useState<LeadStatus | 'הכל'>('הכל');
@@ -51,8 +52,9 @@ export default function Dashboard({
   const [emailLead,    setEmailLead]    = useState<Lead | null>(null);
   const [sortField,    setSortField]    = useState<SortField>('lastUpdate');
   const [sortDir,      setSortDir]      = useState<SortDir>('desc');
-  const [selected,     setSelected]     = useState<Set<string>>(new Set());
-  const [bulkStatus,   setBulkStatus]   = useState<LeadStatus | ''>('');
+  const [selected,          setSelected]          = useState<Set<string>>(new Set());
+  const [bulkStatus,        setBulkStatus]        = useState<LeadStatus | ''>('');
+  const [deleteConfirm,     setDeleteConfirm]     = useState(false);
 
   // ── KPI counts ──────────────────────────────────────────────────────────────
   const hotLeads     = leads.filter(l => safeNum(l.budget) >= 15000).length;
@@ -119,7 +121,17 @@ export default function Dashboard({
     setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
   const toggleSelectAll = () =>
     setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(l => l.id)));
-  const clearSelection  = () => { setSelected(new Set()); setBulkStatus(''); };
+  const clearSelection  = () => { setSelected(new Set()); setBulkStatus(''); setDeleteConfirm(false); };
+
+  const handleBulkDelete = () => {
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      setTimeout(() => setDeleteConfirm(false), 3000);
+      return;
+    }
+    onBulkDelete?.([...selected]);
+    clearSelection();
+  };
   const applyBulkStatus = () => {
     if (!bulkStatus || selected.size === 0) return;
     onBulkStatusChange?.([...selected], bulkStatus as LeadStatus);
@@ -286,6 +298,23 @@ export default function Dashboard({
           <button type="button" onClick={exportCSV} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition-colors">
             <Download size={13} /> ייצא
           </button>
+          {onBulkDelete && (
+            <>
+              <div className="w-px h-5 bg-slate-700" />
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg transition-all ${
+                  deleteConfirm
+                    ? 'bg-red-600 text-white animate-pulse'
+                    : 'text-red-400 hover:text-white hover:bg-red-600'
+                }`}
+              >
+                <Trash2 size={13} />
+                {deleteConfirm ? `אשר מחיקת ${selected.size}` : 'מחק'}
+              </button>
+            </>
+          )}
         </div>
       )}
 

@@ -291,6 +291,12 @@ export default function App() {
     addToast('משימה נוצרה בהצלחה ✓', 'success');
   };
 
+  const handleBulkDelete = (leadIds: string[]) => {
+    setLeads(prev => prev.filter(l => !leadIds.includes(l.id)));
+    leadIds.forEach(id => deleteDoc(doc(db, 'leads', id)).catch(console.error));
+    addToast(`${leadIds.length} לידים נמחקו`, 'info');
+  };
+
   const handleBulkStatusChange = (leadIds: string[], status: Lead['status']) => {
     setLeads(prev => {
       const next = prev.map(l =>
@@ -386,6 +392,7 @@ export default function App() {
             onTaskComplete={handleTaskComplete}
             onToast={addToast}
             onBulkStatusChange={handleBulkStatusChange}
+            onBulkDelete={handleBulkDelete}
             compact={settings.compactMode}
           />
         )}
