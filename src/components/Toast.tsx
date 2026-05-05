@@ -39,7 +39,7 @@ function ToastItem({ toast, onRemove }: { toast: ToastMessage; onRemove: (id: st
   const styles = {
     success: { bg: 'bg-green-600', icon: <CheckCircle2 size={16} className="text-white flex-shrink-0" /> },
     error: { bg: 'bg-red-600', icon: <AlertCircle size={16} className="text-white flex-shrink-0" /> },
-    info: { bg: 'bg-indigo-600', icon: <Info size={16} className="text-white flex-shrink-0" /> },
+    info: { bg: 'bg-slate-700', icon: <Info size={16} className="text-white flex-shrink-0" /> },
   }[toast.type];
 
   return (

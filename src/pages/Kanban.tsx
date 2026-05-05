@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Flame, ChevronDown, ChevronUp } from 'lucide-react';
+import { TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Lead, LeadStatus } from '../types';
 import { STATUS_CONFIG } from '../data/mockData';
 
 const COLUMNS: LeadStatus[] = [
-  'חדש', 'הקמת כספת בבנק', 'הטמעה', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'
+  'חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'
 ];
 
 interface KanbanProps {
@@ -27,8 +27,8 @@ export default function Kanban({ leads, onLeadClick }: KanbanProps) {
 
   const byStatus = (status: LeadStatus) => leads.filter(l => l.status === status);
 
-  const totalChecks = (status: LeadStatus) =>
-    byStatus(status).reduce((sum, l) => sum + l.checkCount, 0);
+  const totalBudget = (status: LeadStatus) =>
+    byStatus(status).reduce((sum, l) => sum + (l.budget ?? 0), 0);
 
   return (
     <div className="space-y-3">
@@ -43,12 +43,13 @@ export default function Kanban({ leads, onLeadClick }: KanbanProps) {
           const col = byStatus(status);
           const cfg = STATUS_CONFIG[status];
           const isCollapsed = collapsed.has(status);
+          const budget = totalBudget(status);
 
           return (
             <div
               key={status}
               className={`flex-shrink-0 bg-slate-50 border border-slate-200 rounded-xl transition-all duration-200 ${
-                isCollapsed ? 'w-14' : 'w-64'
+                isCollapsed ? 'w-14' : 'w-56 md:w-64'
               }`}
             >
               {/* Column header */}
@@ -77,11 +78,11 @@ export default function Kanban({ leads, onLeadClick }: KanbanProps) {
                 )}
               </div>
 
-              {/* Total checks indicator */}
-              {!isCollapsed && col.length > 0 && (
+              {/* Budget indicator */}
+              {!isCollapsed && col.length > 0 && budget > 0 && (
                 <div className="px-3 py-1.5 text-xs text-slate-400 flex justify-between border-b border-slate-100">
-                  <span className="font-medium text-slate-600">{totalChecks(status)} צ'קים</span>
-                  <span>סה"כ</span>
+                  <span className="font-medium text-slate-600">₪{budget.toLocaleString()}</span>
+                  <span>תקציב חודשי</span>
                 </div>
               )}
 
@@ -114,10 +115,7 @@ export default function Kanban({ leads, onLeadClick }: KanbanProps) {
                 <div className="text-lg font-bold text-slate-800">{col.length}</div>
                 <div className="text-xs text-slate-500 mb-1">{status}</div>
                 <div className="h-1 bg-slate-100 rounded-full w-full">
-                  <div
-                    className={`h-1 rounded-full ${cfg.dot}`}
-                    style={{ width: `${pct}%` }}
-                  />
+                  <div className={`h-1 rounded-full ${cfg.dot}`} style={{ width: `${pct}%` }} />
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5">{pct}%</div>
               </div>
@@ -130,7 +128,7 @@ export default function Kanban({ leads, onLeadClick }: KanbanProps) {
 }
 
 function KanbanCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
-  const isHot = lead.checkCount >= 100;
+  const isHighValue = (lead.budget ?? 0) >= 15000;
   const scoreColor =
     lead.aiScore >= 75 ? 'text-green-600' :
     lead.aiScore >= 50 ? 'text-orange-500' :
@@ -139,13 +137,12 @@ function KanbanCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
   return (
     <div
       onClick={onClick}
-      className="bg-white border border-slate-200 rounded-lg p-3 cursor-pointer hover:border-indigo-300 hover:shadow-sm transition-all group"
+      className="bg-white border border-slate-200 rounded-lg p-3 cursor-pointer hover:border-neutral-400 hover:shadow-sm transition-all group"
     >
       <div className="flex items-start justify-between gap-1 mb-2">
-        {isHot && (
-          <span className="flex items-center gap-0.5 text-xs text-red-500 font-bold">
-            <Flame size={11} />
-            {lead.checkCount}
+        {isHighValue && (
+          <span className="flex items-center gap-0.5 text-xs text-emerald-600 font-bold">
+            <TrendingUp size={11} />VIP
           </span>
         )}
         <div className="font-semibold text-slate-800 text-sm leading-tight text-right flex-1 truncate">
@@ -159,25 +156,32 @@ function KanbanCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
         <div className={`text-xs font-bold ${scoreColor}`}>
           {lead.aiScore > 0 ? `${lead.aiScore}%` : '—'}
         </div>
-        <div className="flex items-center gap-1">
-          {lead.banks.slice(0, 2).map(b => (
-            <span key={b} className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
-              {b}
-            </span>
-          ))}
-        </div>
+        {(lead.budget ?? 0) > 0 && (
+          <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
+            ₪{(lead.budget ?? 0).toLocaleString()}
+          </span>
+        )}
       </div>
 
-      {lead.checkCount > 0 && !isHot && (
-        <div className="mt-2 flex items-center gap-1 text-xs text-slate-400">
-          <span className="font-medium text-slate-600">{lead.checkCount}</span>
-          <span>צ'קים/חודש</span>
+      {lead.solutions.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {lead.solutions.slice(0, 2).map(s => (
+            <span key={s.name} className="text-[10px] bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded">
+              {s.name}
+            </span>
+          ))}
         </div>
       )}
 
       {lead.tasks.filter(t => !t.completed).length > 0 && (
         <div className="mt-2 text-xs bg-orange-50 text-orange-600 px-2 py-1 rounded text-right">
           {lead.tasks.filter(t => !t.completed).length} משימות פתוחות
+        </div>
+      )}
+
+      {lead.waitingContent && (
+        <div className="mt-1 text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded text-right">
+          ממתין לתוכן מהלקוח
         </div>
       )}
     </div>

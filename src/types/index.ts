@@ -1,26 +1,25 @@
 export type LeadStatus =
   | 'חדש'
-  | 'הקמת כספת בבנק'
-  | 'הטמעה'
+  | 'בתהליך'
   | 'לקוח פעיל'
   | 'רימרקטינג'
   | 'לא רלוונטי';
 
-export type LeadSource = 'cheX' | 'ci3' | 'סורקים';
-
-export type Bank =
-  | 'פועלים'
-  | 'לאומי'
-  | 'מזרחי'
-  | 'דיסקונט'
-  | 'מרכנתיל'
-  | 'בינלאומי';
+export type LeadSource =
+  | 'אורגני'
+  | 'פרסום ממומן'
+  | 'הפניה'
+  | 'אינסטגרם'
+  | 'פייסבוק'
+  | 'גוגל';
 
 export type Solution = {
   name: string;
-  hasInstallation: boolean;
-  hasTraining: boolean;
+  inProgress: boolean;
+  delivered: boolean;
 };
+
+export type TaskPriority = 'high' | 'medium' | 'low';
 
 export type Task = {
   id: string;
@@ -28,6 +27,8 @@ export type Task = {
   date: string;
   time: string;
   completed: boolean;
+  priority?: TaskPriority;
+  completedAt?: string;
 };
 
 export type Note = {
@@ -44,8 +45,7 @@ export type Lead = {
   email: string;
   phone: string;
   status: LeadStatus;
-  banks: Bank[];
-  checkCount: number;
+  budget: number;
   solutions: Solution[];
   assignedTo: string;
   source: LeadSource;
@@ -54,7 +54,7 @@ export type Lead = {
   notes: Note[];
   tasks: Task[];
   futureNotes: string[];
-  waitingG3: boolean;
+  waitingContent: boolean;
 };
 
 export type TeamMember = {
@@ -65,4 +65,14 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban';
+export type Page = 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content';
+
+export type AppSettings = {
+  userName: string;
+  userInitials: string;
+  companyName: string;
+  compactMode: boolean;
+  showOverduePopup: boolean;
+  defaultPage: Page;
+  accentColor: 'indigo' | 'blue' | 'emerald' | 'rose' | 'violet';
+};
