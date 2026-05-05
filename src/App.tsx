@@ -15,7 +15,7 @@ import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
 import Toast from './components/Toast';
-import type { Lead, Page, TeamMember, AppSettings, Task } from './types';
+import type { Lead, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
@@ -122,8 +122,9 @@ export default function App() {
   const [showNewLead, setShowNewLead] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [toasts, setToasts]           = useState<ToastMessage[]>([]);
-  const [fbReady, setFbReady]         = useState(false);
-  const initialSyncDone               = useRef(false);
+  const [fbReady, setFbReady]             = useState(false);
+  const [standaloneTask, setStandaloneTask] = useState<StandaloneTask[]>([]);
+  const initialSyncDone                   = useRef(false);
 
   // ─── Invite via URL param (?invite=email@...) ─────────────────────────────
   const [inviteEmail, setInviteEmail] = useState<string>(() => {
@@ -204,6 +205,16 @@ export default function App() {
     localStorage.setItem('crm-team', JSON.stringify(team));
     team.forEach(m => setDoc(doc(db, 'team', m.id), m).catch(console.error));
   }, [team, fbReady]);
+
+  // ─── Standalone tasks — real-time sync ───────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'tasks'), snap => {
+      const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
+      tasks.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      setStandaloneTask(tasks);
+    });
+    return () => unsub();
+  }, []);
 
   // ─── Save settings to localStorage ───────────────────────────────────────
   useEffect(() => {
@@ -332,6 +343,21 @@ export default function App() {
     setTeam(prev => prev.filter(m => m.id !== id));
     addToast('חבר הצוות הוסר', 'info');
   };
+  // ─── Standalone task handlers ─────────────────────────────────────────────
+  const handleStandaloneAdd = async (task: StandaloneTask) => {
+    await setDoc(doc(db, 'tasks', task.id), task).catch(console.error);
+    addToast('משימה נוספה ✓', 'success');
+  };
+  const handleStandaloneComplete = async (taskId: string) => {
+    const task = standaloneTask.find(t => t.id === taskId);
+    if (!task) return;
+    const updated = { ...task, completed: true, completedAt: new Date().toISOString() };
+    await setDoc(doc(db, 'tasks', taskId), updated).catch(console.error);
+  };
+  const handleStandaloneDelete = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
+  };
+
   const handleInviteSuccess = (name: string, email: string) => {
     setInviteEmail('');
     const exists = team.some(m => m.email === email);
@@ -411,10 +437,16 @@ export default function App() {
         {page === 'tasks' && (
           <Tasks
             leads={leads}
+            team={team}
+            currentUser={settings.userName}
+            standaloneTask={standaloneTask}
             onLeadClick={setSelectedLead}
-            onTaskComplete={handleTaskComplete}
-            onTaskDelete={handleTaskDelete}
-            onAddTask={handleAddTask}
+            onLeadTaskComplete={handleTaskComplete}
+            onLeadTaskDelete={handleTaskDelete}
+            onLeadAddTask={handleAddTask}
+            onStandaloneAdd={handleStandaloneAdd}
+            onStandaloneComplete={handleStandaloneComplete}
+            onStandaloneDelete={handleStandaloneDelete}
           />
         )}
         {page === 'settings' && (

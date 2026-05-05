@@ -24,11 +24,29 @@ export type TaskPriority = 'high' | 'medium' | 'low';
 export type Task = {
   id: string;
   description: string;
+  notes?: string;
   date: string;
   time: string;
   completed: boolean;
   priority?: TaskPriority;
   completedAt?: string;
+  assignedTo?: string;
+  assignedBy?: string;
+};
+
+export type StandaloneTask = {
+  id: string;
+  description: string;
+  notes?: string;
+  date: string;
+  time: string;
+  priority: TaskPriority;
+  completed: boolean;
+  completedAt?: string;
+  assignedTo: string;
+  assignedBy: string;
+  leadId?: string;
+  createdAt: string;
 };
 
 export type Note = {
