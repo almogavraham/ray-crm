@@ -345,6 +345,10 @@ export default function App() {
   };
   // ─── Standalone task handlers ─────────────────────────────────────────────
   const handleStandaloneAdd = async (task: StandaloneTask) => {
+    // Optimistic update — show immediately without waiting for Firestore
+    setStandaloneTask(prev =>
+      prev.some(t => t.id === task.id) ? prev : [...prev, task]
+    );
     await setDoc(doc(db, 'tasks', task.id), task).catch(console.error);
     addToast('משימה נוספה ✓', 'success');
   };
@@ -352,9 +356,13 @@ export default function App() {
     const task = standaloneTask.find(t => t.id === taskId);
     if (!task) return;
     const updated = { ...task, completed: true, completedAt: new Date().toISOString() };
+    // Optimistic update
+    setStandaloneTask(prev => prev.map(t => t.id === taskId ? updated : t));
     await setDoc(doc(db, 'tasks', taskId), updated).catch(console.error);
   };
   const handleStandaloneDelete = async (taskId: string) => {
+    // Optimistic update
+    setStandaloneTask(prev => prev.filter(t => t.id !== taskId));
     await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
   };
 
