@@ -9,19 +9,40 @@ import {
 import type { Lead, StandaloneTask, Task, TaskPriority, TeamMember } from '../types';
 
 /* ─── date helpers ────────────────────────────────────────────────────────── */
-function parseDate(s: string) { return new Date(s + 'T00:00:00'); }
-function todayMidnight() { const d = new Date(); d.setHours(0,0,0,0); return d; }
-function isToday(d: Date)    { return d.toDateString() === new Date().toDateString(); }
-function isTomorrow(d: Date) { const t = new Date(); t.setDate(t.getDate()+1); return d.toDateString() === t.toDateString(); }
-function isThisWeek(d: Date) { const t = todayMidnight(); const e = new Date(t); e.setDate(t.getDate()+7); return d > t && d <= e && !isToday(d) && !isTomorrow(d); }
-function isOverdue(d: Date)  { return d < todayMidnight(); }
-function formatDate(s: string) {
-  try { return parseDate(s).toLocaleDateString('he-IL', { weekday:'short', day:'numeric', month:'short' }); }
-  catch { return s; }
+function parseDate(raw: string): Date {
+  if (!raw) return new Date('invalid');
+  // ISO format: YYYY-MM-DD  ✓
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw))
+    return new Date(raw + 'T00:00:00');
+  // DD/MM/YYYY  (Hebrew locale dates stored by older code)
+  const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmy)
+    return new Date(`${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}T00:00:00`);
+  // MM/DD/YYYY  (US locale)
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy)
+    return new Date(`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}T00:00:00`);
+  // timestamp / ISO full
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d;
+  return new Date('invalid');
 }
-function daysUntil(s: string) {
-  const diff = parseDate(s).getTime() - todayMidnight().getTime();
-  return Math.ceil(diff / 86400000);
+function todayMidnight() { const d = new Date(); d.setHours(0,0,0,0); return d; }
+function isToday(d: Date)    { return !isNaN(d.getTime()) && d.toDateString() === new Date().toDateString(); }
+function isTomorrow(d: Date) { const t = new Date(); t.setDate(t.getDate()+1); return !isNaN(d.getTime()) && d.toDateString() === t.toDateString(); }
+function isThisWeek(d: Date) { const t = todayMidnight(); const e = new Date(t); e.setDate(t.getDate()+7); return !isNaN(d.getTime()) && d > t && d <= e && !isToday(d) && !isTomorrow(d); }
+function isOverdue(d: Date)  { return !isNaN(d.getTime()) && d < todayMidnight(); }
+function formatDate(raw: string): string {
+  try {
+    const d = parseDate(raw);
+    if (isNaN(d.getTime())) return raw || '—';
+    return d.toLocaleDateString('he-IL', { weekday:'short', day:'numeric', month:'short' });
+  } catch { return raw || '—'; }
+}
+function daysUntil(raw: string): number {
+  const d = parseDate(raw);
+  if (isNaN(d.getTime())) return 999; // push unknown dates to "later"
+  return Math.ceil((d.getTime() - todayMidnight().getTime()) / 86400000);
 }
 
 /* ─── constants ───────────────────────────────────────────────────────────── */
