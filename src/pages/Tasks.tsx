@@ -5,6 +5,7 @@ import {
   AlertTriangle, CalendarClock, CalendarCheck, Plus, X,
   Clock, Flag, ChevronDown, Target, Users, LayoutList,
   Kanban, ChevronRight, User, StickyNote, ArrowRight,
+  Pencil, CalendarPlus, Check,
 } from 'lucide-react';
 import type { Lead, StandaloneTask, Task, TaskPriority, TeamMember } from '../types';
 
@@ -74,6 +75,21 @@ type OwnerFilter   = 'all' | 'mine' | 'delegated';
 type DateFilter    = 'all' | 'overdue' | 'today' | 'upcoming' | 'completed';
 type PriorityFlt   = 'all' | TaskPriority;
 
+/* ─── Google Calendar URL builder ────────────────────────────────────────── */
+function buildGCalUrl(task: { description: string; date: string; time: string; notes?: string; lead?: Lead }): string {
+  try {
+    const [year, month, day] = task.date.split('-').map(Number);
+    const [hour, min] = task.time.split(':').map(Number);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const startStr = `${year}${pad(month)}${pad(day)}T${pad(hour)}${pad(min)}00`;
+    const endHour = Math.min(hour + 1, 23);
+    const endStr   = `${year}${pad(month)}${pad(day)}T${pad(endHour)}${pad(min)}00`;
+    const title    = task.lead ? `${task.description} — ${task.lead.company}` : task.description;
+    const details  = task.notes ?? '';
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${startStr}/${endStr}&details=${encodeURIComponent(details)}`;
+  } catch { return 'https://calendar.google.com/calendar/r'; }
+}
+
 /* ─── TasksProps ──────────────────────────────────────────────────────────── */
 interface TasksProps {
   leads: Lead[];
@@ -87,6 +103,7 @@ interface TasksProps {
   onStandaloneAdd: (task: StandaloneTask) => void;
   onStandaloneComplete: (taskId: string) => void;
   onStandaloneDelete: (taskId: string) => void;
+  onStandaloneEdit: (task: StandaloneTask) => void;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -95,7 +112,7 @@ interface TasksProps {
 export default function Tasks({
   leads, team, currentUser, standaloneTask,
   onLeadClick, onLeadTaskComplete, onLeadTaskDelete, onLeadAddTask,
-  onStandaloneAdd, onStandaloneComplete, onStandaloneDelete,
+  onStandaloneAdd, onStandaloneComplete, onStandaloneDelete, onStandaloneEdit,
 }: TasksProps) {
 
   const [viewMode,     setViewMode]     = useState<ViewMode>('list');
@@ -105,6 +122,7 @@ export default function Tasks({
   const [search,       setSearch]       = useState('');
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [showCreate,   setShowCreate]   = useState(false);
+  const [editingTask,  setEditingTask]  = useState<UnifiedTask | null>(null);
 
   /* ── Unified task list ────────────────────────────────────────────────── */
   const all = useMemo<UnifiedTask[]>(() => {
@@ -256,6 +274,15 @@ export default function Tasks({
     }
   };
 
+  const handleEdit = (task: UnifiedTask) => {
+    if (task.isStandalone) setEditingTask(task);
+  };
+
+  const handleEditSave = (updated: StandaloneTask) => {
+    onStandaloneEdit(updated);
+    setEditingTask(null);
+  };
+
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
     <>
@@ -392,6 +419,7 @@ export default function Tasks({
             {boardCols.map(col => (
               <BoardColumn key={col.key} col={col}
                 onComplete={handleComplete} onDelete={handleDelete}
+                onEdit={handleEdit}
                 onLeadClick={onLeadClick} completingId={completingId}
                 currentUser={currentUser}
               />
@@ -408,6 +436,7 @@ export default function Tasks({
               groups.map(g => (
                 <TaskGroup key={g.key} group={g}
                   onComplete={handleComplete} onDelete={handleDelete}
+                  onEdit={handleEdit}
                   onLeadClick={onLeadClick} completingId={completingId}
                   currentUser={currentUser}
                 />
@@ -424,6 +453,16 @@ export default function Tasks({
           onClose={() => setShowCreate(false)}
           onAddStandalone={task => { onStandaloneAdd(task); setShowCreate(false); }}
           onAddToLead={(leadId, task) => { onLeadAddTask(leadId, task); setShowCreate(false); }}
+        />
+      )}
+
+      {/* Edit Task Modal */}
+      {editingTask && (
+        <EditTaskModal
+          task={editingTask}
+          leads={leads} team={team} currentUser={currentUser}
+          onClose={() => setEditingTask(null)}
+          onSave={handleEditSave}
         />
       )}
     </>
@@ -678,10 +717,11 @@ const COL_COLORS: Record<string, { header: string; bg: string; border: string; b
   done:     { header:'text-green-700', bg:'bg-green-50',   border:'border-green-200', badge:'bg-green-200 text-green-800' },
 };
 
-function BoardColumn({ col, onComplete, onDelete, onLeadClick, completingId, currentUser }: {
+function BoardColumn({ col, onComplete, onDelete, onEdit, onLeadClick, completingId, currentUser }: {
   col: { key: string; label: string; emoji: string; color: string; tasks: UnifiedTask[] };
   onComplete: (t: UnifiedTask) => void;
   onDelete: (t: UnifiedTask) => void;
+  onEdit: (t: UnifiedTask) => void;
   onLeadClick: (l: Lead) => void;
   completingId: string | null;
   currentUser: string;
@@ -701,7 +741,7 @@ function BoardColumn({ col, onComplete, onDelete, onLeadClick, completingId, cur
           ? <div className="py-8 text-center text-slate-400 text-xs">אין משימות</div>
           : col.tasks.map(task => (
             <BoardTaskCard key={task.id} task={task}
-              onComplete={onComplete} onDelete={onDelete} onLeadClick={onLeadClick}
+              onComplete={onComplete} onDelete={onDelete} onEdit={onEdit} onLeadClick={onLeadClick}
               isCompleting={completingId === task.id} currentUser={currentUser} />
           ))
         }
@@ -710,10 +750,11 @@ function BoardColumn({ col, onComplete, onDelete, onLeadClick, completingId, cur
   );
 }
 
-function BoardTaskCard({ task, onComplete, onDelete, onLeadClick, isCompleting, currentUser }: {
+function BoardTaskCard({ task, onComplete, onDelete, onEdit, onLeadClick, isCompleting, currentUser }: {
   task: UnifiedTask;
   onComplete: (t: UnifiedTask) => void;
   onDelete: (t: UnifiedTask) => void;
+  onEdit: (t: UnifiedTask) => void;
   onLeadClick: (l: Lead) => void;
   isCompleting: boolean;
   currentUser: string;
@@ -734,14 +775,26 @@ function BoardTaskCard({ task, onComplete, onDelete, onLeadClick, isCompleting, 
           </p>
           {task.notes && <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{task.notes}</p>}
         </div>
-        {!task.completed && (
-          <button onClick={() => onDelete(task)} className="text-slate-200 hover:text-red-400 transition-colors flex-shrink-0">
-            <Trash2 size={13}/>
-          </button>
-        )}
+        <div className="flex flex-col gap-1 flex-shrink-0">
+          {task.isStandalone && !task.completed && (
+            <button onClick={() => onEdit(task)} className="text-slate-200 hover:text-indigo-500 transition-colors" title="ערוך משימה">
+              <Pencil size={12}/>
+            </button>
+          )}
+          {!task.completed && (
+            <button onClick={() => onDelete(task)} className="text-slate-200 hover:text-red-400 transition-colors">
+              <Trash2 size={12}/>
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
         <div className="flex items-center gap-1">
+          <a href={buildGCalUrl(task)} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-500 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
+            title="הוסף ל-Google Calendar">
+            <CalendarPlus size={9}/> GCal
+          </a>
           {task.lead && (
             <button onClick={() => task.lead && onLeadClick(task.lead)}
               className="flex items-center gap-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 px-2 py-0.5 rounded text-[10px] font-medium text-slate-500 transition-colors">
@@ -765,10 +818,11 @@ function BoardTaskCard({ task, onComplete, onDelete, onLeadClick, isCompleting, 
 /* ═══════════════════════════════════════════════════════════════════════════
    TASK GROUP (List view)
 ═══════════════════════════════════════════════════════════════════════════ */
-function TaskGroup({ group, onComplete, onDelete, onLeadClick, completingId, currentUser }: {
+function TaskGroup({ group, onComplete, onDelete, onEdit, onLeadClick, completingId, currentUser }: {
   group: { key: string; label: string; emoji: string; urgent?: boolean; highlight?: boolean; tasks: UnifiedTask[] };
   onComplete: (t: UnifiedTask) => void;
   onDelete: (t: UnifiedTask) => void;
+  onEdit: (t: UnifiedTask) => void;
   onLeadClick: (l: Lead) => void;
   completingId: string | null;
   currentUser: string;
@@ -797,7 +851,7 @@ function TaskGroup({ group, onComplete, onDelete, onLeadClick, completingId, cur
         <div className="divide-y divide-slate-100 border-t border-slate-100/80">
           {group.tasks.map(task => (
             <TaskRow key={task.id} task={task}
-              onComplete={onComplete} onDelete={onDelete} onLeadClick={onLeadClick}
+              onComplete={onComplete} onDelete={onDelete} onEdit={onEdit} onLeadClick={onLeadClick}
               isCompleting={completingId === task.id} isUrgent={!!group.urgent}
               currentUser={currentUser}
             />
@@ -811,10 +865,11 @@ function TaskGroup({ group, onComplete, onDelete, onLeadClick, completingId, cur
 /* ═══════════════════════════════════════════════════════════════════════════
    TASK ROW
 ═══════════════════════════════════════════════════════════════════════════ */
-function TaskRow({ task, onComplete, onDelete, onLeadClick, isCompleting, isUrgent, currentUser }: {
+function TaskRow({ task, onComplete, onDelete, onEdit, onLeadClick, isCompleting, isUrgent, currentUser }: {
   task: UnifiedTask;
   onComplete: (t: UnifiedTask) => void;
   onDelete: (t: UnifiedTask) => void;
+  onEdit: (t: UnifiedTask) => void;
   onLeadClick: (l: Lead) => void;
   isCompleting: boolean;
   isUrgent: boolean;
@@ -887,13 +942,196 @@ function TaskRow({ task, onComplete, onDelete, onLeadClick, isCompleting, isUrge
           </span>
         </div>
 
-        {/* Delete */}
+        {/* Actions */}
         {!task.completed && (
-          <button onClick={() => onDelete(task)}
-            className="flex-shrink-0 text-slate-200 group-hover:text-slate-400 hover:!text-red-500 transition-colors">
-            <Trash2 size={14}/>
-          </button>
+          <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Google Calendar */}
+            <a href={buildGCalUrl(task)} target="_blank" rel="noreferrer"
+              title="הוסף ל-Google Calendar"
+              className="p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all">
+              <CalendarPlus size={14}/>
+            </a>
+            {/* Edit (standalone only) */}
+            {task.isStandalone && (
+              <button onClick={() => onEdit(task)} title="ערוך משימה"
+                className="p-1.5 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-all">
+                <Pencil size={14}/>
+              </button>
+            )}
+            {/* Delete */}
+            <button onClick={() => onDelete(task)}
+              className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all">
+              <Trash2 size={14}/>
+            </button>
+          </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EDIT TASK MODAL
+═══════════════════════════════════════════════════════════════════════════ */
+function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
+  task: UnifiedTask;
+  leads: Lead[];
+  team: TeamMember[];
+  currentUser: string;
+  onClose: () => void;
+  onSave: (t: StandaloneTask) => void;
+}) {
+  const [desc,       setDesc]       = useState(task.description);
+  const [notes,      setNotes]      = useState(task.notes ?? '');
+  const [date,       setDate]       = useState(task.date);
+  const [time,       setTime]       = useState(task.time);
+  const [priority,   setPriority]   = useState<TaskPriority>(task.priority);
+  const [assignedTo, setAssignedTo] = useState(task.assignedTo);
+  const [addedToGcal,setAddedToGcal] = useState(false);
+
+  const membersList = [
+    { name: currentUser, label: `${currentUser} (אני)` },
+    ...team.filter(m => m.name !== currentUser).map(m => ({ name: m.name, label: m.name })),
+  ];
+
+  const handleSave = () => {
+    if (!desc.trim() || !date) return;
+    const updated: StandaloneTask = {
+      id:          task.standaloneId!,
+      description: desc.trim(),
+      date,
+      time,
+      priority,
+      completed:   task.completed,
+      assignedTo,
+      assignedBy:  task.assignedBy ?? currentUser,
+      createdAt:   new Date().toISOString(),
+      ...(notes.trim()   ? { notes: notes.trim() } : {}),
+      ...(task.lead?.id  ? { leadId: task.lead.id } : {}),
+      ...(task.completedAt ? { completedAt: task.completedAt } : {}),
+    };
+    onSave(updated);
+  };
+
+  const previewUrl = buildGCalUrl({ description: desc, date, time, notes: notes || undefined, lead: task.lead ?? leads.find(l => l.id === task.lead?.id) });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-slate-200 overflow-hidden" dir="rtl">
+
+        {/* Header */}
+        <div className="bg-gradient-to-l from-indigo-900 to-slate-900 px-6 py-5 flex items-center justify-between">
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10">
+            <X size={18} />
+          </button>
+          <div className="text-right">
+            <h2 className="text-white font-bold text-lg leading-none">עריכת משימה</h2>
+            <p className="text-slate-400 text-xs mt-1">עדכן פרטי המשימה</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
+            <Pencil size={18} className="text-white" />
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5">תיאור המשימה *</label>
+            <textarea rows={2} value={desc} onChange={e => setDesc(e.target.value)} autoFocus
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50 placeholder-slate-400 resize-none" />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5">
+              <StickyNote size={13} className="text-slate-400" /> פרטים נוספים
+            </label>
+            <textarea rows={2} placeholder="הוראות, קישורים, הערות..."
+              value={notes} onChange={e => setNotes(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50 placeholder-slate-400 resize-none" />
+          </div>
+
+          {/* Assignee */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5">
+              <User size={13} className="text-slate-400" /> הקצה ל
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {membersList.map(m => (
+                <button key={m.name} onClick={() => setAssignedTo(m.name)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border-2 transition-all ${
+                    assignedTo === m.name ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 text-slate-600 hover:border-slate-400 bg-white'
+                  }`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${assignedTo === m.name ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-700'}`}>
+                    {m.name[0]?.toUpperCase()}
+                  </div>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Date + Time */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1 justify-end">שעה <Clock size={11}/></label>
+              <input type="time" value={time} onChange={e => setTime(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5 text-right">תאריך</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-slate-50" />
+            </div>
+          </div>
+
+          {/* Priority */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5 justify-end">
+              <Flag size={13} className="text-slate-400"/> עדיפות
+            </label>
+            <div className="flex gap-2">
+              {(['high','medium','low'] as TaskPriority[]).map(p => {
+                const m = PRIORITY_META[p];
+                return (
+                  <button key={p} onClick={() => setPriority(p)}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all border-2 ${
+                      priority === p ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-200 text-slate-600 hover:border-slate-400 bg-white'
+                    }`}>
+                    {m.icon} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Google Calendar */}
+          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-center justify-between">
+            <a href={previewUrl} target="_blank" rel="noreferrer"
+              onClick={() => setAddedToGcal(true)}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all">
+              <CalendarPlus size={14} />
+              {addedToGcal ? 'פתח שוב ב-Google Calendar' : 'הוסף ל-Google Calendar'}
+            </a>
+            <div className="text-right">
+              <p className="text-xs font-semibold text-blue-800">לוח שנה</p>
+              <p className="text-[10px] text-blue-500">שמור לפני הוספה ללוח</p>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-1">
+            <button onClick={onClose}
+              className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors">
+              ביטול
+            </button>
+            <button onClick={handleSave} disabled={!desc.trim() || !date}
+              className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-sm">
+              <Check size={15} /> שמור שינויים
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

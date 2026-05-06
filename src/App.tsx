@@ -370,6 +370,15 @@ export default function App() {
     await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
   };
 
+  const handleStandaloneEdit = async (task: StandaloneTask) => {
+    setStandaloneTask(prev => prev.map(t => t.id === task.id ? task : t));
+    const firestoreTask = Object.fromEntries(
+      Object.entries(task).filter(([, v]) => v !== undefined)
+    ) as StandaloneTask;
+    await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
+    addToast('משימה עודכנה ✓', 'success');
+  };
+
   // ─── AI agent: add note to lead ───────────────────────────────────────────
   const handleAddNote = (leadId: string, noteText: string) => {
     const note: Note = {
@@ -486,6 +495,7 @@ export default function App() {
             onStandaloneAdd={handleStandaloneAdd}
             onStandaloneComplete={handleStandaloneComplete}
             onStandaloneDelete={handleStandaloneDelete}
+            onStandaloneEdit={handleStandaloneEdit}
           />
         )}
         {page === 'settings' && (
