@@ -369,18 +369,20 @@ export default function AiAssistant({
     try {
       if (name === 'create_task') {
         const today = new Date().toISOString().split('T')[0];
+        // Build task without any undefined fields — Firestore rejects undefined values
         const task: StandaloneTask = {
           id:          Date.now().toString(),
           description: String(input.description ?? ''),
-          notes:       input.notes ? String(input.notes) : undefined,
           date:        String(input.date ?? today),
           time:        String(input.time ?? '09:00'),
           priority:    (input.priority as TaskPriority) ?? 'medium',
           completed:   false,
           assignedTo:  String(input.assignedTo ?? currentUser),
           assignedBy:  currentUser,
-          leadId:      input.leadId ? String(input.leadId) : undefined,
           createdAt:   new Date().toISOString(),
+          // Conditionally include optional fields only when they have values
+          ...(input.notes   ? { notes:  String(input.notes)  } : {}),
+          ...(input.leadId  ? { leadId: String(input.leadId) } : {}),
         };
         onCreateTask(task);
         const assigneeName = task.assignedTo === currentUser ? 'אני' : task.assignedTo;

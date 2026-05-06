@@ -349,7 +349,11 @@ export default function App() {
     setStandaloneTask(prev =>
       prev.some(t => t.id === task.id) ? prev : [...prev, task]
     );
-    await setDoc(doc(db, 'tasks', task.id), task).catch(console.error);
+    // Firestore rejects documents with undefined values — strip them before saving
+    const firestoreTask = Object.fromEntries(
+      Object.entries(task).filter(([, v]) => v !== undefined)
+    ) as StandaloneTask;
+    await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
     addToast('משימה נוספה ✓', 'success');
   };
   const handleStandaloneComplete = async (taskId: string) => {
