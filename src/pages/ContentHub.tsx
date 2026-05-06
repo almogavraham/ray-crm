@@ -5,7 +5,7 @@ import {
   Sparkles, Copy, Check, Loader2, Layers,
   FileText, Image, CalendarDays, Target, RefreshCw, Download,
   Plus, Trash2, ChevronDown, Upload, X, Eye, FolderOpen,
-  Building2, Folder, Search, Bot, AlertCircle,
+  Building2, Folder, Search, Bot, AlertCircle, Pencil,
 } from 'lucide-react';
 import { getApiKey, getOpenAiKey } from '../lib/apiKey';
 import { db } from '../lib/firebase';
@@ -39,6 +39,7 @@ interface ContentProject {
   clientId: string;
   name: string;
   description: string;
+  customPrompt: string;   // ← NEW: user prompt / focus for this project
   files: ProjectFile[];
   createdAt: string;
 }
@@ -46,7 +47,7 @@ interface ContentProject {
 interface ContentClient {
   id: string;
   brief: ClientBrief;
-  projects: string[]; // project ids
+  projects: string[];
   createdAt: string;
 }
 
@@ -83,27 +84,30 @@ const ACCEPTED = 'image/jpeg,image/png,image/webp,image/gif,image/svg+xml,applic
 const MAX_FILE_MB = 8;
 
 /* ─── Prompt builders ────────────────────────────────────────────────────── */
-function ctx(b: ClientBrief, filesContext: string) {
-  return `Company: ${b.company} | Niche: ${b.niche} | Audience: ${b.targetAudience || 'general'} | Demographics: ${b.demographics || 'all ages'} | Pain points: ${b.painPoints || 'not specified'} | USP: ${b.usp || 'quality service'} | Voice: ${b.brandVoice} | Goals: ${b.goals.join(', ') || 'awareness'} | Language: ${b.language === 'he' ? 'Hebrew' : 'English'}${filesContext ? `\n\nBrand Assets Analysis:\n${filesContext}` : ''}`;
+function ctx(b: ClientBrief, filesContext: string, customPrompt?: string) {
+  const base = `Company: ${b.company} | Niche: ${b.niche} | Audience: ${b.targetAudience || 'general'} | Demographics: ${b.demographics || 'all ages'} | Pain points: ${b.painPoints || 'not specified'} | USP: ${b.usp || 'quality service'} | Voice: ${b.brandVoice} | Goals: ${b.goals.join(', ') || 'awareness'} | Language: ${b.language === 'he' ? 'Hebrew' : 'English'}`;
+  const filesSection = filesContext ? `\n\nBrand Assets Analysis:\n${filesContext}` : '';
+  const focusSection = customPrompt?.trim() ? `\n\n⭐ SPECIAL INSTRUCTIONS / PROJECT FOCUS:\n${customPrompt.trim()}` : '';
+  return base + filesSection + focusSection;
 }
-function postsPrompt(b: ClientBrief, fc: string) {
+function postsPrompt(b: ClientBrief, fc: string, cp?: string) {
   const lang = b.language === 'he' ? 'Write entirely in Hebrew.' : 'Write entirely in English.';
-  return `${lang} Create 3 Facebook posts for: ${ctx(b, fc)}\n\nFormat exactly:\n═══ POST 1 — SHORT & PUNCHY ═══\n[1-3 bold lines, strong hook]\n#hashtag1 #hashtag2 #hashtag3 #hashtag4 #hashtag5\n📍 Best time: [day + time]\n\n═══ POST 2 — STORYTELLING ═══\n[Problem → journey → solution → CTA, 6-8 lines]\n#hashtag1 #hashtag2 #hashtag3\n📍 Best time: [day + time]\n\n═══ POST 3 — PAS FORMAT ═══\n[Problem → Agitate → Solution → CTA, 6-8 lines]\n#hashtag1 #hashtag2 #hashtag3\n📍 Best time: [day + time]`;
+  return `${lang} Create 3 Facebook posts for: ${ctx(b, fc, cp)}\n\nFormat exactly:\n═══ POST 1 — SHORT & PUNCHY ═══\n[1-3 bold lines, strong hook]\n#hashtag1 #hashtag2 #hashtag3 #hashtag4 #hashtag5\n📍 Best time: [day + time]\n\n═══ POST 2 — STORYTELLING ═══\n[Problem → journey → solution → CTA, 6-8 lines]\n#hashtag1 #hashtag2 #hashtag3\n📍 Best time: [day + time]\n\n═══ POST 3 — PAS FORMAT ═══\n[Problem → Agitate → Solution → CTA, 6-8 lines]\n#hashtag1 #hashtag2 #hashtag3\n📍 Best time: [day + time]`;
 }
-function visualsPrompt(b: ClientBrief, fc: string) {
+function visualsPrompt(b: ClientBrief, fc: string, cp?: string) {
   const lang = b.language === 'he' ? 'Descriptions in Hebrew, DALL-E prompts in English.' : 'Write entirely in English.';
-  return `${lang} Create visual content brief for: ${ctx(b, fc)}\n\nFormat exactly:\n═══ IMAGE 1 — HERO SHOT ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt, style, lighting, mood]"\nFormat: Square 1:1\n\n═══ IMAGE 2 — SOCIAL PROOF ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt]"\nFormat: Portrait 4:5\n\n═══ IMAGE 3 — PROBLEM/SOLUTION ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt]"\nFormat: Square 1:1\n\n═══ 30-SECOND REEL STORYBOARD ═══\nHook 0-3s: [visual + text overlay]\nScene 1 (3-10s): [action + narration]\nScene 2 (10-20s): [action + narration]\nCTA 20-30s: [closing frame + CTA text]\nMusic: [mood/genre]`;
+  return `${lang} Create visual content brief for: ${ctx(b, fc, cp)}\n\nFormat exactly:\n═══ IMAGE 1 — HERO SHOT ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt, style, lighting, mood]"\nFormat: Square 1:1\n\n═══ IMAGE 2 — SOCIAL PROOF ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt]"\nFormat: Portrait 4:5\n\n═══ IMAGE 3 — PROBLEM/SOLUTION ═══\nConcept: [scene description]\nDALL-E prompt: "[detailed English prompt]"\nFormat: Square 1:1\n\n═══ 30-SECOND REEL STORYBOARD ═══\nHook 0-3s: [visual + text overlay]\nScene 1 (3-10s): [action + narration]\nScene 2 (10-20s): [action + narration]\nCTA 20-30s: [closing frame + CTA text]\nMusic: [mood/genre]`;
 }
-function calendarPrompt(b: ClientBrief, fc: string) {
+function calendarPrompt(b: ClientBrief, fc: string, cp?: string) {
   const lang = b.language === 'he' ? 'Write entirely in Hebrew.' : 'Write entirely in English.';
-  return `${lang} Create a 30-day social media calendar for: ${ctx(b, fc)}\nMix: 40% educational, 30% promotional, 20% engagement, 10% video.\n\nFormat exactly:\n═══ WEEK 1 — [Theme] ═══\nMon: 📚 [Educational topic]\nWed: 🎯 [Promo angle]\nFri: 💬 [Engagement question/poll]\nSun: 🎬 [Reel idea]\n\n═══ WEEK 2 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ WEEK 3 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ WEEK 4 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ ALGORITHM TIPS ═══\n• [tip 1]\n• [tip 2]\n• [tip 3]`;
+  return `${lang} Create a 30-day social media calendar for: ${ctx(b, fc, cp)}\nMix: 40% educational, 30% promotional, 20% engagement, 10% video.\n\nFormat exactly:\n═══ WEEK 1 — [Theme] ═══\nMon: 📚 [Educational topic]\nWed: 🎯 [Promo angle]\nFri: 💬 [Engagement question/poll]\nSun: 🎬 [Reel idea]\n\n═══ WEEK 2 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ WEEK 3 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ WEEK 4 — [Theme] ═══\nMon: 📚 [topic] | Wed: 🎯 [angle] | Fri: 💬 [question] | Sun: 🎬 [idea]\n\n═══ ALGORITHM TIPS ═══\n• [tip 1]\n• [tip 2]\n• [tip 3]`;
 }
-function adsPrompt(b: ClientBrief, fc: string) {
+function adsPrompt(b: ClientBrief, fc: string, cp?: string) {
   const lang = b.language === 'he' ? 'Write entirely in Hebrew.' : 'Write entirely in English.';
-  return `${lang} Create Facebook ad strategy for: ${ctx(b, fc)}\n\nFormat exactly:\n═══ TOF — AWARENESS ═══\nObjective: [campaign objective]\nDaily budget: [ILS amount]\nAudiences: [3 specific interests/behaviors]\nAd format: [format]\nCopy sample: [25-word hook]\nKPIs: [metrics]\n\n═══ MOF — CONSIDERATION ═══\nObjective: [objective]\nDaily budget: [ILS amount]\nAudiences: [retargeting + lookalike]\nAd format: [format]\nCopy sample: [25-word value-focused copy]\nKPIs: [metrics]\n\n═══ BOF — CONVERSION ═══\nObjective: [objective]\nDaily budget: [ILS amount]\nAudiences: [hot retarget]\nAd format: [format]\nCopy sample: [25-word urgency copy]\nKPIs: [metrics]\n\n═══ BUDGET SPLIT ═══\nTOF [%] | MOF [%] | BOF [%]\nMonthly total: [ILS] | Expected CPL: [range]`;
+  return `${lang} Create Facebook ad strategy for: ${ctx(b, fc, cp)}\n\nFormat exactly:\n═══ TOF — AWARENESS ═══\nObjective: [campaign objective]\nDaily budget: [ILS amount]\nAudiences: [3 specific interests/behaviors]\nAd format: [format]\nCopy sample: [25-word hook]\nKPIs: [metrics]\n\n═══ MOF — CONSIDERATION ═══\nObjective: [objective]\nDaily budget: [ILS amount]\nAudiences: [retargeting + lookalike]\nAd format: [format]\nCopy sample: [25-word value-focused copy]\nKPIs: [metrics]\n\n═══ BOF — CONVERSION ═══\nObjective: [objective]\nDaily budget: [ILS amount]\nAudiences: [hot retarget]\nAd format: [format]\nCopy sample: [25-word urgency copy]\nKPIs: [metrics]\n\n═══ BUDGET SPLIT ═══\nTOF [%] | MOF [%] | BOF [%]\nMonthly total: [ILS] | Expected CPL: [range]`;
 }
 
-/* ─── Utility: file → base64 ─────────────────────────────────────────────── */
+/* ─── Utility ─────────────────────────────────────────────────────────────── */
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -117,9 +121,7 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
-function isImage(mime: string): boolean {
-  return mime.startsWith('image/');
-}
+function isImage(mime: string): boolean { return mime.startsWith('image/'); }
 
 /* ─── CopyBtn ────────────────────────────────────────────────────────────── */
 function CopyBtn({ text }: { text: string }) {
@@ -280,7 +282,6 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
         </div>
       </div>
 
-      {/* Analysis section */}
       {!file.analysis ? (
         <button onClick={onAnalyze} disabled={analyzing}
           className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 border border-dashed border-indigo-300 text-indigo-600 text-[10px] font-semibold rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-50">
@@ -293,7 +294,6 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
         </details>
       )}
 
-      {/* Image preview modal */}
       {preview && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setPreview(false)}>
           <img src={`data:${file.mimeType};base64,${file.base64}`} alt={file.name}
@@ -301,6 +301,36 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
           <button onClick={() => setPreview(false)} className="absolute top-4 right-4 text-white bg-black/50 rounded-full p-2 hover:bg-black/70"><X size={18} /></button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─── ProjectCard (grid card in "project" view) ───────────────────────────── */
+function ProjectCard({ project, onSelect, onDelete }: {
+  project: ContentProject;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const analyzedCount = project.files.filter(f => f.analysis).length;
+  return (
+    <div onClick={onSelect}
+      className="p-4 border-2 border-slate-100 hover:border-indigo-300 hover:bg-indigo-50/40 rounded-xl cursor-pointer transition-all group relative">
+      <button
+        onClick={e => { e.stopPropagation(); onDelete(); }}
+        className="absolute top-3 left-3 text-slate-200 group-hover:text-red-300 hover:!text-red-500 transition-colors">
+        <Trash2 size={13} />
+      </button>
+      <Folder size={22} className="text-indigo-400 mb-2 ml-auto" />
+      <p className="text-sm font-bold text-slate-800 text-right">{project.name}</p>
+      {project.customPrompt && (
+        <p className="text-[11px] text-slate-400 text-right mt-1 line-clamp-2 leading-relaxed">{project.customPrompt}</p>
+      )}
+      <div className="flex items-center justify-end gap-2 mt-2">
+        {analyzedCount > 0 && (
+          <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{analyzedCount} AI</span>
+        )}
+        <span className="text-[10px] text-slate-400">{project.files.length} קבצים</span>
+      </div>
     </div>
   );
 }
@@ -318,17 +348,21 @@ export default function ContentHub() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [newClientName,  setNewClientName]  = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectPrompt, setNewProjectPrompt] = useState('');
   const [clientSearch,   setClientSearch]   = useState('');
+  const [editingPrompt,  setEditingPrompt]  = useState(false);
+  const promptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── File uploads ────────────────────────────────────────────────────────
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Content generation ──────────────────────────────────────────────────
-  const [brief,     setBrief]     = useState<ClientBrief>(EMPTY_BRIEF);
-  const [sections,  setSections]  = useState<Record<TabId, SectionState>>(EMPTY_SECTIONS);
-  const [activeTab, setActiveTab] = useState<TabId>('posts');
-  const [generating,setGenerating]= useState(false);
+  const [brief,      setBrief]     = useState<ClientBrief>(EMPTY_BRIEF);
+  const [sections,   setSections]  = useState<Record<TabId, SectionState>>(EMPTY_SECTIONS);
+  const [activeTab,  setActiveTab] = useState<TabId>('posts');
+  const [generating, setGenerating]= useState(false);
+  const [regenTab,   setRegenTab]  = useState<TabId | null>(null);
   const abortRef = useRef(false);
 
   // ── Firestore listeners ─────────────────────────────────────────────────
@@ -347,6 +381,7 @@ export default function ContentHub() {
   const project = projects.find(p => p.id === selectedProject) ?? null;
   const clientProjects = projects.filter(p => p.clientId === selectedClient);
   const files   = project?.files ?? [];
+  const customPrompt = project?.customPrompt ?? '';
 
   const filesContext = files
     .filter(f => f.analysis)
@@ -382,18 +417,15 @@ export default function ContentHub() {
 
   const deleteClient = async (id: string) => {
     await deleteDoc(doc(db, 'content-clients', id)).catch(console.error);
-    // delete all projects of this client
     projects.filter(p => p.clientId === id).forEach(p =>
       deleteDoc(doc(db, 'content-projects', p.id)).catch(console.error)
     );
     if (selectedClient === id) { setSelectedClient(null); setSelectedProject(null); }
   };
 
-  // Auto-save brief changes to Firestore
   const saveBrief = useCallback(async (updated: ClientBrief) => {
     if (!client) return;
-    const updatedClient = { ...client, brief: updated };
-    await setDoc(doc(db, 'content-clients', client.id), updatedClient).catch(console.error);
+    await setDoc(doc(db, 'content-clients', client.id), { ...client, brief: updated }).catch(console.error);
   }, [client]);
 
   const updateBrief = (patch: Partial<ClientBrief>) => {
@@ -411,18 +443,31 @@ export default function ContentHub() {
       clientId: selectedClient,
       name: newProjectName.trim(),
       description: '',
+      customPrompt: newProjectPrompt.trim(),
       files: [],
       createdAt: new Date().toISOString(),
     };
     await setDoc(doc(db, 'content-projects', id), newProject).catch(console.error);
     setSelectedProject(id);
     setNewProjectName('');
+    setNewProjectPrompt('');
     setShowNewProject(false);
   };
 
   const deleteProject = async (id: string) => {
     await deleteDoc(doc(db, 'content-projects', id)).catch(console.error);
-    if (selectedProject === id) setSelectedProject(null);
+    if (selectedProject === id) { setSelectedProject(null); setSections(EMPTY_SECTIONS); }
+  };
+
+  // ── Save custom prompt (debounced) ────────────────────────────────────────
+  const updateCustomPrompt = (value: string) => {
+    if (!project) return;
+    // Optimistic local update via Firestore snapshot will handle the rest
+    if (promptSaveTimer.current) clearTimeout(promptSaveTimer.current);
+    promptSaveTimer.current = setTimeout(async () => {
+      const updated = { ...project, customPrompt: value };
+      await setDoc(doc(db, 'content-projects', project.id), updated).catch(console.error);
+    }, 800);
   };
 
   // ── File upload ──────────────────────────────────────────────────────────
@@ -443,12 +488,11 @@ export default function ContentHub() {
           uploadedAt: new Date().toISOString(),
         };
 
-        // Auto-analyze images if API key available
         let analysis: string | undefined;
         if (isImage(file.type) && apiKey) {
           try {
-            const client2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-            const resp = await client2.messages.create({
+            const c2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+            const resp = await c2.messages.create({
               model: 'claude-opus-4-6',
               max_tokens: 400,
               messages: [{
@@ -463,19 +507,15 @@ export default function ContentHub() {
           } catch { /* analysis optional */ }
         }
 
-        const updatedProject: ContentProject = {
-          ...project,
-          files: [...project.files, { ...pf, analysis }],
-        };
+        // Re-read project from latest state before updating (avoid stale closure)
+        const latestProject = projects.find(p => p.id === project.id) ?? project;
+        const updatedProject: ContentProject = { ...latestProject, files: [...latestProject.files, { ...pf, analysis }] };
         await setDoc(doc(db, 'content-projects', project.id), updatedProject).catch(console.error);
       } catch { alert(`שגיאה בהעלאת ${file.name}`); }
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    handleFiles(e.dataTransfer.files);
-  };
+  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); handleFiles(e.dataTransfer.files); };
 
   const deleteFile = async (fileId: string) => {
     if (!project) return;
@@ -490,8 +530,8 @@ export default function ContentHub() {
     if (!apiKey || !isImage(file.mimeType)) return;
     setAnalyzingId(fileId);
     try {
-      const client2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-      const resp = await client2.messages.create({
+      const c2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const resp = await c2.messages.create({
         model: 'claude-opus-4-6',
         max_tokens: 400,
         messages: [{
@@ -514,11 +554,11 @@ export default function ContentHub() {
     setSections(prev => ({ ...prev, [tab]: { ...prev[tab], ...patch } }));
   }, []);
 
-  const runStream = useCallback(async (client2: Anthropic, tab: TabId, prompt: string) => {
+  const runStream = useCallback(async (c2: Anthropic, tab: TabId, prompt: string) => {
     updateSection(tab, { content: '', loading: true, done: false });
     try {
       let text = '';
-      const stream = await client2.messages.stream({
+      const stream = await c2.messages.stream({
         model: 'claude-opus-4-6',
         max_tokens: 1500,
         system: [{ type: 'text' as const, text: 'You are a world-class digital marketing strategist. Output structured, immediately usable content. Follow format instructions exactly.', cache_control: { type: 'ephemeral' as const } }],
@@ -546,12 +586,13 @@ export default function ContentHub() {
     setGenerating(true);
     setSections(EMPTY_SECTIONS);
     const c2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+    const cp = customPrompt;
     const fc = filesContext;
     const plan: [TabId, string][] = [
-      ['posts',    postsPrompt(brief, fc)],
-      ['visuals',  visualsPrompt(brief, fc)],
-      ['calendar', calendarPrompt(brief, fc)],
-      ['ads',      adsPrompt(brief, fc)],
+      ['posts',    postsPrompt(brief, fc, cp)],
+      ['visuals',  visualsPrompt(brief, fc, cp)],
+      ['calendar', calendarPrompt(brief, fc, cp)],
+      ['ads',      adsPrompt(brief, fc, cp)],
     ];
     for (const [tab, prompt] of plan) {
       if (abortRef.current) break;
@@ -559,10 +600,30 @@ export default function ContentHub() {
       await runStream(c2, tab, prompt);
     }
     setGenerating(false);
-  }, [brief, runStream, filesContext]);
+  }, [brief, runStream, filesContext, customPrompt]);
 
-  const handleStop  = useCallback(() => { abortRef.current = true; setGenerating(false); }, []);
-  const handleReset = useCallback(() => { abortRef.current = true; setGenerating(false); setSections(EMPTY_SECTIONS); }, []);
+  // ── Regenerate single tab ─────────────────────────────────────────────────
+  const handleRegenerateTab = useCallback(async (tab: TabId) => {
+    if (!brief.company.trim() || !brief.niche.trim()) return;
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    abortRef.current = false;
+    setRegenTab(tab);
+    const c2 = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+    const cp = customPrompt;
+    const fc = filesContext;
+    const promptMap: Record<TabId, string> = {
+      posts:    postsPrompt(brief, fc, cp),
+      visuals:  visualsPrompt(brief, fc, cp),
+      calendar: calendarPrompt(brief, fc, cp),
+      ads:      adsPrompt(brief, fc, cp),
+    };
+    await runStream(c2, tab, promptMap[tab]);
+    setRegenTab(null);
+  }, [brief, runStream, filesContext, customPrompt]);
+
+  const handleStop  = useCallback(() => { abortRef.current = true; setGenerating(false); setRegenTab(null); }, []);
+  const handleReset = useCallback(() => { abortRef.current = true; setGenerating(false); setRegenTab(null); setSections(EMPTY_SECTIONS); }, []);
   const toggleGoal  = (id: string) => updateBrief({ goals: brief.goals.includes(id) ? brief.goals.filter(g => g !== id) : [...brief.goals, id] });
 
   const hasContent = Object.values(sections).some(s => s.content || s.loading);
@@ -570,7 +631,6 @@ export default function ContentHub() {
   const inp = 'w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right bg-white placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all';
   const lbl = 'block text-[11px] font-bold text-slate-400 mb-1.5 uppercase tracking-widest text-right';
 
-  /* ── View mode ─────────────────────────────────────────────────────────── */
   type ViewMode = 'clients' | 'project' | 'generate';
   const viewMode: ViewMode = !selectedClient ? 'clients' : !selectedProject ? 'project' : 'generate';
 
@@ -602,8 +662,6 @@ export default function ContentHub() {
               </button>
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">לקוח</span>
             </div>
-
-            {/* New client input */}
             {showNewClient && (
               <div className="flex gap-1.5">
                 <button onClick={createClient} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700">צור</button>
@@ -612,8 +670,6 @@ export default function ContentHub() {
                   placeholder="שם הלקוח..." className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300" />
               </div>
             )}
-
-            {/* Client search */}
             {clients.length > 3 && (
               <div className="relative">
                 <Search size={11} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -621,8 +677,6 @@ export default function ContentHub() {
                   placeholder="חיפוש לקוח..." className="w-full pr-7 pl-2 py-1.5 border border-slate-200 rounded-lg text-xs text-right focus:outline-none" />
               </div>
             )}
-
-            {/* Client list */}
             <div className="space-y-1 max-h-36 overflow-y-auto">
               {filteredClients.length === 0 && (
                 <p className="text-xs text-slate-400 text-center py-2">אין לקוחות — צור לקוח חדש</p>
@@ -630,7 +684,7 @@ export default function ContentHub() {
               {filteredClients.map(c => (
                 <div key={c.id}
                   className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all group ${selectedClient === c.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
-                  onClick={() => { setSelectedClient(c.id); setSelectedProject(null); }}>
+                  onClick={() => { setSelectedClient(c.id); setSelectedProject(null); setSections(EMPTY_SECTIONS); }}>
                   <Building2 size={12} className={selectedClient === c.id ? 'text-white/60' : 'text-slate-400'} />
                   <span className="flex-1 text-xs font-semibold truncate">{c.brief.company}</span>
                   <button onClick={e => { e.stopPropagation(); deleteClient(c.id); }}
@@ -642,7 +696,7 @@ export default function ContentHub() {
             </div>
           </div>
 
-          {/* ── Project selector (only when client selected) ─── */}
+          {/* ── Project selector ─── */}
           {selectedClient && (
             <div className="flex-shrink-0 p-3 border-b border-slate-100 space-y-2">
               <div className="flex items-center justify-between">
@@ -652,25 +706,43 @@ export default function ContentHub() {
                 </button>
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">פרויקט</span>
               </div>
+
+              {/* New project form */}
               {showNewProject && (
-                <div className="flex gap-1.5">
-                  <button onClick={createProject} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700">צור</button>
-                  <input autoFocus value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && createProject()}
-                    placeholder="שם הפרויקט..." className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300" />
+                <div className="space-y-2 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                  <div className="flex gap-1.5">
+                    <button onClick={createProject} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700 flex-shrink-0">צור</button>
+                    <input autoFocus value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && createProject()}
+                      placeholder="שם הפרויקט..." className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300 bg-white" />
+                  </div>
+                  <textarea
+                    value={newProjectPrompt}
+                    onChange={e => setNewProjectPrompt(e.target.value)}
+                    placeholder="פרומפט / מיקוד לפרויקט (אופציונלי) — לדוגמה: 'פרויקט יוקרתי בתל אביב לרוכשים גיל 40+, דגש על איכות חיים ועיצוב מינימליסטי'"
+                    rows={3}
+                    className="w-full border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white resize-none placeholder-slate-400"
+                  />
+                  <p className="text-[10px] text-slate-400 text-right">הפרומפט ישמר עם הפרויקט וישפיע על כל יצירת התוכן</p>
                 </div>
               )}
-              <div className="space-y-1 max-h-28 overflow-y-auto">
+
+              <div className="space-y-1 max-h-36 overflow-y-auto">
                 {clientProjects.length === 0 && <p className="text-xs text-slate-400 text-center py-1">אין פרויקטים ללקוח זה</p>}
                 {clientProjects.map(p => (
                   <div key={p.id}
                     className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all group ${selectedProject === p.id ? 'bg-indigo-600 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
-                    onClick={() => setSelectedProject(p.id)}>
+                    onClick={() => { setSelectedProject(p.id); setSections(EMPTY_SECTIONS); }}>
                     <Folder size={12} className={selectedProject === p.id ? 'text-white/70' : 'text-slate-400'} />
-                    <span className="flex-1 text-xs font-semibold truncate">{p.name}</span>
-                    <span className={`text-[10px] ${selectedProject === p.id ? 'text-white/60' : 'text-slate-400'}`}>{p.files.length} קבצים</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold truncate">{p.name}</div>
+                      {p.customPrompt && (
+                        <div className={`text-[9px] truncate ${selectedProject === p.id ? 'text-white/50' : 'text-slate-400'}`}>{p.customPrompt.slice(0, 40)}...</div>
+                      )}
+                    </div>
+                    <span className={`text-[10px] flex-shrink-0 ${selectedProject === p.id ? 'text-white/60' : 'text-slate-400'}`}>{p.files.length} 📎</span>
                     <button onClick={e => { e.stopPropagation(); deleteProject(p.id); }}
-                      className={`opacity-0 group-hover:opacity-100 transition-opacity ${selectedProject === p.id ? 'text-white/50 hover:text-red-300' : 'text-slate-300 hover:text-red-400'}`}>
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ${selectedProject === p.id ? 'text-white/50 hover:text-red-300' : 'text-slate-300 hover:text-red-400'}`}>
                       <Trash2 size={11} />
                     </button>
                   </div>
@@ -685,45 +757,33 @@ export default function ContentHub() {
               <div className="space-y-3">
                 <div>
                   <label className={lbl}>שם החברה *</label>
-                  <input type="text" value={brief.company}
-                    onChange={e => updateBrief({ company: e.target.value })}
-                    className={inp} placeholder="לדוגמה: מגדלי הים..." />
+                  <input type="text" value={brief.company} onChange={e => updateBrief({ company: e.target.value })} className={inp} placeholder="לדוגמה: מגדלי הים..." />
                 </div>
                 <div>
                   <label className={lbl}>תחום / ניצ'</label>
-                  <input type="text" value={brief.niche}
-                    onChange={e => updateBrief({ niche: e.target.value })}
-                    className={inp} placeholder='נדל"ן, פינטק, אופנה...' />
+                  <input type="text" value={brief.niche} onChange={e => updateBrief({ niche: e.target.value })} className={inp} placeholder='נדל"ן, פינטק, אופנה...' />
                 </div>
               </div>
               <hr className="border-slate-100" />
               <div className="space-y-3">
                 <div>
                   <label className={lbl}>קהל יעד</label>
-                  <input type="text" value={brief.targetAudience}
-                    onChange={e => updateBrief({ targetAudience: e.target.value })}
-                    className={inp} placeholder="עסקים קטנים, גיל 30-50..." />
+                  <input type="text" value={brief.targetAudience} onChange={e => updateBrief({ targetAudience: e.target.value })} className={inp} placeholder="עסקים קטנים, גיל 30-50..." />
                 </div>
                 <div>
                   <label className={lbl}>דמוגרפיה</label>
-                  <input type="text" value={brief.demographics}
-                    onChange={e => updateBrief({ demographics: e.target.value })}
-                    className={inp} placeholder="גיל, מין, אזור..." />
+                  <input type="text" value={brief.demographics} onChange={e => updateBrief({ demographics: e.target.value })} className={inp} placeholder="גיל, מין, אזור..." />
                 </div>
               </div>
               <hr className="border-slate-100" />
               <div className="space-y-3">
                 <div>
                   <label className={lbl}>נקודות כאב</label>
-                  <textarea value={brief.painPoints}
-                    onChange={e => updateBrief({ painPoints: e.target.value })}
-                    className={`${inp} resize-none`} rows={2} placeholder="מה מציק ללקוח?" />
+                  <textarea value={brief.painPoints} onChange={e => updateBrief({ painPoints: e.target.value })} className={`${inp} resize-none`} rows={2} placeholder="מה מציק ללקוח?" />
                 </div>
                 <div>
                   <label className={lbl}>יתרון ייחודי (USP)</label>
-                  <input type="text" value={brief.usp}
-                    onChange={e => updateBrief({ usp: e.target.value })}
-                    className={inp} placeholder="מה מייחד אותך?" />
+                  <input type="text" value={brief.usp} onChange={e => updateBrief({ usp: e.target.value })} className={inp} placeholder="מה מייחד אותך?" />
                 </div>
               </div>
               <hr className="border-slate-100" />
@@ -780,7 +840,7 @@ export default function ContentHub() {
               <div className="flex gap-2">
                 <button onClick={handleGenerate} disabled={!brief.company.trim() || !brief.niche.trim()}
                   className="flex-1 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
-                  <RefreshCw size={14} /> צור מחדש
+                  <RefreshCw size={14} /> צור מחדש הכל
                 </button>
                 <button onClick={handleReset} className="px-4 py-3 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm font-medium">נקה</button>
               </div>
@@ -810,13 +870,14 @@ export default function ContentHub() {
             <div>
               <h2 className="text-2xl font-black text-slate-800 tracking-tight mb-2">Creative Hub</h2>
               <p className="text-slate-400 text-sm max-w-sm leading-relaxed">
-                צור לקוח חדש בסרגל הצדדי, הוסף פרויקט, העלה קבצי מותג — ו-AI יבנה עבורך תוכן שיווקי מותאם אישית.
+                צור לקוח חדש בסרגל הצדדי, הוסף פרויקט עם פרומפט מותאם, העלה קבצי מותג — ו-AI יבנה עבורך תוכן שיווקי מותאם אישית.
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-4 text-xs text-slate-400 max-w-sm">
+            <div className="grid grid-cols-4 gap-3 text-xs text-slate-400 max-w-lg">
               {[
                 { icon: <Building2 size={18}/>, label: 'לקוחות שמורים' },
                 { icon: <FolderOpen size={18}/>, label: 'פרויקטים מאורגנים' },
+                { icon: <Pencil size={18}/>, label: 'פרומפט מותאם' },
                 { icon: <Upload size={18}/>, label: 'ניתוח קבצי מותג' },
               ].map((item, i) => (
                 <div key={i} className="flex flex-col items-center gap-2 p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
@@ -850,18 +911,9 @@ export default function ContentHub() {
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   {clientProjects.map(p => (
-                    <div key={p.id} onClick={() => setSelectedProject(p.id)}
-                      className="p-4 border-2 border-slate-100 hover:border-indigo-300 hover:bg-indigo-50 rounded-xl cursor-pointer transition-all group">
-                      <div className="flex items-center justify-between mb-2">
-                        <button onClick={e => { e.stopPropagation(); deleteProject(p.id); }}
-                          className="text-slate-200 group-hover:text-red-300 hover:!text-red-500 transition-colors">
-                          <Trash2 size={13} />
-                        </button>
-                        <Folder size={20} className="text-indigo-400" />
-                      </div>
-                      <p className="text-sm font-bold text-slate-800 text-right">{p.name}</p>
-                      <p className="text-xs text-slate-400 text-right mt-1">{p.files.length} קבצים</p>
-                    </div>
+                    <ProjectCard key={p.id} project={p}
+                      onSelect={() => { setSelectedProject(p.id); setSections(EMPTY_SECTIONS); }}
+                      onDelete={() => deleteProject(p.id)} />
                   ))}
                 </div>
               )}
@@ -883,7 +935,54 @@ export default function ContentHub() {
               </span>
             </div>
 
-            {/* File upload area */}
+            {/* ── Custom Prompt Card ── */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setEditingPrompt(v => !v)}
+                    className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
+                    <Pencil size={12} /> {editingPrompt ? 'סגור עריכה' : 'ערוך פרומפט'}
+                  </button>
+                  {customPrompt && !editingPrompt && (
+                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">פעיל ✓</span>
+                  )}
+                </div>
+                <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                  <Sparkles size={14} className="text-indigo-500" /> פרומפט הפרויקט
+                </span>
+              </div>
+              <div className="px-5 py-4">
+                {editingPrompt ? (
+                  <div className="space-y-2">
+                    <textarea
+                      autoFocus
+                      defaultValue={customPrompt}
+                      onChange={e => updateCustomPrompt(e.target.value)}
+                      placeholder="כתוב כאן הנחיות מיוחדות ליצירת התוכן — לדוגמה: 'פרויקט יוקרתי בתל אביב לרוכשים גיל 40+, דגש על איכות חיים ועיצוב מינימליסטי. להשתמש בשפה פורמלית ויוקרתית. לא להזכיר מחיר.'"
+                      rows={4}
+                      className="w-full border border-indigo-200 rounded-xl px-4 py-3 text-sm text-right bg-indigo-50/30 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+                    />
+                    <p className="text-[11px] text-slate-400 text-right flex items-center justify-end gap-1">
+                      <Check size={10} className="text-emerald-500" /> נשמר אוטומטית
+                    </p>
+                  </div>
+                ) : customPrompt ? (
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 cursor-pointer hover:bg-indigo-100 transition-colors"
+                    onClick={() => setEditingPrompt(true)}>
+                    <p className="text-sm text-indigo-800 text-right leading-relaxed">{customPrompt}</p>
+                  </div>
+                ) : (
+                  <button onClick={() => setEditingPrompt(true)}
+                    className="w-full border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-xl p-6 text-center transition-all">
+                    <Pencil size={22} className="text-slate-300 mx-auto mb-2" />
+                    <p className="text-sm text-slate-400 font-medium">הוסף פרומפט מותאם לפרויקט</p>
+                    <p className="text-xs text-slate-300 mt-1">הנחיות מיוחדות, קהל יעד ספציפי, סגנון כתיבה — AI יתחשב בהכל</p>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* ── File upload area ── */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
                 <button onClick={() => fileInputRef.current?.click()}
@@ -891,13 +990,13 @@ export default function ContentHub() {
                   <Upload size={12} /> העלה קבצים
                 </button>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">{files.length} קבצים</span>
+                  <span className="text-xs text-slate-400">{files.length} קבצים שמורים</span>
                   {files.filter(f => f.analysis).length > 0 && (
                     <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">
                       {files.filter(f => f.analysis).length} נותחו ✓
                     </span>
                   )}
-                  <span className="text-sm font-bold text-slate-700">קבצי מותג</span>
+                  <span className="text-sm font-bold text-slate-700">חומרי מותג</span>
                 </div>
               </div>
 
@@ -906,14 +1005,13 @@ export default function ContentHub() {
 
               {files.length === 0 ? (
                 <div
-                  onDrop={handleDrop}
-                  onDragOver={e => e.preventDefault()}
+                  onDrop={handleDrop} onDragOver={e => e.preventDefault()}
                   onClick={() => fileInputRef.current?.click()}
                   className="m-4 border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-xl p-8 text-center cursor-pointer transition-all">
                   <Upload size={28} className="text-slate-300 mx-auto mb-3" />
                   <p className="text-sm font-semibold text-slate-500">גרור קבצים לכאן או לחץ להעלאה</p>
                   <p className="text-xs text-slate-400 mt-1">תמונות (PNG, JPG, WebP) · עד {MAX_FILE_MB}MB לקובץ</p>
-                  <p className="text-xs text-indigo-500 mt-2 font-medium">תמונות מותג, לוגו, עיצובים — AI ינתח ויתאים את התוכן</p>
+                  <p className="text-xs text-indigo-500 mt-2 font-medium">קבצים נשמרים לפרויקט — בפעם הבאה כבר יהיו כאן</p>
                 </div>
               ) : (
                 <div className="p-4">
@@ -926,69 +1024,85 @@ export default function ContentHub() {
                     ))}
                   </div>
                   <div
-                    onDrop={handleDrop}
-                    onDragOver={e => e.preventDefault()}
+                    onDrop={handleDrop} onDragOver={e => e.preventDefault()}
                     onClick={() => fileInputRef.current?.click()}
                     className="border border-dashed border-slate-200 hover:border-indigo-300 rounded-xl p-3 text-center cursor-pointer transition-all">
                     <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5">
-                      <Upload size={11} /> הוסף עוד קבצים
+                      <Upload size={11} /> הוסף עוד קבצים (נשמרים לפרויקט)
                     </p>
                   </div>
                   {filesContext && (
                     <div className="mt-2 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                       <Bot size={12} className="text-emerald-600" />
-                      <p className="text-[11px] text-emerald-700 font-medium">קבצים מנותחים ישולבו בתוכן המיוצר</p>
+                      <p className="text-[11px] text-emerald-700 font-medium">{files.filter(f=>f.analysis).length} קבצים מנותחים ישולבו בתוכן המיוצר</p>
                     </div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Content tabs */}
+            {/* ── Content tabs ── */}
             {hasContent && (
               <>
                 <div className="flex gap-1 bg-white rounded-2xl border border-slate-200 p-1.5 shadow-sm">
                   {TABS.map(tab => {
                     const s = sections[tab.id];
                     const active = activeTab === tab.id;
+                    const isRegen = regenTab === tab.id;
                     return (
                       <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                         className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all ${active ? 'bg-black text-white shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'}`}>
                         <tab.icon size={14} />
                         <span className="hidden sm:inline">{tab.label}</span>
-                        {s.loading && <Loader2 size={11} className="animate-spin opacity-60" />}
-                        {s.done && !s.loading && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
+                        {(s.loading || isRegen) && <Loader2 size={11} className="animate-spin opacity-60" />}
+                        {s.done && !s.loading && !isRegen && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
                       </button>
                     );
                   })}
                 </div>
+
+                {/* Tab header with per-tab regenerate */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {cur.done && cur.content && !cur.content.startsWith('⚠️') && <CopyBtn text={cur.content} />}
+                    {cur.done && cur.content && !cur.content.startsWith('⚠️') && (
+                      <>
+                        <CopyBtn text={cur.content} />
+                        <button
+                          onClick={() => handleRegenerateTab(activeTab)}
+                          disabled={!!regenTab || generating}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-xs font-medium text-slate-500 hover:text-indigo-600 transition-all disabled:opacity-40">
+                          {regenTab === activeTab
+                            ? <><Loader2 size={11} className="animate-spin" /> מייצר...</>
+                            : <><RefreshCw size={11} /> צור מחדש טאב זה</>}
+                        </button>
+                      </>
+                    )}
                   </div>
                   <div className="text-right">
                     <h3 className="font-bold text-slate-800">{TABS.find(t => t.id === activeTab)?.label}</h3>
                     {brief.company && <p className="text-xs text-slate-400">{brief.company} · {brief.niche}</p>}
                   </div>
                 </div>
+
                 {activeTab === 'visuals'
                   ? <VisualsOutput content={cur.content} sectionLoading={cur.loading} />
                   : <SectionOutput content={cur.content} loading={cur.loading} />}
               </>
             )}
 
-            {/* Empty content state */}
+            {/* ── Empty content state ── */}
             {!hasContent && (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-sm">
                 <Sparkles size={32} className="text-slate-200 mx-auto mb-3" />
                 <p className="text-slate-500 font-semibold">מוכן לייצור תוכן</p>
-                <p className="text-xs text-slate-400 mt-1">
+                <div className="text-xs text-slate-400 mt-1 space-y-0.5">
+                  {customPrompt && <p className="text-indigo-600 font-medium">✓ פרומפט מותאם פעיל</p>}
                   {filesContext
-                    ? `AI ישלב את ניתוח ${files.filter(f=>f.analysis).length} הקבצים בתוכן`
-                    : 'העלה קבצי מותג לתוצאות מותאמות יותר'}
-                </p>
+                    ? <p>✓ {files.filter(f=>f.analysis).length} קבצי מותג מנותחים ומוכנים</p>
+                    : <p>העלה קבצי מותג לתוצאות מותאמות יותר</p>}
+                </div>
                 <button onClick={handleGenerate} disabled={!brief.company.trim() || !brief.niche.trim()}
-                  className="mt-4 inline-flex items-center gap-2 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-bold transition-all">
+                  className="mt-5 inline-flex items-center gap-2 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-bold transition-all">
                   <Sparkles size={14} /> צור תוכן קריאייטיב
                 </button>
                 {(!brief.company.trim() || !brief.niche.trim()) && (
@@ -1004,3 +1118,7 @@ export default function ContentHub() {
     </div>
   );
 }
+
+// needed for JSX without explicit React import
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _ReactNodeUsed: ReactNode = null;
