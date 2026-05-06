@@ -507,29 +507,29 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
   const handleAdd = () => {
     if (!desc.trim() || !date) return;
     if (selectedLead) {
+      // Strip undefined fields — Firestore rejects them
       const task: Task = {
         id: Date.now().toString(),
         description: desc.trim(),
-        notes: notes.trim() || undefined,
         date, time,
         completed: false,
         priority,
         assignedTo,
         assignedBy: currentUser,
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
       };
       onAddToLead(selectedLead.id, task);
     } else {
       const task: StandaloneTask = {
         id: Date.now().toString(),
         description: desc.trim(),
-        notes: notes.trim() || undefined,
         date, time,
         priority,
         completed: false,
         assignedTo,
         assignedBy: currentUser,
-        leadId: undefined,
         createdAt: new Date().toISOString(),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
       };
       onAddStandalone(task);
     }

@@ -636,11 +636,11 @@ export default function ContentHub() {
 
   /* ── Render ────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex gap-5" dir="rtl">
+    <div className="flex flex-col md:flex-row gap-4 md:gap-5" dir="rtl">
 
       {/* ════════════════ LEFT SIDEBAR ════════════════ */}
-      <div className="w-80 flex-shrink-0">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm sticky top-20 flex flex-col" style={{ maxHeight: 'calc(100vh - 88px)' }}>
+      <div className="w-full md:w-80 md:flex-shrink-0">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm md:sticky md:top-20 flex flex-col" style={{ maxHeight: 'calc(100vh - 88px)' }}>
 
           {/* Header */}
           <div className="bg-neutral-900 px-4 py-4 rounded-t-2xl flex items-center gap-3 flex-shrink-0">

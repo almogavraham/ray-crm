@@ -10,6 +10,8 @@ import {
 import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, StandaloneTask, TaskPriority, TeamMember } from '../types';
 import { getApiKey } from '../lib/apiKey';
+import { db } from '../lib/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ToolAction {
@@ -109,11 +111,12 @@ const CRM_TOOLS = [
   },
 ];
 
-/* ─── localStorage helpers ───────────────────────────────────────────────── */
-const HISTORY_KEY = 'ray-ai-history';
-const MAX_HISTORY  = 60;
+/* ─── History persistence (localStorage + Firestore) ────────────────────── */
+const HISTORY_KEY   = 'ray-ai-history';
+const FS_HISTORY_ID = 'ai-history/messages'; // Firestore path: collection/docId
+const MAX_HISTORY   = 60;
 
-function loadHistory(): Message[] {
+function loadLocalHistory(): Message[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
@@ -121,11 +124,30 @@ function loadHistory(): Message[] {
   } catch { return []; }
 }
 
-function saveHistory(msgs: Message[]) {
+function saveLocalHistory(msgs: Message[]) {
   try {
     const toSave = msgs.slice(-MAX_HISTORY);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(toSave));
   } catch { /* quota exceeded - silently ignore */ }
+}
+
+async function loadFirestoreHistory(): Promise<Message[]> {
+  try {
+    const snap = await getDoc(doc(db, 'ai-history', 'messages'));
+    if (!snap.exists()) return [];
+    const data = snap.data() as { messages?: Message[] };
+    return Array.isArray(data.messages) ? data.messages : [];
+  } catch { return []; }
+}
+
+async function saveFirestoreHistory(msgs: Message[]) {
+  try {
+    const toSave = msgs.slice(-MAX_HISTORY);
+    await setDoc(doc(db, 'ai-history', 'messages'), {
+      messages: toSave,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch { /* network issue - silently ignore */ }
 }
 
 /* ─── Build system prompt ────────────────────────────────────────────────── */
@@ -353,7 +375,7 @@ export default function AiAssistant({
   onCreateTask, onUpdateLead, onAddNote,
 }: AiAssistantProps) {
 
-  const [messages,          setMessages]          = useState<Message[]>(loadHistory);
+  const [messages,          setMessages]          = useState<Message[]>(loadLocalHistory);
   const [input,             setInput]             = useState('');
   const [loading,           setLoading]           = useState(false);
   const [error,             setError]             = useState<string | null>(null);
@@ -363,18 +385,35 @@ export default function AiAssistant({
   const [currentSearches,   setCurrentSearches]   = useState<string[]>([]);
   const [voiceRecording,    setVoiceRecording]    = useState(false);
   const [showHistory,       setShowHistory]       = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef       = useRef<HTMLTextAreaElement>(null);
-  const voiceRecogRef  = useRef<unknown>(null);
+  const messagesEndRef  = useRef<HTMLDivElement>(null);
+  const inputRef        = useRef<HTMLTextAreaElement>(null);
+  const voiceRecogRef   = useRef<unknown>(null);
+  const fsSaveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load from Firestore on mount (overrides localStorage if Firestore has more recent data)
+  useEffect(() => {
+    loadFirestoreHistory().then(fsMsgs => {
+      if (fsMsgs.length > 0) {
+        setMessages(fsMsgs);
+        saveLocalHistory(fsMsgs); // sync local cache
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText, searchLabel]);
 
-  // Persist history
+  // Persist history to localStorage immediately + Firestore with 2s debounce
   useEffect(() => {
-    if (messages.length > 0) saveHistory(messages);
+    if (messages.length === 0) return;
+    saveLocalHistory(messages);
+    if (fsSaveTimer.current) clearTimeout(fsSaveTimer.current);
+    fsSaveTimer.current = setTimeout(() => {
+      saveFirestoreHistory(messages);
+    }, 2000);
   }, [messages]);
 
   /* ── Execute CRM tool ─────────────────────────────────────────────────── */
@@ -705,6 +744,8 @@ export default function AiAssistant({
   const clearChat = () => {
     setMessages([]);
     localStorage.removeItem(HISTORY_KEY);
+    if (fsSaveTimer.current) clearTimeout(fsSaveTimer.current);
+    setDoc(doc(db, 'ai-history', 'messages'), { messages: [], updatedAt: new Date().toISOString() }).catch(() => {});
     setError(null);
     setStreamingText('');
     setSearchLabel(undefined);
@@ -729,7 +770,7 @@ export default function AiAssistant({
   const isIdle = messages.length === 0 && !loading;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-64px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-116px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0">
