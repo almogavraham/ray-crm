@@ -440,6 +440,31 @@ export default function AiAssistant({
     }
   }, [leads, currentUser, onCreateTask, onUpdateLead, onAddNote]);
 
+  /* ── Retry helper ────────────────────────────────────────────────────── */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const retryWithBackoff = async <T,>(fn: () => Promise<T>, maxRetries = 3): Promise<T> => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err: unknown) {
+        const isOverloaded =
+          (err instanceof Error && (err.message.includes('overloaded') || err.message.includes('529'))) ||
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ((err as any)?.status === 529);
+
+        if (isOverloaded && attempt < maxRetries) {
+          const delay = (attempt + 1) * 8000; // 8s, 16s, 24s
+          setSearchLabel(`שרתי AI עמוסים — מנסה שנית בעוד ${delay / 1000} שניות...`);
+          await new Promise(r => setTimeout(r, delay));
+          setSearchLabel(undefined);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('מספר הניסיונות המרבי חוּצה');
+  };
+
   /* ── Full agentic loop ────────────────────────────────────────────────── */
   const runAgentLoop = useCallback(async (
     client: Anthropic,
@@ -459,13 +484,13 @@ export default function AiAssistant({
 
     for (let turn = 0; turn < 8; turn++) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response: any = await (client.messages as any).create({
+      const response: any = await retryWithBackoff(() => (client.messages as any).create({
         model:      'claude-opus-4-6',
         max_tokens: 4096,
         system:     systemBlocks,
         messages:   msgs,
         tools,
-      });
+      }));
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const content: any[] = response.content || [];
@@ -605,12 +630,21 @@ export default function AiAssistant({
       };
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'שגיאה בתקשורת עם ה-AI';
-      if (webSearchEnabled && msg.includes('web_search')) {
-        setError('חיפוש אינטרנט אינו זמין. עוצר חיפוש ומנסה שנית...');
+      const raw = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (err as any)?.status;
+
+      if (status === 529 || raw.includes('overloaded') || raw.includes('529')) {
+        setError('שרתי ה-AI עמוסים כרגע 😓 ניסינו מספר פעמים ולא הצלחנו. נסה שנית בעוד כמה דקות.');
+      } else if (status === 401 || raw.includes('authentication') || raw.includes('API key')) {
+        setError('מפתח API לא תקין. בדוק את הגדרות VITE_ANTHROPIC_API_KEY.');
+      } else if (status === 429 || raw.includes('rate_limit')) {
+        setError('חרגת ממכסת הבקשות ל-API. המתן מספר שניות ונסה שנית.');
+      } else if (webSearchEnabled && raw.includes('web_search')) {
+        setError('חיפוש אינטרנט אינו זמין כרגע. כבה אותו ונסה שנית.');
         setWebSearchEnabled(false);
       } else {
-        setError(msg);
+        setError('שגיאה בתקשורת עם ה-AI. נסה שנית.');
       }
     } finally {
       setLoading(false);
@@ -809,11 +843,20 @@ export default function AiAssistant({
         {error && (
           <div className="flex items-start gap-3 bg-red-900/30 border border-red-700/40 rounded-xl px-4 py-3 text-sm">
             <AlertCircle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
-            <div>
+            <div className="flex-1">
               <div className="text-red-300 font-medium">שגיאה</div>
               <div className="text-red-400/80 text-xs mt-0.5">{error}</div>
+              {(error.includes('עמוסים') || error.includes('מכסת')) && (
+                <button
+                  onClick={() => { setError(null); sendMessage(); }}
+                  disabled={loading}
+                  className="mt-2 text-xs bg-red-800/60 hover:bg-red-700/60 text-red-200 px-3 py-1 rounded-lg transition-colors"
+                >
+                  נסה שנית
+                </button>
+              )}
             </div>
-            <button onClick={() => setError(null)} className="ml-auto text-red-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
+            <button onClick={() => setError(null)} className="text-red-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
           </div>
         )}
 
