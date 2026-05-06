@@ -15,7 +15,7 @@ import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
 import Toast from './components/Toast';
-import type { Lead, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
+import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
@@ -358,6 +358,25 @@ export default function App() {
     await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
   };
 
+  // ─── AI agent: add note to lead ───────────────────────────────────────────
+  const handleAddNote = (leadId: string, noteText: string) => {
+    const note: Note = {
+      id:        Date.now().toString(),
+      text:      noteText,
+      author:    settings.userName,
+      timestamp: new Date().toISOString(),
+    };
+    setLeads(prev => {
+      const next = prev.map(l =>
+        l.id === leadId ? { ...l, notes: [...l.notes, note] } : l
+      );
+      const updated = next.find(l => l.id === leadId);
+      if (updated) saveLead(updated);
+      return next;
+    });
+    addToast('הערה נוספה ✓', 'success');
+  };
+
   const handleInviteSuccess = (name: string, email: string) => {
     setInviteEmail('');
     const exists = team.some(m => m.email === email);
@@ -429,7 +448,15 @@ export default function App() {
           <TeamManagement team={team} leads={leads} onUpdateRole={handleUpdateRole} onInvite={handleInvite} onRemoveMember={handleRemoveMember} />
         )}
         {page === 'ai' && (
-          <AiAssistant leads={leads} />
+          <AiAssistant
+            leads={leads}
+            team={team}
+            currentUser={settings.userName}
+            standaloneTask={standaloneTask}
+            onCreateTask={handleStandaloneAdd}
+            onUpdateLead={handleLeadUpdate}
+            onAddNote={handleAddNote}
+          />
         )}
         {page === 'kanban' && (
           <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} />
