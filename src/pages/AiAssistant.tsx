@@ -718,7 +718,9 @@ export default function AiAssistant({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const status = (err as any)?.status;
 
-      if (status === 529 || raw.includes('overloaded') || raw.includes('529')) {
+      if (raw.includes('credit balance') || raw.includes('billing') || raw.includes('upgrade or purchase')) {
+        setError('💳 יתרת הקרדיט ב-Anthropic נגמרה. יש להוסיף קרדיט בכתובת: console.anthropic.com → Plans & Billing');
+      } else if (status === 529 || raw.includes('overloaded') || raw.includes('529')) {
         setError('שרתי ה-AI עמוסים כרגע 😓 ניסינו מספר פעמים ולא הצלחנו. נסה שנית בעוד כמה דקות.');
       } else if (status === 401 || raw.includes('authentication') || raw.includes('API key')) {
         setError('מפתח API לא תקין. בדוק את הגדרות VITE_ANTHROPIC_API_KEY.');
@@ -728,7 +730,7 @@ export default function AiAssistant({
         setError('חיפוש אינטרנט אינו זמין כרגע. כבה אותו ונסה שנית.');
         setWebSearchEnabled(false);
       } else {
-        setError('שגיאה בתקשורת עם ה-AI. נסה שנית.');
+        setError(`שגיאה בתקשורת עם ה-AI: ${raw.slice(0, 120)}`);
       }
     } finally {
       setLoading(false);
