@@ -83,7 +83,7 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'campaigns' | 'deals';
+export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals';
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
@@ -145,6 +145,34 @@ export type ActivityEntry = {
   timestamp: string;
 };
 
+export type MediaPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'email' | 'other';
+
+export type MediaRecord = {
+  id: string;
+  month: string;          // YYYY-MM
+  platform: MediaPlatform;
+  spend: number;
+  impressions?: number;
+  clicks?: number;
+  leads: number;
+  conversions: number;
+  notes?: string;
+};
+
+export type ClientGoal = {
+  id: string;
+  month: string;          // YYYY-MM
+  leadsTarget: number;
+  revenueTarget: number;
+  spendBudget: number;
+};
+
+export type ClientLink = {
+  id: string;
+  title: string;
+  url: string;
+};
+
 export type AccountData = {
   leadId: string;
   contractStart: string;
@@ -153,6 +181,9 @@ export type AccountData = {
   solutions: ManagedSolution[];
   payments: PaymentRecord[];
   activityLog: ActivityEntry[];
+  mediaRecords: MediaRecord[];
+  goals: ClientGoal[];
+  links: ClientLink[];
   upsellNote: string;
   nextStep?: string;
   satisfactionScore?: number;   // 1–5

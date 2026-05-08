@@ -10,7 +10,6 @@ import Kanban from './pages/Kanban';
 import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
-import Campaigns from './pages/Campaigns';
 import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
 import LeadModal from './components/LeadModal';
@@ -523,9 +522,6 @@ export default function App() {
         )}
         {page === 'content' && (
           <ContentHub />
-        )}
-        {page === 'campaigns' && (
-          <Campaigns />
         )}
         {page === 'deals' && (
           <Deals leads={leads} team={team} currentUser={settings.userName} onLeadClick={setSelectedLead} onToast={addToast} />

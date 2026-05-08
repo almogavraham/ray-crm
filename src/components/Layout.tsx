@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
-  Megaphone, Layers, BarChart3, Sparkles, UserCheck, Settings,
+  Layers, BarChart3, Sparkles, UserCheck, Settings,
   Plus, Menu, X, ChevronLeft, Bell, Zap,
 } from 'lucide-react';
 import type { Page } from '../types';
@@ -31,7 +31,6 @@ const NAV_GROUPS = [
   {
     label: 'שיווק',
     items: [
-      { page: 'campaigns'as Page, label: 'קמפיינים',  icon: Megaphone },
       { page: 'content'  as Page, label: 'קריאייטיב', icon: Layers },
       { page: 'overview' as Page, label: 'דוחות',     icon: BarChart3 },
     ],
