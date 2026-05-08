@@ -83,7 +83,28 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content';
+export type Page = 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'campaigns';
+
+export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
+export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
+export type CampaignObjective = 'awareness' | 'leads' | 'sales' | 'engagement';
+
+export type Campaign = {
+  id: string;
+  name: string;
+  platform: CampaignPlatform;
+  status: CampaignStatus;
+  objective: CampaignObjective;
+  budget: number;       // monthly budget ILS
+  spent: number;        // actual spend ILS
+  leads: number;        // leads generated
+  conversions: number;  // leads → clients
+  revenue: number;      // revenue generated ILS
+  startDate: string;    // YYYY-MM-DD
+  endDate?: string;
+  notes?: string;
+  createdAt: string;
+};
 
 export type AppSettings = {
   userName: string;

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Sparkles, Users, BarChart2, LayoutDashboard, Plus, Kanban,
-  RefreshCw, CheckSquare, Settings, Menu, X, Layers,
+  RefreshCw, CheckSquare, Settings, Menu, X, Layers, Megaphone,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -20,6 +20,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; highlight
   { page: 'overview',  label: 'דאשבורד',  icon: BarChart2 },
   { page: 'kanban',    label: 'פייפליין', icon: Kanban },
   { page: 'tasks',     label: 'משימות',   icon: CheckSquare },
+  { page: 'campaigns', label: 'קמפיינים', icon: Megaphone },
   { page: 'content',   label: 'קריאייטיב', icon: Layers, highlight: true },
   { page: 'ai',        label: 'עוזר AI',  icon: Sparkles, highlight: true },
   { page: 'team',      label: 'צוות',     icon: Users },

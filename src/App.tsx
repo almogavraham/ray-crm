@@ -10,6 +10,7 @@ import Kanban from './pages/Kanban';
 import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
+import Campaigns from './pages/Campaigns';
 import LeadModal from './components/LeadModal';
 import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
@@ -510,6 +511,9 @@ export default function App() {
         )}
         {page === 'content' && (
           <ContentHub />
+        )}
+        {page === 'campaigns' && (
+          <Campaigns />
         )}
       </Layout>
 
