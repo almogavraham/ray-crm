@@ -106,6 +106,27 @@ export type Campaign = {
   createdAt: string;
 };
 
+// ─── Account Management ──────────────────────────────────────────────────────
+export type PaymentStatus = 'paid' | 'pending' | 'overdue';
+
+export type PaymentRecord = {
+  id: string;
+  month: string;       // YYYY-MM
+  amount: number;
+  status: PaymentStatus;
+  paidAt?: string;
+};
+
+export type AccountData = {
+  leadId: string;
+  contractStart: string;   // YYYY-MM-DD
+  contractEnd: string;     // YYYY-MM-DD
+  monthlyRetainer: number;
+  payments: PaymentRecord[];
+  upsellNote: string;
+  updatedAt: string;
+};
+
 export type DealStage = 'new' | 'proposal' | 'negotiation' | 'won' | 'lost';
 
 export type ProposalItem = {
