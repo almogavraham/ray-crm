@@ -107,23 +107,55 @@ export type Campaign = {
 };
 
 // ─── Account Management ──────────────────────────────────────────────────────
-export type PaymentStatus = 'paid' | 'pending' | 'overdue';
+export type PaymentStatus = 'paid' | 'pending' | 'overdue' | 'cancelled';
+export type PaymentType   = 'retainer' | 'one_time' | 'bonus';
 
 export type PaymentRecord = {
   id: string;
-  month: string;       // YYYY-MM
+  date: string;            // YYYY-MM-DD
   amount: number;
+  type: PaymentType;
   status: PaymentStatus;
+  invoiceNumber?: string;
+  notes?: string;
   paidAt?: string;
+  month?: string;          // legacy field — kept for backward compat
+};
+
+export type SolutionStatus = 'not_started' | 'in_progress' | 'delivered' | 'approved';
+
+export type ManagedSolution = {
+  id: string;
+  name: string;
+  description?: string;
+  status: SolutionStatus;
+  dueDate?: string;
+  assignedTo?: string;
+  notes?: string;
+  createdAt: string;
+};
+
+export type ActivityType = 'note' | 'call' | 'meeting' | 'email' | 'whatsapp';
+
+export type ActivityEntry = {
+  id: string;
+  type: ActivityType;
+  text: string;
+  author: string;
+  timestamp: string;
 };
 
 export type AccountData = {
   leadId: string;
-  contractStart: string;   // YYYY-MM-DD
-  contractEnd: string;     // YYYY-MM-DD
+  contractStart: string;
+  contractEnd: string;
   monthlyRetainer: number;
+  solutions: ManagedSolution[];
   payments: PaymentRecord[];
+  activityLog: ActivityEntry[];
   upsellNote: string;
+  nextStep?: string;
+  satisfactionScore?: number;   // 1–5
   updatedAt: string;
 };
 

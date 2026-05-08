@@ -528,7 +528,7 @@ export default function App() {
           <Campaigns />
         )}
         {page === 'deals' && (
-          <Deals leads={leads} currentUser={settings.userName} onLeadClick={setSelectedLead} onToast={addToast} />
+          <Deals leads={leads} team={team} currentUser={settings.userName} onLeadClick={setSelectedLead} onToast={addToast} />
         )}
       </Layout>
 
