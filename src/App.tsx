@@ -11,6 +11,8 @@ import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
 import Campaigns from './pages/Campaigns';
+import HomeDashboard from './pages/HomeDashboard';
+import Deals from './pages/Deals';
 import LeadModal from './components/LeadModal';
 import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
@@ -93,7 +95,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   companyName: 'RAY Digital Agency',
   compactMode: false,
   showOverduePopup: true,
-  defaultPage: 'dashboard',
+  defaultPage: 'home',
   accentColor: 'indigo',
 };
 
@@ -115,7 +117,7 @@ function loadSettings(): AppSettings {
 }
 
 export default function App() {
-  const [page, setPage]               = useState<Page>('dashboard');
+  const [page, setPage]               = useState<Page>('home');
   const [leads, setLeads]             = useState<Lead[]>(loadLeadsLocal);
   const [team, setTeam]               = useState<TeamMember[]>(loadTeamLocal);
   const [settings, setSettings]       = useState<AppSettings>(loadSettings);
@@ -442,6 +444,7 @@ export default function App() {
         
         overdueBadge={overdueBadge}
         userInitials={settings.userInitials}
+        userName={settings.userName}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -451,6 +454,15 @@ export default function App() {
           </div>
         )}
 
+        {page === 'home' && (
+          <HomeDashboard
+            leads={leads}
+            standaloneTask={standaloneTask}
+            currentUser={settings.userName}
+            onLeadClick={setSelectedLead}
+            onPageChange={setPage}
+          />
+        )}
         {page === 'dashboard' && (
           <Dashboard
             leads={leads}
@@ -514,6 +526,9 @@ export default function App() {
         )}
         {page === 'campaigns' && (
           <Campaigns />
+        )}
+        {page === 'deals' && (
+          <Deals leads={leads} team={team} currentUser={settings.userName} onToast={addToast} />
         )}
       </Layout>
 

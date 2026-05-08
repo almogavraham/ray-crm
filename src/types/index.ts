@@ -83,7 +83,7 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'campaigns';
+export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'campaigns' | 'deals';
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
@@ -104,6 +104,48 @@ export type Campaign = {
   endDate?: string;
   notes?: string;
   createdAt: string;
+};
+
+export type DealStage = 'new' | 'proposal' | 'negotiation' | 'won' | 'lost';
+
+export type ProposalItem = {
+  id: string;
+  name: string;
+  description?: string;
+  quantity: number;
+  unitPrice: number;
+};
+
+export type Proposal = {
+  id: string;
+  title: string;
+  clientName: string;
+  clientEmail?: string;
+  items: ProposalItem[];
+  discount?: number;
+  validUntil?: string;
+  notes?: string;
+  status: 'draft' | 'sent' | 'viewed' | 'accepted' | 'rejected';
+  createdAt: string;
+};
+
+export type Deal = {
+  id: string;
+  company: string;
+  clientName: string;
+  leadId?: string;
+  stage: DealStage;
+  value: number;
+  probability: number;
+  assignedTo: string;
+  expectedCloseDate: string;
+  proposals: Proposal[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  wonAt?: string;
+  lostAt?: string;
+  lostReason?: string;
 };
 
 export type AppSettings = {

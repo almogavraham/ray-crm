@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import {
-  Sparkles, Users, BarChart2, LayoutDashboard, Plus, Kanban,
-  RefreshCw, CheckSquare, Settings, Menu, X, Layers, Megaphone,
+  LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
+  Megaphone, Layers, BarChart3, Sparkles, UserCheck, Settings,
+  Plus, Menu, X, ChevronLeft, Bell, Zap,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -13,198 +14,184 @@ interface LayoutProps {
   onRefresh?: () => void;
   overdueBadge?: number;
   userInitials?: string;
+  userName?: string;
 }
 
-const NAV_ITEMS: { page: Page; label: string; icon: React.ElementType; highlight?: boolean }[] = [
-  { page: 'dashboard', label: 'לידים',    icon: LayoutDashboard },
-  { page: 'overview',  label: 'דאשבורד',  icon: BarChart2 },
-  { page: 'kanban',    label: 'פייפליין', icon: Kanban },
-  { page: 'tasks',     label: 'משימות',   icon: CheckSquare },
-  { page: 'campaigns', label: 'קמפיינים', icon: Megaphone },
-  { page: 'content',   label: 'קריאייטיב', icon: Layers, highlight: true },
-  { page: 'ai',        label: 'עוזר AI',  icon: Sparkles, highlight: true },
-  { page: 'team',      label: 'צוות',     icon: Users },
+const NAV_GROUPS = [
+  {
+    label: 'ניהול לקוחות',
+    items: [
+      { page: 'home'     as Page, label: 'לוח בקרה',  icon: LayoutDashboard },
+      { page: 'dashboard'as Page, label: 'לידים',     icon: Users },
+      { page: 'kanban'   as Page, label: 'פייפליין',  icon: GitBranch },
+      { page: 'deals'    as Page, label: 'עסקאות',    icon: Briefcase },
+      { page: 'tasks'    as Page, label: 'משימות',    icon: CheckSquare, badge: true },
+    ],
+  },
+  {
+    label: 'שיווק',
+    items: [
+      { page: 'campaigns'as Page, label: 'קמפיינים',  icon: Megaphone },
+      { page: 'content'  as Page, label: 'קריאייטיב', icon: Layers },
+      { page: 'overview' as Page, label: 'דוחות',     icon: BarChart3 },
+    ],
+  },
+  {
+    label: 'כלים',
+    items: [
+      { page: 'ai'       as Page, label: 'עוזר AI',   icon: Sparkles },
+      { page: 'team'     as Page, label: 'צוות',      icon: UserCheck },
+      { page: 'settings' as Page, label: 'הגדרות',   icon: Settings },
+    ],
+  },
 ];
 
 export default function Layout({
   children, currentPage, onPageChange, onNewLead,
-  onRefresh, overdueBadge = 0, userInitials = 'A',
+  overdueBadge = 0, userInitials = 'A', userName = 'משתמש',
 }: LayoutProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  const go = (p: Page) => { onPageChange(p); setMenuOpen(false); };
+  const go = (p: Page) => { onPageChange(p); setOpen(false); };
 
-  return (
-    <div className="min-h-screen bg-slate-100" dir="rtl">
+  const SidebarContent = () => (
+    <div className="flex flex-col h-full">
+      {/* Logo */}
+      <div className="px-5 pt-6 pb-5 border-b border-slate-800/60">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/30 flex-shrink-0">
+            <Zap size={18} className="text-white" />
+          </div>
+          <div>
+            <p className="text-white font-black text-lg leading-tight tracking-tight">RAY</p>
+            <p className="text-slate-500 text-[10px] font-medium -mt-0.5">Lead Manager</p>
+          </div>
+        </div>
+        {/* New Lead Button */}
+        <button
+          onClick={() => { onNewLead(); setOpen(false); }}
+          className="mt-4 w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-xl transition-all shadow-sm shadow-indigo-500/20"
+        >
+          <Plus size={14} /> ליד חדש
+        </button>
+      </div>
 
-      {/* ── Top bar ────────────────────────────────────────────────────────── */}
-      <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
-        <div className="flex items-center justify-between px-3 md:px-4 h-12 md:h-auto">
-
-          {/* Desktop left: New Lead + nav items + refresh */}
-          <div className="hidden md:flex items-center gap-1">
-            <button
-              onClick={onNewLead}
-              className="flex items-center gap-1.5 bg-black hover:bg-neutral-800 text-white px-4 py-2.5 text-sm font-medium transition-colors"
-              style={{ borderLeft: '1px solid rgba(255,255,255,0.1)' }}
-            >
-              <Plus size={15} />ליד חדש
-            </button>
-            <div className="flex items-center">
-              {NAV_ITEMS.map(({ page, label, icon: Icon, highlight }) => (
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5 scrollbar-hide">
+        {NAV_GROUPS.map(group => (
+          <div key={group.label}>
+            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-3 pt-4 pb-1.5 select-none">
+              {group.label}
+            </p>
+            {group.items.map(({ page, label, icon: Icon, badge }) => {
+              const active = currentPage === page;
+              return (
                 <button
                   key={page}
                   onClick={() => go(page)}
-                  className={`relative flex items-center gap-1.5 px-3 py-5 text-sm font-medium transition-colors border-b-2 ${
-                    currentPage === page
-                      ? 'text-black border-black'
-                      : highlight
-                      ? 'text-neutral-600 hover:text-black border-transparent hover:border-neutral-300'
-                      : 'text-slate-500 hover:text-slate-700 border-transparent hover:border-slate-200'
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all group relative ${
+                    active
+                      ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  {page === 'tasks' ? (
-                    <div className="relative">
-                      <Icon size={15} />
-                      {overdueBadge > 0 && (
-                        <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-red-500 text-white rounded-full text-[8px] font-bold flex items-center justify-center leading-none">
-                          {overdueBadge > 9 ? '9+' : overdueBadge}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <Icon size={15} />
-                  )}
+                  <Icon size={16} className={active ? 'text-white' : 'text-slate-500 group-hover:text-white transition-colors'} />
                   <span>{label}</span>
+                  {badge && overdueBadge > 0 && (
+                    <span className="mr-auto bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center leading-none">
+                      {overdueBadge > 9 ? '9+' : overdueBadge}
+                    </span>
+                  )}
+                  {active && (
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-300 rounded-full" />
+                  )}
                 </button>
-              ))}
-            </div>
-            <button
-              onClick={onRefresh}
-              className="flex items-center gap-1.5 px-3 py-5 text-slate-400 hover:text-slate-600 text-sm transition-colors border-r border-slate-100 mr-1"
-            >
-              <RefreshCw size={14} />
-            </button>
+              );
+            })}
           </div>
+        ))}
+      </nav>
 
-          {/* Mobile left: hamburger */}
-          <div className="flex md:hidden items-center gap-2">
-            <button
-              onClick={() => setMenuOpen(v => !v)}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
-            >
-              {menuOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
-            <button
-              onClick={onNewLead}
-              className="flex items-center gap-1 bg-black text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
-            >
-              <Plus size={13} />ליד חדש
-            </button>
+      {/* User + notifications */}
+      <div className="border-t border-slate-800/60 p-3">
+        <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-800 transition-colors cursor-default group">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+            {userInitials}
           </div>
-
-          {/* Right: logo + avatar (always visible) */}
-          <div className="flex items-center gap-2 md:gap-3 py-2">
-            <button
-              onClick={() => go('settings')}
-              className={`p-1.5 md:p-2 rounded-lg transition-colors ${
-                currentPage === 'settings'
-                  ? 'bg-neutral-100 text-black'
-                  : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <Settings size={16} />
-            </button>
-            {/* RAY Logo */}
-            <div className="flex items-center gap-2 select-none">
-              <div className="text-right hidden sm:block">
-                <div className="text-[10px] text-slate-400 tracking-widest uppercase leading-none mb-0.5">Lead Manager</div>
-                <div className="font-black text-black text-xl tracking-tighter leading-none">RAY</div>
-              </div>
-              <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0">
-                <rect width="100" height="100" rx="12" fill="black"/>
-                <rect x="22" y="62" width="56" height="8" rx="4" fill="white"/>
-                <rect x="22" y="48" width="40" height="7" rx="3.5" fill="white"/>
-                <rect x="22" y="30" width="56" height="12" rx="6" fill="white"/>
-                <rect x="52" y="48" width="26" height="22" rx="4" fill="white"/>
-              </svg>
-              <div className="font-black text-black text-lg sm:hidden tracking-tighter leading-none">RAY</div>
-            </div>
-            <div
-              onClick={() => go('settings')}
-              className="w-8 h-8 md:w-9 md:h-9 rounded-xl bg-black flex items-center justify-center text-white font-bold text-sm shadow-sm cursor-pointer hover:opacity-80 transition-opacity select-none flex-shrink-0"
-            >
-              {userInitials}
-            </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-xs font-semibold truncate">{userName}</p>
+            <p className="text-slate-500 text-[10px]">מנהל</p>
           </div>
+          <button className="relative text-slate-500 hover:text-white transition-colors">
+            <Bell size={14} />
+          </button>
         </div>
+      </div>
+    </div>
+  );
 
-        {/* Mobile dropdown menu */}
-        {menuOpen && (
-          <div className="md:hidden border-t border-slate-100 bg-white px-3 pb-3 pt-2 space-y-1">
-            {NAV_ITEMS.map(({ page, label, icon: Icon, highlight }) => (
-              <button
-                key={page}
-                onClick={() => go(page)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors text-right ${
-                  currentPage === page
-                    ? 'bg-black text-white'
-                    : highlight
-                    ? 'text-neutral-700 hover:bg-neutral-50'
-                    : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <span className="flex-1 text-right">{label}</span>
-                {page === 'tasks' && overdueBadge > 0 && (
-                  <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    {overdueBadge > 9 ? '9+' : overdueBadge}
-                  </span>
-                )}
-                <Icon size={16} />
+  return (
+    <div className="min-h-screen bg-slate-100 flex" dir="rtl">
+
+      {/* ── Desktop Sidebar (right side in RTL) ─────────────────────────── */}
+      <aside className="hidden md:flex w-60 bg-slate-950 flex-col fixed right-0 top-0 h-full z-30 border-l border-slate-800/40">
+        <SidebarContent />
+      </aside>
+
+      {/* ── Mobile Overlay ──────────────────────────────────────────────── */}
+      {open && (
+        <div className="md:hidden fixed inset-0 z-40 flex" dir="rtl">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)} />
+          <aside className="relative w-64 bg-slate-950 h-full mr-auto border-l border-slate-800/40 z-50 animate-slide-in-right flex flex-col">
+            <button onClick={() => setOpen(false)} className="absolute top-4 left-4 w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white">
+              <X size={14} />
+            </button>
+            <SidebarContent />
+          </aside>
+        </div>
+      )}
+
+      {/* ── Mobile Top Bar ──────────────────────────────────────────────── */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-slate-950 border-b border-slate-800/40 h-12 flex items-center px-4 justify-between">
+        <button onClick={() => setOpen(true)} className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-300">
+          <Menu size={16} />
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
+            <Zap size={11} className="text-white" />
+          </div>
+          <span className="text-white font-black text-sm">RAY</span>
+        </div>
+        <button onClick={onNewLead} className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+          <Plus size={15} />
+        </button>
+      </div>
+
+      {/* ── Main Content ────────────────────────────────────────────────── */}
+      <main className="flex-1 md:mr-60 min-h-screen">
+        <div className="pt-12 md:pt-0">
+          {/* Desktop page header */}
+          <div className="hidden md:flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 sticky top-0 z-20">
+            <div className="flex items-center gap-2 text-slate-400 text-sm">
+              <ChevronLeft size={14} />
+              <span className="text-slate-800 font-semibold capitalize">
+                {NAV_GROUPS.flatMap(g => g.items).find(i => i.page === currentPage)?.label ?? currentPage}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="relative w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
+                <Bell size={15} className="text-slate-500" />
               </button>
-            ))}
-          </div>
-        )}
-      </nav>
-
-      {/* ── Page content ───────────────────────────────────────────────────── */}
-      <main className="max-w-7xl mx-auto px-3 md:px-4 py-4 md:py-5 pb-20 md:pb-5">
-        {children}
-      </main>
-
-      {/* ── Mobile bottom nav ──────────────────────────────────────────────── */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 z-40 safe-area-pb">
-        <div className="flex items-center justify-around px-1 py-1">
-          {[
-            { page: 'dashboard' as Page, label: 'לידים',    icon: LayoutDashboard },
-            { page: 'kanban'    as Page, label: 'פייפליין', icon: Kanban },
-            { page: 'tasks'     as Page, label: 'משימות',   icon: CheckSquare },
-            { page: 'ai'        as Page, label: 'AI',       icon: Sparkles },
-            { page: 'overview'  as Page, label: 'דאשבורד',  icon: BarChart2 },
-          ].map(({ page, label, icon: Icon }) => (
-            <button
-              key={page}
-              onClick={() => go(page)}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl min-w-[52px] transition-colors ${
-                currentPage === page
-                  ? 'text-black bg-neutral-100'
-                  : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              <div className="relative">
-                <Icon size={20} />
-                {page === 'tasks' && overdueBadge > 0 && (
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 text-white rounded-full text-[7px] font-bold flex items-center justify-center">
-                    {overdueBadge > 9 ? '9+' : overdueBadge}
-                  </span>
-                )}
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xs font-bold">
+                {userInitials}
               </div>
-              <span className="text-[10px] font-medium leading-none">{label}</span>
-            </button>
-          ))}
+            </div>
+          </div>
+          <div className="p-4 md:p-6">
+            {children}
+          </div>
         </div>
-      </nav>
-
+      </main>
     </div>
   );
 }
