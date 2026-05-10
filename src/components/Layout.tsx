@@ -24,7 +24,7 @@ const NAV_GROUPS = [
       { page: 'home'     as Page, label: 'לוח בקרה',  icon: LayoutDashboard },
       { page: 'dashboard'as Page, label: 'לידים',     icon: Users },
       { page: 'kanban'   as Page, label: 'פייפליין',  icon: GitBranch },
-      { page: 'deals'    as Page, label: 'עסקאות',    icon: Briefcase },
+      { page: 'deals'    as Page, label: 'ניהול לקוחות', icon: Briefcase },
       { page: 'tasks'    as Page, label: 'משימות',    icon: CheckSquare, badge: true },
     ],
   },
