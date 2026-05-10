@@ -5,7 +5,7 @@ import {
   Globe, Search, X, Zap,
   Building2, TrendingUp, FileText, MessageSquare,
   Mic, MicOff, CheckCircle2, ListTodo, Tag, StickyNote,
-  History, Trash2,
+  History, Trash2, Brain, Dna, Copy, ChevronDown,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, StandaloneTask, TaskPriority, TeamMember } from '../types';
@@ -368,6 +368,280 @@ function ThinkingBubble({ label }: { label?: string }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   MIRROR MODE PANEL
+═══════════════════════════════════════════════════════════════════════════ */
+function MirrorModePanel({ currentUser }: { currentUser: string }) {
+  const [styleExample, setStyleExample] = useState('');
+  const [savedStyles,  setSavedStyles]  = useState<string[]>([]);
+  const [context,      setContext]      = useState('');
+  const [generated,    setGenerated]    = useState('');
+  const [genLoading,   setGenLoading]   = useState(false);
+  const [initLoading,  setInitLoading]  = useState(true);
+  const [copied,       setCopied]       = useState(false);
+
+  useEffect(() => {
+    getDoc(doc(db, 'mirror-mode', 'styles')).then(snap => {
+      if (snap.exists()) {
+        const data = snap.data() as { examples?: string[] };
+        setSavedStyles(data.examples ?? []);
+      }
+    }).finally(() => setInitLoading(false));
+  }, []);
+
+  async function saveStyle() {
+    if (!styleExample.trim()) return;
+    const updated = [...savedStyles, styleExample.trim()].slice(-5);
+    setSavedStyles(updated);
+    setStyleExample('');
+    await setDoc(doc(db, 'mirror-mode', 'styles'), { examples: updated, updatedAt: new Date().toISOString() });
+  }
+
+  async function deleteStyle(i: number) {
+    const updated = savedStyles.filter((_, idx) => idx !== i);
+    setSavedStyles(updated);
+    await setDoc(doc(db, 'mirror-mode', 'styles'), { examples: updated, updatedAt: new Date().toISOString() });
+  }
+
+  async function generateMessage() {
+    if (!context.trim() || savedStyles.length === 0) return;
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    setGenLoading(true);
+    setGenerated('');
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6',
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: `אתה מומחה Ghostwriting. המשתמש שמך הוא ${currentUser}.\n\nהנה דוגמאות לסגנון הכתיבה שלו:\n${savedStyles.map((s, i) => `דוגמה ${i + 1}:\n${s}`).join('\n\n')}\n\nכעת כתוב הודעה בדיוק בסגנון זה על הנושא הבא:\n"${context}"\n\nחשוב: כתוב רק את ההודעה עצמה, ללא הסברים. שמור על הסגנון, הטון, האורך ואפילו שגיאות כתיב אם קיימות.`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = response.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      setGenerated(text);
+    } catch { setGenerated('שגיאה ביצירת הודעה. נסה שנית.'); }
+    finally { setGenLoading(false); }
+  }
+
+  function copyGenerated() {
+    navigator.clipboard.writeText(generated).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div className="text-center">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-violet-500/30">
+          <Brain size={24} className="text-white" />
+        </div>
+        <h2 className="text-white font-bold text-lg">Mirror Mode</h2>
+        <p className="text-slate-400 text-sm mt-1">AI שלומד את סגנון הכתיבה שלך ומייצר הודעות בדיוק כמוך</p>
+      </div>
+
+      {/* Saved examples */}
+      <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
+        <h3 className="text-white font-bold text-sm flex items-center gap-2">
+          <Sparkles size={13} className="text-violet-400" /> הסגנון שלי ({savedStyles.length}/5 דוגמאות)
+        </h3>
+        {initLoading ? (
+          <div className="text-center py-4"><Loader2 size={18} className="animate-spin text-slate-500 mx-auto" /></div>
+        ) : savedStyles.length === 0 ? (
+          <p className="text-slate-500 text-xs text-center py-2">הוסף דוגמאות כתיבה שלך — ווטסאפ, מייל, פוסטים — כדי ש-AI ילמד את הסגנון</p>
+        ) : (
+          <div className="space-y-2">
+            {savedStyles.map((s, i) => (
+              <div key={i} className="flex items-start gap-2 bg-slate-700/40 border border-slate-600/50 rounded-xl p-3 group">
+                <button onClick={() => deleteStyle(i)} className="flex-shrink-0 w-5 h-5 rounded-md bg-red-900/50 hover:bg-red-700/60 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5">
+                  <X size={10} />
+                </button>
+                <p className="text-slate-300 text-xs leading-relaxed flex-1 text-right">{s.slice(0, 120)}{s.length > 120 ? '...' : ''}</p>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-2 pt-1">
+          <textarea
+            value={styleExample}
+            onChange={e => setStyleExample(e.target.value)}
+            placeholder="הדבק כאן הודעה שכתבת (ווטסאפ, מייל, תגובה) — ה-AI ילמד את הסגנון שלך..."
+            rows={3}
+            className="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-500/60 resize-none text-right"
+          />
+          <button
+            onClick={saveStyle}
+            disabled={!styleExample.trim() || savedStyles.length >= 5}
+            className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-sm font-bold py-2.5 rounded-xl transition-colors"
+          >
+            {savedStyles.length >= 5 ? 'מקסימום 5 דוגמאות — מחק ישנות כדי להוסיף' : '+ שמור דוגמה'}
+          </button>
+        </div>
+      </div>
+
+      {/* Generator */}
+      <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
+        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Zap size={13} className="text-indigo-400" /> צור הודעה בסגנון שלך</h3>
+        <textarea
+          value={context}
+          onChange={e => setContext(e.target.value)}
+          placeholder="מה אתה רוצה לכתוב? (למשל: הודעת מעקב ללקוח שלא ענה, פוסט על שירות חדש, הצעת מחיר...)"
+          rows={3}
+          className="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/60 resize-none text-right"
+        />
+        <button
+          onClick={generateMessage}
+          disabled={genLoading || !context.trim() || savedStyles.length === 0}
+          className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
+        >
+          {genLoading ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
+          {genLoading ? 'מייצר בסגנון שלך...' : savedStyles.length === 0 ? 'הוסף דוגמאות תחילה' : 'צור הודעה'}
+        </button>
+        {generated && (
+          <div className="bg-slate-900 border border-indigo-700/40 rounded-xl p-4 space-y-3">
+            <p className="text-slate-200 text-sm leading-relaxed text-right whitespace-pre-wrap">{generated}</p>
+            <div className="flex gap-2 justify-start">
+              <button onClick={copyGenerated} className="flex items-center gap-1.5 text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">
+                <Copy size={11} /> {copied ? 'הועתק ✓' : 'העתק'}
+              </button>
+              <button onClick={() => { setGenerated(''); setContext(''); }} className="text-xs text-slate-500 px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">נקה</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DNA MATCH PANEL
+═══════════════════════════════════════════════════════════════════════════ */
+function DnaMatchPanel({ leads }: { leads: Lead[] }) {
+  const [matching, setMatching] = useState(false);
+  const [results,  setResults]  = useState<{ leadId: string; score: number; reasons: string }[]>([]);
+  const [errMsg,   setErrMsg]   = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const wonLeads    = leads.filter(l => l.status === 'לקוח פעיל');
+  const targetLeads = leads.filter(l => l.status === 'חדש' || l.status === 'בתהליך');
+
+  async function runDnaMatch() {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    setMatching(true);
+    setErrMsg(null);
+    setResults([]);
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const wonSummary    = wonLeads.map(l => `[${l.id}] ${l.company} | מקור:${l.source} | תקציב:₪${l.budget} | שירותים:${l.solutions.map(s => s.name).join(',') || 'אין'} | ציון:${l.aiScore}`).join('\n');
+      const targetSummary = targetLeads.map(l => `[${l.id}] ${l.company} | ${l.contactName} | מקור:${l.source} | תקציב:₪${l.budget} | שירותים:${l.solutions.map(s => s.name).join(',') || 'אין'} | ציון:${l.aiScore} | סטטוס:${l.status}`).join('\n');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6',
+        max_tokens: 2048,
+        messages: [{
+          role: 'user',
+          content: `אתה מנהל CRM מומחה. נתח לידים ובצע DNA Match.\n\nלקוחות פעילים (DNA מוצלח):\n${wonSummary}\n\nלידים לניתוח:\n${targetSummary}\n\nעבור כל ליד, תן ציון דמיון (0-100) ומשפט קצר בעברית.\nענה רק בפורמט JSON:\n[{"leadId":"xxx","score":85,"reasons":"דומה ל-[חברה] - אותו מקור ותקציב דומה"}]\nללא הסברים נוספים.`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = response.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as { leadId: string; score: number; reasons: string }[];
+        setResults(parsed.sort((a, b) => b.score - a.score));
+      } else {
+        setErrMsg('לא הצלחתי לנתח. נסה שנית.');
+      }
+    } catch { setErrMsg('שגיאה בניתוח DNA. נסה שנית.'); }
+    finally { setMatching(false); }
+  }
+
+  const scoreColor = (s: number) => s >= 75 ? 'text-emerald-400' : s >= 50 ? 'text-amber-400' : 'text-red-400';
+  const scoreBar   = (s: number) => s >= 75 ? 'bg-emerald-500' : s >= 50 ? 'bg-amber-500' : 'bg-red-500';
+  const scoreLabel = (s: number) => s >= 75 ? 'פוטנציאל גבוה' : s >= 50 ? 'פוטנציאל בינוני' : 'פוטנציאל נמוך';
+
+  return (
+    <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div className="text-center">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-emerald-500/30">
+          <Dna size={24} className="text-white" />
+        </div>
+        <h2 className="text-white font-bold text-lg">DNA Match</h2>
+        <p className="text-slate-400 text-sm mt-1">AI מנתח את הלידים שלך ומוצא מי הכי דומה ללקוחות שנסגרו בהצלחה</p>
+      </div>
+
+      <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-emerald-400 font-semibold">{wonLeads.length} לקוחות פעילים כ-DNA בסיס</span>
+          <span className="text-slate-400">{targetLeads.length} לידים לניתוח</span>
+        </div>
+        {wonLeads.length === 0 ? (
+          <div className="text-center py-3">
+            <p className="text-slate-400 text-sm">אין לקוחות פעילים עדיין.</p>
+            <p className="text-slate-500 text-xs mt-1">DNA Match מתחיל לעבוד לאחר שיש לך לקוח פעיל אחד לפחות.</p>
+          </div>
+        ) : (
+          <button
+            onClick={runDnaMatch}
+            disabled={matching || targetLeads.length === 0}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+          >
+            {matching ? <Loader2 size={14} className="animate-spin" /> : <Dna size={14} />}
+            {matching ? 'מנתח DNA...' : targetLeads.length === 0 ? 'אין לידים לניתוח' : 'הפעל DNA Match'}
+          </button>
+        )}
+        {errMsg && <p className="text-red-400 text-xs text-center">{errMsg}</p>}
+      </div>
+
+      {results.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-slate-400 text-xs font-semibold px-1">תוצאות — מדורג מגבוה לנמוך</p>
+          {results.map(r => {
+            const lead = leads.find(l => l.id === r.leadId);
+            if (!lead) return null;
+            const isOpen = expanded === r.leadId;
+            return (
+              <div key={r.leadId} className="bg-slate-800 border border-slate-700/60 rounded-2xl overflow-hidden">
+                <button onClick={() => setExpanded(isOpen ? null : r.leadId)} className="w-full text-right p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-bold px-2 py-0.5 rounded-full bg-slate-700 ${scoreColor(r.score)}`}>{scoreLabel(r.score)}</span>
+                      <span className={`text-xl font-black ${scoreColor(r.score)}`}>{r.score}%</span>
+                      <ChevronDown size={14} className={`text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </div>
+                    <div>
+                      <p className="font-bold text-white text-sm">{lead.company}</p>
+                      <p className="text-xs text-slate-500">{lead.contactName} · {lead.status}</p>
+                    </div>
+                  </div>
+                  <div className="h-1.5 bg-slate-700 rounded-full">
+                    <div className={`h-1.5 rounded-full ${scoreBar(r.score)} transition-all duration-500`} style={{ width: `${r.score}%` }} />
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="px-4 pb-4 pt-0 border-t border-slate-700/50">
+                    <p className="text-slate-300 text-xs leading-relaxed text-right mt-3">{r.reasons}</p>
+                    <div className="mt-2 flex gap-2 flex-wrap justify-end">
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">תקציב: ₪{lead.budget.toLocaleString()}</span>
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">מקור: {lead.source}</span>
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">ציון AI: {lead.aiScore}%</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function AiAssistant({
@@ -385,6 +659,7 @@ export default function AiAssistant({
   const [currentSearches,   setCurrentSearches]   = useState<string[]>([]);
   const [voiceRecording,    setVoiceRecording]    = useState(false);
   const [showHistory,       setShowHistory]       = useState(false);
+  const [activeView,        setActiveView]        = useState<'chat' | 'mirror' | 'dna'>('chat');
   const messagesEndRef  = useRef<HTMLDivElement>(null);
   const inputRef        = useRef<HTMLTextAreaElement>(null);
   const voiceRecogRef   = useRef<unknown>(null);
@@ -819,6 +1094,29 @@ export default function AiAssistant({
         </div>
       </div>
 
+      {/* ── AI Intelligence Tabs ────────────────────────────────────────────── */}
+      <div className="flex gap-1 px-4 py-2 border-b border-slate-700/60 bg-slate-900/50 flex-shrink-0">
+        {([
+          { key: 'chat'   as const, icon: <Bot size={12} />,    label: 'שיחה'        },
+          { key: 'mirror' as const, icon: <Brain size={12} />,  label: 'Mirror Mode' },
+          { key: 'dna'    as const, icon: <Dna size={12} />,    label: 'DNA Match'   },
+        ]).map(v => (
+          <button
+            key={v.key}
+            onClick={() => setActiveView(v.key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              activeView === v.key
+                ? v.key === 'mirror' ? 'bg-violet-700/70 text-violet-200 border border-violet-600/50'
+                : v.key === 'dna'    ? 'bg-emerald-700/70 text-emerald-200 border border-emerald-600/50'
+                : 'bg-indigo-700/70 text-indigo-200 border border-indigo-600/50'
+                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            {v.icon} {v.label}
+          </button>
+        ))}
+      </div>
+
       {/* ── Active searches bar ─────────────────────────────────────────────── */}
       {currentSearches.length > 0 && loading && (
         <div className="flex items-center gap-2 px-5 py-2 bg-indigo-900/20 border-b border-indigo-700/20 flex-shrink-0 overflow-x-auto">
@@ -830,8 +1128,14 @@ export default function AiAssistant({
         </div>
       )}
 
+      {/* ── Mirror Mode ─────────────────────────────────────────────────────── */}
+      {activeView === 'mirror' && <MirrorModePanel currentUser={currentUser} />}
+
+      {/* ── DNA Match ───────────────────────────────────────────────────────── */}
+      {activeView === 'dna' && <DnaMatchPanel leads={leads} />}
+
       {/* ── Messages ───────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+      {activeView === 'chat' && <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
 
         {/* Welcome / idle state */}
         {isIdle && (
@@ -949,10 +1253,10 @@ export default function AiAssistant({
         )}
 
         <div ref={messagesEndRef} />
-      </div>
+      </div>}
 
-      {/* ── Input bar ──────────────────────────────────────────────────────── */}
-      <div className="border-t border-slate-700/60 px-4 py-3 bg-slate-900 flex-shrink-0">
+      {/* ── Input bar (chat only) ───────────────────────────────────────────── */}
+      {activeView === 'chat' && <div className="border-t border-slate-700/60 px-4 py-3 bg-slate-900 flex-shrink-0">
         <div className={`flex gap-2 items-end bg-slate-800 border rounded-xl px-3 py-2.5 transition-all ${
           voiceRecording
             ? 'border-red-500/60 ring-1 ring-red-500/20'
@@ -1005,7 +1309,7 @@ export default function AiAssistant({
           </div>
           <p className="text-[10px] text-slate-600">Enter לשליחה · Shift+Enter שורה חדשה</p>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

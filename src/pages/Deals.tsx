@@ -1,12 +1,15 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ArrowRight, CheckCircle2, Clock, DollarSign, Calendar,
   TrendingUp, Users, AlertTriangle, X, Plus, FileText,
   Phone, Mail, MessageCircle, Star, Trash2, Edit2, Check,
   Zap, Activity, CreditCard, Package, StickyNote,
   Link2, ExternalLink, Target, BarChart2, Printer,
-  ChevronLeft, ChevronRight, RefreshCw,
+  ChevronLeft, ChevronRight, RefreshCw, Brain, Sparkles, Shield,
+  Heart, AlertOctagon, Smile, Meh, Frown, ChevronDown,
 } from 'lucide-react';
+import Anthropic from '@anthropic-ai/sdk';
+import { getApiKey } from '../lib/apiKey';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, Legend,
@@ -116,6 +119,10 @@ function getLast6Months() {
 /* ═══════════════════════════════════════════════════════════════════════════
    OVERVIEW TAB
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ── EQ Layer types ── */
+interface EqResult { sentiment: 'positive' | 'neutral' | 'negative' | 'at-risk'; emoji: string; summary: string; action: string; }
+interface WgInsight { title: string; idea: string; emoji: string; }
+
 function OverviewTab({ lead, account, onSave, currentUser }: {
   lead: Lead; account: AccountData; onSave: (a: AccountData) => void; currentUser: string;
 }) {
@@ -125,6 +132,16 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
   const [logType, setLogType] = useState<ActivityType>('note');
   const [addingLink, setAddingLink] = useState(false);
   const [linkForm, setLinkForm] = useState({ title: '', url: '' });
+
+  // EQ Layer state
+  const [eqLoading, setEqLoading] = useState(false);
+  const [eqResult,  setEqResult]  = useState<EqResult | null>(null);
+  const [eqOpen,    setEqOpen]    = useState(false);
+
+  // White Glove state
+  const [wgLoading,  setWgLoading]  = useState(false);
+  const [wgInsights, setWgInsights] = useState<WgInsight[] | null>(null);
+  const [wgOpen,     setWgOpen]     = useState(false);
 
   useEffect(() => { setForm(account); }, [account]);
 
@@ -158,6 +175,52 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
     setLinkForm({ title: '', url: '' }); setAddingLink(false);
   }
   function removeLink(id: string) { onSave({ ...account, links: (account.links ?? []).filter(l => l.id !== id), updatedAt: new Date().toISOString() }); }
+
+  // EQ Layer — analyze sentiment of recent activity
+  const runEqAnalysis = useCallback(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    const recentTexts = [
+      ...(account.activityLog ?? []).slice(0, 10).map(e => `[${e.type}] ${e.text}`),
+      ...lead.notes.slice(0, 5).map(n => n.text),
+    ].join('\n');
+    if (!recentTexts.trim()) return;
+    setEqLoading(true); setEqResult(null); setEqOpen(true);
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6', max_tokens: 512,
+        messages: [{ role: 'user', content: `אתה מומחה EQ ומנהל לקוחות. נתח את הפעילות האחרונה עם הלקוח "${lead.company}" (${lead.contactName}):\n\n${recentTexts}\n\nהחזר JSON בלבד:\n{"sentiment":"positive|neutral|negative|at-risk","emoji":"🟢|🟡|🔴|⚠️","summary":"משפט אחד על המצב הרגשי","action":"המלצה ספציפית לפעולה הבאה"}` }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txt = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      const jsonMatch = txt.match(/\{[\s\S]*\}/);
+      if (jsonMatch) setEqResult(JSON.parse(jsonMatch[0]) as EqResult);
+    } catch { setEqResult({ sentiment: 'neutral', emoji: '🟡', summary: 'לא הצלחתי לנתח', action: 'נסה שנית' }); }
+    finally { setEqLoading(false); }
+  }, [account.activityLog, lead, account]);
+
+  // White Glove — scan for personal touches
+  const runWhiteGlove = useCallback(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    const allText = [...(account.activityLog ?? []).map(e => e.text), ...lead.notes.map(n => n.text), lead.company, lead.contactName].join('\n');
+    setWgLoading(true); setWgInsights(null); setWgOpen(true);
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6', max_tokens: 800,
+        messages: [{ role: 'user', content: `אתה מומחה "White Glove" service. בדוק את המידע על הלקוח "${lead.company}" (${lead.contactName}) ומצא הזדמנויות לטיפול אישי:\n\n${allText}\n\nמצא עד 3 הזדמנויות (ימי הולדת, תחביבים, אירועים, עניינים אישיים שצוינו). אם אין מידע, המצא רעיונות גנריים מוצלחים לסוכנות שיווק.\nהחזר JSON בלבד:\n[{"emoji":"🎂","title":"שם ההזדמנות","idea":"מה לעשות בדיוק"}]` }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txt = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      const jsonMatch = txt.match(/\[[\s\S]*\]/);
+      if (jsonMatch) setWgInsights(JSON.parse(jsonMatch[0]) as WgInsight[]);
+    } catch { setWgInsights([{ emoji: '🤝', title: 'שגיאה', idea: 'לא הצלחתי לנתח. נסה שנית.' }]); }
+    finally { setWgLoading(false); }
+  }, [account.activityLog, lead]);
 
   function saveGoal(field: keyof ClientGoal, value: number) {
     const existing = (account.goals ?? []).find(g => g.month === cm);
@@ -300,7 +363,38 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
 
       {/* Activity log */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-        <h3 className="font-bold text-slate-800 mb-4 text-right">לוג פעילות</h3>
+        <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={runEqAnalysis}
+            disabled={eqLoading}
+            className="flex items-center gap-1.5 text-xs font-bold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
+          >
+            {eqLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full" /> : <Brain size={12} />}
+            ניתוח EQ
+          </button>
+          <h3 className="font-bold text-slate-800 flex items-center gap-2">לוג פעילות</h3>
+        </div>
+
+        {/* EQ Result */}
+        {eqOpen && (
+          <div className={`mb-4 rounded-xl border p-3.5 ${eqResult?.sentiment === 'positive' ? 'bg-emerald-50 border-emerald-200' : eqResult?.sentiment === 'at-risk' ? 'bg-red-50 border-red-200' : eqResult?.sentiment === 'negative' ? 'bg-orange-50 border-orange-200' : 'bg-amber-50 border-amber-200'}`}>
+            {eqLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500"><span className="animate-spin w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full inline-block" /> מנתח רגשות...</div>
+            ) : eqResult ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setEqOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={12} /></button>
+                  <div className="flex items-center gap-2 text-right"><span className="text-xl">{eqResult.emoji}</span><span className="font-bold text-slate-800 text-sm">{eqResult.summary}</span></div>
+                </div>
+                <div className="bg-white/70 rounded-lg p-2.5 text-right">
+                  <p className="text-xs font-bold text-violet-700 mb-1">→ המלצה</p>
+                  <p className="text-sm text-slate-700">{eqResult.action}</p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
         <div className="flex gap-2 mb-4">
           <button onClick={addLog} disabled={!newLog.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">הוסף</button>
           <input value={newLog} onChange={e => setNewLog(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLog()} placeholder="מה קרה עם הלקוח?" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
@@ -317,6 +411,41 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
             </div>
           ); })}
         </div>
+      </div>
+
+      {/* White Glove Panel */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <button
+            onClick={runWhiteGlove}
+            disabled={wgLoading}
+            className="flex items-center gap-1.5 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
+          >
+            {wgLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full" /> : <Heart size={12} />}
+            White Glove
+          </button>
+          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Sparkles size={14} className="text-rose-400" /> מגע אישי</h3>
+        </div>
+        <p className="text-xs text-slate-400 text-right mb-3">AI מזהה הזדמנויות לחיזוק הקשר האישי עם הלקוח</p>
+        {wgOpen && (
+          wgLoading ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500 justify-end py-3"><span className="animate-spin w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full inline-block" /> מחפש הזדמנויות...</div>
+          ) : wgInsights && wgInsights.length > 0 ? (
+            <div className="space-y-2">
+              {wgInsights.map((ins, i) => (
+                <div key={i} className="bg-rose-50 border border-rose-100 rounded-xl p-3.5 text-right">
+                  <div className="flex items-center justify-end gap-2 mb-1.5">
+                    <p className="font-bold text-rose-700 text-sm">{ins.title}</p>
+                    <span className="text-xl">{ins.emoji}</span>
+                  </div>
+                  <p className="text-sm text-slate-700 leading-relaxed">{ins.idea}</p>
+                </div>
+              ))}
+              <button onClick={() => setWgOpen(false)} className="text-xs text-slate-400 hover:text-slate-600 w-full text-center pt-1">סגור</button>
+            </div>
+          ) : null
+        )}
+        {!wgOpen && <div className="text-center py-2 text-slate-300 text-xs">לחץ "White Glove" לקבלת רעיונות לחיזוק הקשר</div>}
       </div>
     </div>
   );
@@ -866,6 +995,7 @@ function ClientCard({ lead, account, onClick }: { lead: Lead; account: AccountDa
       </div>
       {solutions.length > 0 && <div className="mb-3"><div className="flex justify-between text-xs text-slate-400 mb-1"><span>{approved}/{solutions.length}</span><span>פתרונות</span></div><div className="h-1.5 bg-slate-100 rounded-full"><div className="h-1.5 bg-indigo-400 rounded-full" style={{ width: `${solPct}%` }} /></div></div>}
       <div className="flex gap-1.5 flex-wrap">
+        {score < 40 && <span className="text-xs bg-red-600 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><Shield size={9} /> Deal Shield</span>}
         {overdueT.length > 0 && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">⚠ {overdueT.length} משימות</span>}
         {overduePay && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">💳 תשלום</span>}
         {daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && <span className="text-xs bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">📅 חידוש {daysLeft}י</span>}
@@ -888,10 +1018,15 @@ interface DealsProps {
 
 type FilterKey = 'all' | 'healthy' | 'warning' | 'critical' | 'renewal';
 
+interface ShieldAlert { company: string; risk: string; recommendation: string; priority: 'high' | 'medium'; }
+
 export default function Deals({ leads, team = [], currentUser, onLeadClick, onToast }: DealsProps) {
   const [accounts, setAccounts] = useState<AccountData[]>([]);
   const [filter, setFilter]     = useState<FilterKey>('all');
   const [selected, setSelected] = useState<Lead | null>(null);
+  const [shieldLoading, setShieldLoading] = useState(false);
+  const [shieldAlerts,  setShieldAlerts]  = useState<ShieldAlert[] | null>(null);
+  const [shieldOpen,    setShieldOpen]    = useState(false);
 
   const activeClients = useMemo(() => leads.filter(l => l.status === 'לקוח פעיל'), [leads]);
   const teamNames = useMemo(() => team.map(m => m.name), [team]);
@@ -916,6 +1051,40 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
       setAccounts(p => p.map(a => a.leadId === data.leadId ? data : a));
       onToast?.('נשמר ✓', 'success');
     } catch { onToast?.('שגיאה בשמירה', 'error'); }
+  }
+
+  async function runDealShield() {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    setShieldLoading(true); setShieldAlerts(null); setShieldOpen(true);
+    const atRisk = activeClients
+      .map(l => ({ l, a: getAcc(l.id), score: calcHealth(l, getAcc(l.id)) }))
+      .filter(x => x.score < 60)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 6);
+    if (atRisk.length === 0) { setShieldAlerts([]); setShieldLoading(false); return; }
+    const summary = atRisk.map(({ l, a, score }) => {
+      const issues = [];
+      const overdueT = l.tasks.filter(t => !t.completed && new Date(t.date + 'T00:00:00') < new Date()).length;
+      if (overdueT > 0) issues.push(`${overdueT} משימות באיחור`);
+      if (a?.payments?.some(p => p.status === 'overdue')) issues.push('תשלום באיחור');
+      if (a?.contractEnd && (new Date(a.contractEnd).getTime() - Date.now()) / 86400000 < 30) issues.push('חוזה מסתיים');
+      return `${l.company} (${score}%) - ${issues.join(', ') || 'ללא קשר אחרון'}`;
+    }).join('\n');
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6', max_tokens: 1200,
+        messages: [{ role: 'user', content: `אתה מומחה שימור לקוחות. הלקוחות הבאים בסיכון:\n\n${summary}\n\nעבור כל לקוח, תן המלצה ספציפית וממוקדת (משפט אחד) לשמירת הלקוח.\nהחזר JSON בלבד:\n[{"company":"שם החברה","risk":"הסיכון העיקרי","recommendation":"מה לעשות עכשיו","priority":"high|medium"}]` }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txt = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      const jsonMatch = txt.match(/\[[\s\S]*\]/);
+      if (jsonMatch) setShieldAlerts(JSON.parse(jsonMatch[0]) as ShieldAlert[]);
+      else setShieldAlerts([]);
+    } catch { setShieldAlerts([]); }
+    finally { setShieldLoading(false); }
   }
 
   const mrr = activeClients.reduce((s, l) => s + (getAcc(l.id)?.monthlyRetainer ?? l.budget ?? 0), 0);
@@ -971,14 +1140,61 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
         ))}
       </div>
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
         {FILTERS.map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${filter === f.key ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}>
             {f.label}
             {f.count > 0 && <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${filter === f.key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>{f.count}</span>}
           </button>
         ))}
+        <button
+          onClick={runDealShield}
+          disabled={shieldLoading}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white shadow-sm transition-all disabled:opacity-60 mr-auto"
+        >
+          {shieldLoading ? <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full" /> : <Shield size={14} />}
+          Deal Shield
+        </button>
       </div>
+
+      {/* Deal Shield Panel */}
+      {shieldOpen && (
+        <div className="bg-white border-2 border-red-200 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={() => setShieldOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={14} /></button>
+            <h3 className="font-bold text-slate-800 flex items-center gap-2"><Shield size={15} className="text-red-500" /> Deal Shield — לקוחות בסיכון</h3>
+          </div>
+          {shieldLoading ? (
+            <div className="flex items-center justify-center gap-3 py-6 text-slate-500">
+              <span className="animate-spin w-5 h-5 border-2 border-red-400 border-t-transparent rounded-full inline-block" />
+              מנתח לקוחות בסיכון...
+            </div>
+          ) : shieldAlerts && shieldAlerts.length === 0 ? (
+            <div className="text-center py-6">
+              <p className="text-emerald-600 font-bold text-lg">🛡 כל הלקוחות תקינים!</p>
+              <p className="text-slate-400 text-sm mt-1">אין לקוחות בסיכון כרגע</p>
+            </div>
+          ) : shieldAlerts ? (
+            <div className="space-y-3">
+              {shieldAlerts.map((alert, i) => (
+                <div key={i} className={`rounded-xl border p-4 text-right ${alert.priority === 'high' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${alert.priority === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{alert.priority === 'high' ? '🔴 קריטי' : '🟡 בינוני'}</span>
+                    <div>
+                      <p className="font-black text-slate-900">{alert.company}</p>
+                      <p className="text-xs text-slate-500">{alert.risk}</p>
+                    </div>
+                  </div>
+                  <div className="bg-white/70 rounded-lg p-2.5">
+                    <p className="text-xs font-bold text-red-700 mb-1">→ פעולה מיידית</p>
+                    <p className="text-sm text-slate-800">{alert.recommendation}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {activeClients.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 p-16 text-center"><div className="text-5xl mb-4">👥</div><h3 className="font-bold text-slate-700 text-lg mb-2">אין לקוחות פעילים</h3><p className="text-slate-400 text-sm">שנה סטטוס ליד ל״לקוח פעיל״ כדי שיופיע כאן</p></div>
