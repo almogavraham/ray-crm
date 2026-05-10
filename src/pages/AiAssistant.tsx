@@ -8,10 +8,10 @@ import {
   History, Trash2, Brain, Dna, Copy, ChevronDown,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
-import type { Lead, StandaloneTask, TaskPriority, TeamMember } from '../types';
+import type { Lead, StandaloneTask, TaskPriority, TeamMember, AccountData } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { db } from '../lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, onSnapshot } from 'firebase/firestore';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ToolAction {
@@ -95,6 +95,17 @@ const CRM_TOOLS = [
     },
   },
   {
+    name: 'get_client_materials',
+    description: 'קבל רשימת חומרים, קבצים והצעות מחיר ששמורות ללקוח ספציפי. השתמש כשהמשתמש שואל על קבצים, הדמיות, מסמכים, חוזים, או הצעות מחיר של לקוח.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        leadId: { type: 'string', description: 'מזהה הליד' },
+      },
+      required: ['leadId'],
+    },
+  },
+  {
     name: 'add_to_calendar',
     description: 'פתח אירוע ב-Google Calendar. השתמש כשהמשתמש מבקש להוסיף משימה/פגישה ללוח השנה שלו ב-Google.',
     input_schema: {
@@ -151,7 +162,7 @@ async function saveFirestoreHistory(msgs: Message[]) {
 }
 
 /* ─── Build system prompt ────────────────────────────────────────────────── */
-function buildSystemBlocks(leads: Lead[], currentUser: string) {
+function buildSystemBlocks(leads: Lead[], currentUser: string, accounts: AccountData[] = []) {
   const today = new Date().toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   const staticPart = `אתה עוזר AI חכם ואישי של ${currentUser} במערכת CRM בשם RAY Lead Manager.
@@ -188,7 +199,24 @@ RAY Digital היא סוכנות שיווק דיגיטלית AI-First המתמח�
     return `[${l.id}] ${l.company} | ${l.contactName} | ${l.status} | תקציב:${budget} | שירותים:${solutions} | ציון:${l.aiScore}% | משימות:${tasksOpen}${l.waitingContent ? ' | ⏳ממתין לתוכן' : ''}`;
   }).join('\n');
 
-  const dynamicPart = `\n**נתוני לידים (${leads.length} סה"כ):**\n${leadsSummary}`;
+  // Build client accounts context (files + proposals)
+  const accountsContext = accounts
+    .filter(a => (a.files?.length ?? 0) > 0 || (a.proposals?.length ?? 0) > 0)
+    .slice(0, 20)
+    .map(a => {
+      const lead = leads.find(l => l.id === a.leadId);
+      if (!lead) return null;
+      const filesCtx = (a.files ?? []).map(f =>
+        `  📎 [${f.category}] ${f.title}${f.aiContext ? ` — "${f.aiContext}"` : ''}`
+      ).join('\n');
+      const proposalsCtx = (a.proposals ?? []).map(p => {
+        const total = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0) * (1 - (p.discount ?? 0) / 100);
+        return `  📋 הצעה: "${p.title}" | סטטוס: ${p.status} | סכום: ₪${Math.round(total).toLocaleString()}`;
+      }).join('\n');
+      return `\n🏢 ${lead.company} (${lead.status}):\n${filesCtx}${proposalsCtx ? '\n' + proposalsCtx : ''}`;
+    }).filter(Boolean).join('\n');
+
+  const dynamicPart = `\n**נתוני לידים (${leads.length} סה"כ):**\n${leadsSummary}${accountsContext ? `\n\n**חומרים והצעות מחיר ללקוחות פעילים:**\n${accountsContext}` : ''}`;
 
   return [
     { type: 'text' as const, text: staticPart, cache_control: { type: 'ephemeral' as const } },
@@ -660,6 +688,7 @@ export default function AiAssistant({
   const [voiceRecording,    setVoiceRecording]    = useState(false);
   const [showHistory,       setShowHistory]       = useState(false);
   const [activeView,        setActiveView]        = useState<'chat' | 'mirror' | 'dna'>('chat');
+  const [accounts,          setAccounts]          = useState<AccountData[]>([]);
   const messagesEndRef  = useRef<HTMLDivElement>(null);
   const inputRef        = useRef<HTMLTextAreaElement>(null);
   const voiceRecogRef   = useRef<unknown>(null);
@@ -674,6 +703,14 @@ export default function AiAssistant({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load accounts (files, proposals) for AI context
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'accounts'), snap => {
+      setAccounts(snap.docs.map(d => d.data() as AccountData));
+    });
+    return () => unsub();
   }, []);
 
   // Scroll to bottom on new messages
@@ -793,11 +830,31 @@ export default function AiAssistant({
         }
       }
 
+      if (name === 'get_client_materials') {
+        const lead = leads.find(l => l.id === String(input.leadId));
+        if (!lead) return { text: `❌ ליד לא נמצא: ${input.leadId}`, label: 'ליד לא נמצא', success: false };
+        const account = accounts.find(a => a.leadId === String(input.leadId));
+        if (!account) return { text: `ללקוח "${lead.company}" אין חומרים שמורים עדיין.`, label: 'אין חומרים', success: true };
+        const files = account.files ?? [];
+        const proposals = account.proposals ?? [];
+        const fileList = files.map(f => `📎 ${f.title} (${f.category})${f.aiContext ? `: ${f.aiContext}` : ''}${f.url ? ` — ${f.url}` : ''}`).join('\n') || 'אין קבצים';
+        const proposalList = proposals.map(p => {
+          const total = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0) * (1 - (p.discount ?? 0) / 100);
+          const items = p.items.map(i => `  • ${i.name}: ${i.quantity}×₪${i.unitPrice}`).join('\n');
+          return `📋 "${p.title}" | ${p.status} | ₪${Math.round(total).toLocaleString()}\n${items}`;
+        }).join('\n\n') || 'אין הצעות מחיר';
+        return {
+          text: `חומרי לקוח "${lead.company}":\n\n**קבצים (${files.length}):**\n${fileList}\n\n**הצעות מחיר (${proposals.length}):**\n${proposalList}`,
+          label: `חומרי ${lead.company}`,
+          success: true,
+        };
+      }
+
       return { text: `❓ כלי לא מוכר: ${name}`, label: 'שגיאה', success: false };
     } catch (e) {
       return { text: `❌ שגיאה: ${e instanceof Error ? e.message : 'Unknown'}`, label: 'שגיאה', success: false };
     }
-  }, [leads, currentUser, onCreateTask, onUpdateLead, onAddNote]);
+  }, [leads, accounts, currentUser, onCreateTask, onUpdateLead, onAddNote]);
 
   /* ── Retry helper ────────────────────────────────────────────────────── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -972,7 +1029,7 @@ export default function AiAssistant({
     setStreamingText('');
 
     const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-    const systemBlocks = buildSystemBlocks(leads, currentUser);
+    const systemBlocks = buildSystemBlocks(leads, currentUser, accounts);
 
     // Build API messages (only role + content for API)
     const apiMessages = updatedMsgs.map(m => ({ role: m.role, content: m.content }));

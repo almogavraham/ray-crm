@@ -7,9 +7,14 @@ import {
   Link2, ExternalLink, Target, BarChart2, Printer,
   ChevronLeft, ChevronRight, RefreshCw, Brain, Sparkles, Shield,
   Heart, AlertOctagon, Smile, Meh, Frown, ChevronDown,
+  Upload, Image as ImageIcon, Film, FileCheck, Folder,
+  BookOpen, Send, Eye, Download, Copy, CheckCheck,
+  Percent, Receipt, PenLine, GripVertical,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { getApiKey } from '../lib/apiKey';
+import { storage } from '../lib/firebase';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, Legend,
@@ -20,6 +25,8 @@ import type {
   Lead, AccountData, ManagedSolution, SolutionStatus,
   PaymentRecord, PaymentType, ActivityEntry, ActivityType,
   MediaRecord, MediaPlatform, ClientGoal, ClientLink,
+  ClientFile, FileCategory, FileKind,
+  Proposal, ProposalItem,
 } from '../types';
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -104,7 +111,7 @@ const prevMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new D
 const nextMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new Date(Number(y), Number(mo)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
 function blankAccount(leadId: string, budget: number): AccountData {
-  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, solutions: [], payments: [], activityLog: [], mediaRecords: [], goals: [], links: [], upsellNote: '', updatedAt: '' };
+  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, solutions: [], payments: [], activityLog: [], mediaRecords: [], goals: [], links: [], files: [], proposals: [], upsellNote: '', updatedAt: '' };
 }
 
 function getLast6Months() {
@@ -903,6 +910,476 @@ function ReportTab({ lead, account }: { lead: Lead; account: AccountData }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   MATERIALS TAB
+═══════════════════════════════════════════════════════════════════════════ */
+const FILE_CATS: Record<FileCategory, { label: string; icon: React.ElementType; color: string; bg: string }> = {
+  renders:    { label: 'הדמיות',    icon: ImageIcon,  color: 'text-violet-600', bg: 'bg-violet-50'  },
+  documents:  { label: 'מסמכים',   icon: FileText,   color: 'text-blue-600',   bg: 'bg-blue-50'    },
+  contracts:  { label: 'חוזים',    icon: FileCheck,  color: 'text-emerald-600',bg: 'bg-emerald-50' },
+  creative:   { label: 'קריאייטיב', icon: Film,      color: 'text-amber-600',  bg: 'bg-amber-50'   },
+  references: { label: 'רפרנסים',  icon: BookOpen,   color: 'text-rose-600',   bg: 'bg-rose-50'    },
+  other:      { label: 'אחר',       icon: Folder,    color: 'text-slate-500',  bg: 'bg-slate-100'  },
+};
+
+function kindIcon(kind: FileKind, className = 'w-full h-full object-cover') {
+  if (kind === 'image') return null; // shown as thumbnail
+  if (kind === 'video') return <Film size={22} className="text-slate-400" />;
+  if (kind === 'pdf')   return <FileText size={22} className="text-red-400" />;
+  return <FileText size={22} className="text-slate-400" />;
+}
+
+function MaterialsTab({ account, onSave, currentUser, leadId }: {
+  account: AccountData; onSave: (a: AccountData) => void; currentUser: string; leadId: string;
+}) {
+  const files = account.files ?? [];
+  const [catFilter,  setCatFilter]  = useState<FileCategory | 'all'>('all');
+  const [uploading,  setUploading]  = useState(false);
+  const [progress,   setProgress]   = useState(0);
+  const [addingLink, setAddingLink] = useState(false);
+  const [editId,     setEditId]     = useState<string | null>(null);
+  const [linkForm,   setLinkForm]   = useState<Partial<ClientFile>>({ category: 'documents', kind: 'link', title: '', url: '', aiContext: '', notes: '' });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const filtered = catFilter === 'all' ? files : files.filter(f => f.category === catFilter);
+  const catCounts: Record<FileCategory, number> = Object.fromEntries(
+    (Object.keys(FILE_CATS) as FileCategory[]).map(c => [c, files.filter(f => f.category === c).length])
+  ) as Record<FileCategory, number>;
+
+  function detectedKind(file: File): FileKind {
+    if (file.type.startsWith('image/')) return 'image';
+    if (file.type.startsWith('video/')) return 'video';
+    if (file.type === 'application/pdf') return 'pdf';
+    if (file.type.includes('document') || file.type.includes('word')) return 'doc';
+    return 'other';
+  }
+
+  async function handleUpload(file: File | undefined) {
+    if (!file) return;
+    setUploading(true); setProgress(0);
+    const path = `accounts/${leadId}/${Date.now()}_${file.name}`;
+    const storageRef = ref(storage, path);
+    const task = uploadBytesResumable(storageRef, file);
+    task.on('state_changed',
+      snap => setProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      () => { setUploading(false); },
+      async () => {
+        const url = await getDownloadURL(storageRef);
+        const kind = detectedKind(file);
+        const newFile: ClientFile = {
+          id: Date.now().toString(), title: file.name, category: 'documents', kind,
+          url, storagePath: path, size: file.size, createdAt: new Date().toISOString(), uploadedBy: currentUser,
+        };
+        onSave({ ...account, files: [...files, newFile], updatedAt: new Date().toISOString() });
+        setUploading(false);
+      }
+    );
+  }
+
+  function saveLink() {
+    if (!linkForm.title?.trim() || !linkForm.url?.trim()) return;
+    const now = new Date().toISOString();
+    if (editId) {
+      onSave({ ...account, files: files.map(f => f.id === editId ? { ...f, ...linkForm } as ClientFile : f), updatedAt: now });
+      setEditId(null);
+    } else {
+      const f: ClientFile = { id: Date.now().toString(), title: linkForm.title!, category: linkForm.category ?? 'documents', kind: linkForm.kind ?? 'link', url: linkForm.url!, aiContext: linkForm.aiContext, notes: linkForm.notes, createdAt: now, uploadedBy: currentUser };
+      onSave({ ...account, files: [...files, f], updatedAt: now });
+    }
+    setLinkForm({ category: 'documents', kind: 'link', title: '', url: '', aiContext: '', notes: '' });
+    setAddingLink(false);
+  }
+
+  async function deleteFile(f: ClientFile) {
+    if (f.storagePath) {
+      try { await deleteObject(ref(storage, f.storagePath)); } catch { /* already deleted */ }
+    }
+    onSave({ ...account, files: files.filter(x => x.id !== f.id), updatedAt: new Date().toISOString() });
+  }
+
+  function startEdit(f: ClientFile) { setLinkForm({ ...f }); setEditId(f.id); setAddingLink(true); }
+
+  const fmtSize = (b: number) => b > 1_000_000 ? `${(b / 1_000_000).toFixed(1)}MB` : b > 1_000 ? `${(b / 1_000).toFixed(0)}KB` : `${b}B`;
+
+  return (
+    <div className="space-y-4">
+      {/* Filter + Upload bar */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button onClick={() => setCatFilter('all')} className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${catFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+          הכל ({files.length})
+        </button>
+        {(Object.keys(FILE_CATS) as FileCategory[]).filter(c => catCounts[c] > 0 || catFilter === c).map(c => {
+          const cfg = FILE_CATS[c]; const Icon = cfg.icon;
+          return (
+            <button key={c} onClick={() => setCatFilter(c)} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${catFilter === c ? `${cfg.bg} ${cfg.color} border border-current/20` : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+              <Icon size={11} />{cfg.label} {catCounts[c] > 0 && `(${catCounts[c]})`}
+            </button>
+          );
+        })}
+        <div className="mr-auto flex gap-2">
+          <button onClick={() => { setAddingLink(true); setEditId(null); }} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
+            <Link2 size={12} /> קישור
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl transition-colors disabled:opacity-60">
+            <Upload size={12} /> {uploading ? `${progress}%` : 'העלה קובץ'}
+          </button>
+          <input ref={fileInputRef} type="file" className="hidden" accept="image/*,video/*,.pdf,.doc,.docx" onChange={e => handleUpload(e.target.files?.[0])} />
+        </div>
+      </div>
+
+      {/* Upload progress */}
+      {uploading && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+          <div className="flex justify-between text-xs text-indigo-700 mb-1.5 font-semibold"><span>מעלה קובץ...</span><span>{progress}%</span></div>
+          <div className="h-1.5 bg-indigo-100 rounded-full"><div className="h-1.5 bg-indigo-500 rounded-full transition-all duration-300" style={{ width: `${progress}%` }} /></div>
+        </div>
+      )}
+
+      {/* Add/Edit link form */}
+      {addingLink && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+          <h4 className="font-bold text-slate-800 text-sm text-right">{editId ? 'עריכת קובץ' : 'הוספת קישור / מסמך'}</h4>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-slate-500 mb-1 block">קטגוריה</label>
+              <select value={linkForm.category || 'documents'} onChange={e => setLinkForm(p => ({ ...p, category: e.target.value as FileCategory }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none">
+                {(Object.keys(FILE_CATS) as FileCategory[]).map(c => <option key={c} value={c}>{FILE_CATS[c].label}</option>)}
+              </select>
+            </div>
+            <div><label className="text-xs text-slate-500 mb-1 block">סוג</label>
+              <select value={linkForm.kind || 'link'} onChange={e => setLinkForm(p => ({ ...p, kind: e.target.value as FileKind }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none">
+                {(['link', 'image', 'video', 'pdf', 'doc', 'other'] as FileKind[]).map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+          </div>
+          <div><label className="text-xs text-slate-500 mb-1 block">כותרת *</label><input value={linkForm.title || ''} onChange={e => setLinkForm(p => ({ ...p, title: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" placeholder="שם הקובץ / מסמך..." /></div>
+          <div><label className="text-xs text-slate-500 mb-1 block">URL *</label><input dir="ltr" value={linkForm.url || ''} onChange={e => setLinkForm(p => ({ ...p, url: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-left" placeholder="https://..." /></div>
+          <div><label className="text-xs text-slate-500 mb-1 block">תוכן לקריאת AI <span className="text-indigo-500">(מה ה-AI צריך לדעת על קובץ זה?)</span></label>
+            <textarea value={linkForm.aiContext || ''} onChange={e => setLinkForm(p => ({ ...p, aiContext: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right resize-none" placeholder="תאר את תוכן הקובץ, הפרטים החשובים, ממצאים עיקריים — ה-AI ישתמש בזה לענות על שאלות..." />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setAddingLink(false); setEditId(null); setLinkForm({ category: 'documents', kind: 'link', title: '', url: '', aiContext: '', notes: '' }); }} className="px-4 py-2 text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-xl">ביטול</button>
+            <button onClick={saveLink} disabled={!linkForm.title?.trim() || !linkForm.url?.trim()} className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-500 disabled:opacity-40">שמור</button>
+          </div>
+        </div>
+      )}
+
+      {/* Files grid */}
+      {filtered.length === 0 && !addingLink ? (
+        <div className="text-center py-12 text-slate-300">
+          <Folder size={40} className="mx-auto mb-3 opacity-50" />
+          <p className="font-semibold">אין חומרים עדיין</p>
+          <p className="text-sm mt-1">העלה קבצים או הוסף קישורים לחומרי הלקוח</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {filtered.map(f => {
+            const catCfg = FILE_CATS[f.category]; const CatIcon = catCfg.icon;
+            return (
+              <div key={f.id} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm group">
+                {/* Preview area */}
+                <div className="h-28 bg-slate-50 flex items-center justify-center relative overflow-hidden">
+                  {f.kind === 'image' ? (
+                    <img src={f.url} alt={f.title} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2">
+                      {kindIcon(f.kind) || <FileText size={28} className="text-slate-300" />}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${catCfg.bg} ${catCfg.color}`}>{catCfg.label}</span>
+                    </div>
+                  )}
+                  {/* Overlay actions */}
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <a href={f.url} target="_blank" rel="noreferrer" className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white"><ExternalLink size={14} /></a>
+                    <button onClick={() => startEdit(f)} className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-white"><Edit2 size={14} /></button>
+                    <button onClick={() => deleteFile(f)} className="w-8 h-8 rounded-xl bg-red-500/70 hover:bg-red-500 flex items-center justify-center text-white"><Trash2 size={14} /></button>
+                  </div>
+                  {/* AI badge */}
+                  {f.aiContext && <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-md bg-violet-500 flex items-center justify-center" title="תוכן AI מוגדר"><Brain size={10} className="text-white" /></div>}
+                </div>
+                {/* Info */}
+                <div className="p-3 text-right">
+                  <p className="font-bold text-slate-800 text-sm truncate">{f.title}</p>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[10px] text-slate-400">{f.size ? fmtSize(f.size) : f.kind}</span>
+                    <span className={`text-[10px] font-bold ${catCfg.color}`}><CatIcon size={9} className="inline ml-0.5" />{catCfg.label}</span>
+                  </div>
+                  {f.aiContext && <p className="text-[10px] text-violet-500 mt-1 truncate">AI: {f.aiContext.slice(0, 40)}...</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROPOSALS TAB
+═══════════════════════════════════════════════════════════════════════════ */
+const PROPOSAL_STATUS: Record<Proposal['status'], { label: string; color: string; bg: string }> = {
+  draft:    { label: 'טיוטה',    color: 'text-slate-600',   bg: 'bg-slate-100'   },
+  sent:     { label: 'נשלח',     color: 'text-blue-700',    bg: 'bg-blue-100'    },
+  viewed:   { label: 'נצפה',     color: 'text-amber-700',   bg: 'bg-amber-100'   },
+  accepted: { label: 'אושר ✓',  color: 'text-emerald-700', bg: 'bg-emerald-100' },
+  rejected: { label: 'נדחה',    color: 'text-red-600',     bg: 'bg-red-100'     },
+};
+
+function blankItem(): ProposalItem { return { id: Date.now().toString(), name: '', description: '', quantity: 1, unitPrice: 0 }; }
+
+function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
+  proposal: Proposal; onSave: (p: Proposal) => void; onClose: () => void; clientName: string;
+}) {
+  const [p, setP] = useState<Proposal>(proposal);
+  const [vat, setVat] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const subtotal = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
+  const discountAmt = subtotal * ((p.discount ?? 0) / 100);
+  const afterDiscount = subtotal - discountAmt;
+  const vatAmt = vat ? afterDiscount * 0.17 : 0;
+  const total = afterDiscount + vatAmt;
+
+  function updateItem(id: string, field: keyof ProposalItem, value: string | number) {
+    setP(prev => ({ ...prev, items: prev.items.map(i => i.id === id ? { ...i, [field]: value } : i) }));
+  }
+  function addItem() { setP(prev => ({ ...prev, items: [...prev.items, blankItem()] })); }
+  function removeItem(id: string) { setP(prev => ({ ...prev, items: prev.items.filter(i => i.id !== id) })); }
+  function setStatus(s: Proposal['status']) { const updated = { ...p, status: s }; setP(updated); onSave(updated); }
+
+  function copyLink() {
+    const text = `הצעת מחיר: ${p.title}\nלקוח: ${p.clientName}\nסה״כ: ${fmt(total)}\n\n${p.items.map(i => `• ${i.name}: ${i.quantity} × ${fmt(i.unitPrice)} = ${fmt(i.quantity * i.unitPrice)}`).join('\n')}${p.notes ? `\n\nהערות: ${p.notes}` : ''}`;
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Back + status + actions */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {(Object.keys(PROPOSAL_STATUS) as Proposal['status'][]).map(s => (
+            <button key={s} onClick={() => setStatus(s)} className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all ${p.status === s ? `${PROPOSAL_STATUS[s].bg} ${PROPOSAL_STATUS[s].color} border-current/20` : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'}`}>
+              {PROPOSAL_STATUS[s].label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={copyLink} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
+            {copied ? <CheckCheck size={12} className="text-emerald-500" /> : <Copy size={12} />} {copied ? 'הועתק!' : 'העתק'}
+          </button>
+          <button onClick={() => window.print()} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
+            <Printer size={12} /> הדפס / PDF
+          </button>
+          <button onClick={() => { onSave(p); onClose(); }} className="flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl transition-colors">
+            <Check size={12} /> שמור וסגור
+          </button>
+        </div>
+      </div>
+
+      {/* Proposal document */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden print:shadow-none print:border-0">
+        {/* Header */}
+        <div className="bg-gradient-to-br from-indigo-600 to-violet-700 px-8 py-7 text-white print:px-6 print:py-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-indigo-200 text-sm">הצעת מחיר</p>
+              <div className="flex items-center gap-3 mt-1">
+                <input value={p.title} onChange={e => setP(v => ({ ...v, title: e.target.value }))} className="text-2xl font-black bg-transparent border-b border-white/30 focus:outline-none focus:border-white/80 text-white placeholder-white/50 w-72 print:border-0" placeholder="שם ההצעה..." dir="rtl" />
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-indigo-200 text-xs">לקוח</p>
+              <input value={p.clientName} onChange={e => setP(v => ({ ...v, clientName: e.target.value }))} className="font-bold text-lg bg-transparent border-b border-white/30 focus:outline-none focus:border-white/80 text-white text-right print:border-0" dir="rtl" />
+              {p.clientEmail !== undefined && (
+                <input value={p.clientEmail || ''} onChange={e => setP(v => ({ ...v, clientEmail: e.target.value }))} className="block text-sm bg-transparent text-indigo-200 border-b border-white/20 focus:outline-none mt-0.5 print:border-0" placeholder="מייל..." dir="ltr" />
+              )}
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-2 text-sm text-indigo-200">
+              <Calendar size={13} />
+              <span>בתוקף עד:</span>
+              <input type="date" value={p.validUntil || ''} onChange={e => setP(v => ({ ...v, validUntil: e.target.value }))} className="bg-transparent border-b border-white/30 focus:outline-none text-white print:border-0" />
+            </div>
+            <span className={`text-xs font-bold px-2.5 py-1 rounded-full bg-white/20 text-white`}>{PROPOSAL_STATUS[p.status].label}</span>
+          </div>
+        </div>
+
+        <div className="px-8 py-6 space-y-6 print:px-6">
+          {/* Line items */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <button onClick={addItem} className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 print:hidden">
+                <Plus size={13} /> הוסף שורה
+              </button>
+              <h3 className="font-bold text-slate-800">פריטי ההצעה</h3>
+            </div>
+            {/* Table header */}
+            <div className="grid grid-cols-12 gap-2 text-xs font-bold text-slate-400 text-right mb-2 px-2">
+              <span className="col-span-1 print:hidden"></span>
+              <span className="col-span-4">שם / תיאור</span>
+              <span className="col-span-2 text-center">כמות</span>
+              <span className="col-span-2 text-center">מחיר יח׳</span>
+              <span className="col-span-2 text-left">סה״כ</span>
+              <span className="col-span-1 print:hidden"></span>
+            </div>
+            <div className="space-y-2">
+              {p.items.map((item, idx) => (
+                <div key={item.id} className={`grid grid-cols-12 gap-2 items-start p-2.5 rounded-xl ${idx % 2 === 0 ? 'bg-slate-50' : 'bg-white'}`}>
+                  <div className="col-span-1 flex items-center pt-1.5 print:hidden">
+                    <GripVertical size={13} className="text-slate-300" />
+                  </div>
+                  <div className="col-span-4">
+                    <input value={item.name} onChange={e => updateItem(item.id, 'name', e.target.value)} className="w-full text-sm font-semibold text-slate-800 bg-transparent border-b border-slate-200 focus:outline-none focus:border-indigo-400 text-right" placeholder="שם הפריט *" />
+                    <input value={item.description || ''} onChange={e => updateItem(item.id, 'description', e.target.value)} className="w-full text-xs text-slate-400 bg-transparent border-b border-slate-100 focus:outline-none focus:border-indigo-300 text-right mt-1" placeholder="תיאור (אופציונלי)..." />
+                  </div>
+                  <div className="col-span-2 text-center">
+                    <input type="number" min={1} value={item.quantity} onChange={e => updateItem(item.id, 'quantity', Number(e.target.value))} className="w-full text-center text-sm font-semibold bg-transparent border-b border-slate-200 focus:outline-none focus:border-indigo-400" />
+                  </div>
+                  <div className="col-span-2 text-center">
+                    <input type="number" min={0} value={item.unitPrice || ''} onChange={e => updateItem(item.id, 'unitPrice', Number(e.target.value))} className="w-full text-center text-sm bg-transparent border-b border-slate-200 focus:outline-none focus:border-indigo-400" placeholder="0" />
+                  </div>
+                  <div className="col-span-2 text-left">
+                    <span className="text-sm font-bold text-slate-800">{fmt(item.quantity * item.unitPrice)}</span>
+                  </div>
+                  <div className="col-span-1 print:hidden">
+                    <button onClick={() => removeItem(item.id)} className="w-5 h-5 rounded-md bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 mt-1"><X size={10} /></button>
+                  </div>
+                </div>
+              ))}
+              {p.items.length === 0 && <div className="text-center py-6 text-slate-300 text-sm">לחץ "הוסף שורה" כדי להתחיל</div>}
+            </div>
+          </div>
+
+          {/* Totals */}
+          <div className="mr-auto max-w-xs space-y-2 border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-bold text-slate-800">{fmt(subtotal)}</span>
+              <span className="text-slate-500">סכום ביניים</span>
+            </div>
+            {/* Discount */}
+            <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-1.5">
+                <input type="number" min={0} max={100} value={p.discount ?? ''} onChange={e => setP(v => ({ ...v, discount: Number(e.target.value) || undefined }))} className="w-14 border border-slate-200 rounded-lg px-2 py-0.5 text-center text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300 print:border-0" placeholder="0" />
+                <Percent size={11} className="text-slate-400" />
+                {discountAmt > 0 && <span className="text-emerald-600 font-semibold">-{fmt(discountAmt)}</span>}
+              </div>
+              <span className="text-slate-500">הנחה</span>
+            </div>
+            {/* VAT */}
+            <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer print:hidden">
+                  <input type="checkbox" checked={vat} onChange={e => setVat(e.target.checked)} className="rounded" />
+                  כולל מע״מ 17%
+                </label>
+                {vat && <span className="text-slate-600">+{fmt(vatAmt)}</span>}
+              </div>
+              <span className="text-slate-500">מע״מ</span>
+            </div>
+            {/* Total */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+              <span className="text-xl font-black text-indigo-600">{fmt(total)}</span>
+              <span className="font-bold text-slate-800">סה״כ לתשלום</span>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <h3 className="font-bold text-slate-700 mb-2 text-right text-sm">הערות והתניות</h3>
+            <textarea value={p.notes || ''} onChange={e => setP(v => ({ ...v, notes: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right print:border-0" placeholder="תנאי תשלום, לו״ז אספקה, הגבלות אחריות..." />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProposalsTab({ account, onSave, clientName }: { account: AccountData; onSave: (a: AccountData) => void; clientName: string }) {
+  const proposals = account.proposals ?? [];
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  function createProposal() {
+    const now = new Date().toISOString();
+    const p: Proposal = { id: Date.now().toString(), title: 'הצעת מחיר חדשה', clientName, items: [blankItem()], status: 'draft', createdAt: now };
+    onSave({ ...account, proposals: [...proposals, p], updatedAt: now });
+    setOpenId(p.id);
+  }
+
+  function updateProposal(p: Proposal) {
+    onSave({ ...account, proposals: proposals.map(x => x.id === p.id ? p : x), updatedAt: new Date().toISOString() });
+  }
+
+  function deleteProposal(id: string) {
+    onSave({ ...account, proposals: proposals.filter(p => p.id !== id), updatedAt: new Date().toISOString() });
+    if (openId === id) setOpenId(null);
+  }
+
+  // Open a specific proposal
+  const openProposal = openId ? proposals.find(p => p.id === openId) : null;
+  if (openProposal) {
+    return <ProposalBuilder proposal={openProposal} onSave={updateProposal} onClose={() => setOpenId(null)} clientName={clientName} />;
+  }
+
+  const totalValue = proposals.filter(p => p.status === 'accepted').reduce((s, p) => s + p.items.reduce((ss, i) => ss + i.quantity * i.unitPrice, 0), 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Stats + create */}
+      <div className="flex items-center justify-between">
+        <button onClick={createProposal} className="flex items-center gap-1.5 text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl transition-colors shadow-sm">
+          <Plus size={14} /> הצעת מחיר חדשה
+        </button>
+        {proposals.length > 0 && (
+          <div className="text-right">
+            <p className="text-xs text-slate-400">הצעות מאושרות</p>
+            <p className="font-black text-indigo-600">{fmt(totalValue)}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Proposals list */}
+      {proposals.length === 0 ? (
+        <div className="text-center py-12 text-slate-300">
+          <Receipt size={40} className="mx-auto mb-3 opacity-50" />
+          <p className="font-semibold">אין הצעות מחיר עדיין</p>
+          <p className="text-sm mt-1">לחץ "הצעת מחיר חדשה" להתחיל</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {[...proposals].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(p => {
+            const total = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0) * (1 - (p.discount ?? 0) / 100);
+            const st = PROPOSAL_STATUS[p.status];
+            return (
+              <div key={p.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={() => deleteProposal(p.id)} className="w-7 h-7 rounded-xl bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400"><Trash2 size={12} /></button>
+                </div>
+                <div className="flex-1 text-right min-w-0">
+                  <div className="flex items-center justify-end gap-2 mb-1">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>{st.label}</span>
+                    <h4 className="font-black text-slate-900 truncate">{p.title}</h4>
+                  </div>
+                  <div className="flex items-center justify-end gap-3 text-xs text-slate-400">
+                    <span>{p.items.length} פריטים</span>
+                    {p.validUntil && <span>בתוקף עד {fmtD(p.validUntil)}</span>}
+                    <span>{fmtD(p.createdAt)}</span>
+                  </div>
+                </div>
+                <div className="text-left flex-shrink-0">
+                  <p className="text-lg font-black text-indigo-600">{fmt(total)}</p>
+                </div>
+                <button onClick={() => setOpenId(p.id)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl transition-colors flex-shrink-0">
+                  <PenLine size={12} /> ערוך
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    CLIENT DETAIL
 ═══════════════════════════════════════════════════════════════════════════ */
 function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser, team }: {
@@ -910,16 +1387,18 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
   onBack: () => void; onLeadClick: (l: Lead) => void;
   currentUser: string; team: string[];
 }) {
-  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'report'>('overview');
+  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'proposals' | 'report'>('overview');
   const score = calcHealth(lead, account);
   const hm = healthMeta(score);
 
   const TABS = [
-    { key: 'overview'  as const, label: 'סקירה',   icon: Activity  },
-    { key: 'solutions' as const, label: 'פתרונות', icon: Package   },
-    { key: 'payments'  as const, label: 'תשלומים', icon: CreditCard},
-    { key: 'media'     as const, label: 'מדיה',    icon: BarChart2 },
-    { key: 'report'    as const, label: 'דוח',     icon: FileText  },
+    { key: 'overview'   as const, label: 'סקירה',       icon: Activity  },
+    { key: 'solutions'  as const, label: 'פתרונות',     icon: Package   },
+    { key: 'payments'   as const, label: 'תשלומים',     icon: CreditCard},
+    { key: 'media'      as const, label: 'מדיה',        icon: BarChart2 },
+    { key: 'materials'  as const, label: 'חומרים',      icon: Folder    },
+    { key: 'proposals'  as const, label: 'הצעות מחיר',  icon: Receipt   },
+    { key: 'report'     as const, label: 'דוח',          icon: FileText  },
   ];
 
   return (
@@ -957,11 +1436,13 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
         ); })}
       </div>
 
-      {tab === 'overview'  && <OverviewTab  lead={lead} account={account} onSave={onSave} currentUser={currentUser} />}
-      {tab === 'solutions' && <SolutionsTab account={account} onSave={onSave} team={team} />}
-      {tab === 'payments'  && <PaymentsTab  account={account} onSave={onSave} />}
-      {tab === 'media'     && <MediaTab     account={account} onSave={onSave} />}
-      {tab === 'report'    && <ReportTab    lead={lead}       account={account} />}
+      {tab === 'overview'   && <OverviewTab   lead={lead} account={account} onSave={onSave} currentUser={currentUser} />}
+      {tab === 'solutions'  && <SolutionsTab  account={account} onSave={onSave} team={team} />}
+      {tab === 'payments'   && <PaymentsTab   account={account} onSave={onSave} />}
+      {tab === 'media'      && <MediaTab      account={account} onSave={onSave} />}
+      {tab === 'materials'  && <MaterialsTab  account={account} onSave={onSave} currentUser={currentUser} leadId={lead.id} />}
+      {tab === 'proposals'  && <ProposalsTab  account={account} onSave={onSave} clientName={lead.company} />}
+      {tab === 'report'     && <ReportTab     lead={lead} account={account} />}
     </div>
   );
 }

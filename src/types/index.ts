@@ -173,6 +173,23 @@ export type ClientLink = {
   url: string;
 };
 
+export type FileCategory = 'renders' | 'documents' | 'contracts' | 'creative' | 'references' | 'other';
+export type FileKind     = 'image' | 'video' | 'pdf' | 'doc' | 'link' | 'other';
+
+export type ClientFile = {
+  id: string;
+  title: string;
+  category: FileCategory;
+  kind: FileKind;
+  url: string;               // download URL or external link
+  storagePath?: string;      // Firebase Storage path (if uploaded)
+  size?: number;             // bytes
+  aiContext?: string;        // text excerpt / description the AI can read
+  notes?: string;
+  createdAt: string;
+  uploadedBy: string;
+};
+
 export type AccountData = {
   leadId: string;
   contractStart: string;
@@ -184,6 +201,8 @@ export type AccountData = {
   mediaRecords: MediaRecord[];
   goals: ClientGoal[];
   links: ClientLink[];
+  files: ClientFile[];
+  proposals: Proposal[];
   upsellNote: string;
   nextStep?: string;
   satisfactionScore?: number;   // 1–5
