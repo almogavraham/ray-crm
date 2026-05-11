@@ -18,19 +18,23 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
     setError('');
     setLoading(true);
     try {
-      // Pass the current origin so Firebase includes a continue-URL in the email
-      await sendPasswordResetEmail(auth, email, {
-        url: window.location.origin,
-      });
+      // No actionCodeSettings — avoids "unauthorized-continue-uri" errors.
+      // Firebase sends the reset link to its own hosted action page.
+      await sendPasswordResetEmail(auth, email);
       setSent(true);
     } catch (err: unknown) {
+      console.error('Password reset error:', err);
       const code = (err as { code?: string }).code ?? '';
-      if (code === 'auth/user-not-found' || code === 'auth/invalid-email') {
+      if (code === 'auth/user-not-found') {
         setError('האימייל שהוזן אינו קיים במערכת');
+      } else if (code === 'auth/invalid-email') {
+        setError('כתובת המייל אינה תקינה');
       } else if (code === 'auth/too-many-requests') {
         setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
+      } else if (code === 'auth/unauthorized-continue-uri') {
+        setError('שגיאת הגדרות Firebase. פנה למנהל המערכת');
       } else {
-        setError('שגיאה בשליחת המייל. נסה שוב');
+        setError(`שגיאה: ${code || 'לא ידועה'}. נסה שוב`);
       }
     } finally {
       setLoading(false);
@@ -62,12 +66,25 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
               <p className="text-slate-400 text-sm mb-2">
                 שלחנו קישור לאיפוס סיסמה אל
               </p>
-              <p className="text-indigo-400 font-semibold text-sm mb-6">{email}</p>
-              <p className="text-slate-500 text-xs mb-8 leading-relaxed">
-                לחץ על הקישור שבמייל כדי לקבוע סיסמה חדשה.
-                <br />
-                אם לא קיבלת, בדוק את תיקיית הספאם.
-              </p>
+              <p className="text-indigo-400 font-semibold text-sm mb-5">{email}</p>
+              <div className="bg-slate-800 rounded-xl p-4 text-right mb-6 space-y-2">
+                <p className="text-white text-xs font-bold">📧 מה לעשות עכשיו:</p>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  1. פתח את תיבת הדואר שלך
+                </p>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  2. חפש מייל מ-<span className="text-indigo-400 font-mono">noreply@chex-crm.firebaseapp.com</span>
+                </p>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  3. לחץ על הקישור "Reset your password"
+                </p>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  4. קבע סיסמה חדשה בדף שייפתח
+                </p>
+                <p className="text-amber-400 text-xs leading-relaxed mt-2">
+                  ⚠️ לא קיבלת? בדוק את תיקיית הספאם / Junk
+                </p>
+              </div>
               <button
                 onClick={onBack}
                 className="flex items-center gap-2 text-slate-400 hover:text-white text-sm transition-colors mx-auto"
