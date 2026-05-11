@@ -478,8 +478,8 @@ function AppInner() {
         overdueBadge={overdueBadge}
         userInitials={displayInitials}
         userName={displayName}
-        allowedPages={profile?.allowedPages ?? []}
-        isAdmin={isAdmin}
+        allowedPages={profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals'] : [])}
+        isAdmin={bypassAuth ? true : isAdmin}
         onSignOut={signOut}
       >
         {/* Firebase loading indicator */}
