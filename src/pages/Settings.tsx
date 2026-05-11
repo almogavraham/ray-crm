@@ -3,10 +3,15 @@ import {
   User, Palette, Database, Info, Save, RefreshCw, Download,
   Upload, CheckCircle2, AlertTriangle, Shield, Zap, Bell,
   ChevronLeft, Monitor, Moon, Globe, Users2, Copy, Link,
-  Mail, KeyRound, Lock, Unlock,
+  Mail, KeyRound, Lock, Unlock, Eye, EyeOff,
 } from 'lucide-react';
 import { collection, getDocs, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
-import { sendPasswordResetEmail } from 'firebase/auth';
+import {
+  sendPasswordResetEmail,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+} from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
 import type { Lead, AppSettings, Page, UserProfile } from '../types';
 
@@ -21,7 +26,7 @@ interface SettingsProps {
   currentUserUid?: string;
 }
 
-type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users' | 'security';
+type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users' | 'security' | 'password';
 
 const ALL_PAGES: { page: Page; label: string }[] = [
   { page: 'home',      label: 'לוח בקרה' },
@@ -49,6 +54,7 @@ export default function Settings({
 }: SettingsProps) {
   const BASE_SECTIONS: { key: Section; label: string; desc: string; Icon: React.ElementType }[] = [
     { key: 'profile',       label: 'פרופיל',        desc: 'שם משתמש ותפקיד',         Icon: User    },
+    { key: 'password',      label: 'שינוי סיסמה',   desc: 'עדכון הסיסמה שלך',         Icon: Lock    },
     { key: 'appearance',    label: 'מראה',           desc: 'ערכת נושא ותצוגה',         Icon: Palette },
     { key: 'notifications', label: 'התראות',         desc: 'הגדרות התראות',            Icon: Bell    },
     { key: 'data',          label: 'נתונים',         desc: 'ייצוא, ייבוא ואיפוס',       Icon: Database},
@@ -68,6 +74,46 @@ export default function Settings({
   const [saved, setSaved]         = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const fileRef                   = useRef<HTMLInputElement>(null);
+
+  // ── Change password state ──
+  const [pwCurrent,  setPwCurrent]  = useState('');
+  const [pwNew,      setPwNew]      = useState('');
+  const [pwConfirm,  setPwConfirm]  = useState('');
+  const [pwShowCur,  setPwShowCur]  = useState(false);
+  const [pwShowNew,  setPwShowNew]  = useState(false);
+  const [pwLoading,  setPwLoading]  = useState(false);
+  const [pwError,    setPwError]    = useState('');
+  const [pwSuccess,  setPwSuccess]  = useState(false);
+
+  const handleChangePassword = async () => {
+    setPwError('');
+    if (!pwCurrent) { setPwError('הכנס את הסיסמה הנוכחית'); return; }
+    if (pwNew.length < 6) { setPwError('הסיסמה החדשה חייבת להכיל לפחות 6 תווים'); return; }
+    if (pwNew !== pwConfirm) { setPwError('הסיסמאות החדשות אינן תואמות'); return; }
+    const currentUser = auth.currentUser;
+    if (!currentUser?.email) { setPwError('לא נמצא משתמש מחובר'); return; }
+    setPwLoading(true);
+    try {
+      const cred = EmailAuthProvider.credential(currentUser.email, pwCurrent);
+      await reauthenticateWithCredential(currentUser, cred);
+      await updatePassword(currentUser, pwNew);
+      setPwSuccess(true);
+      setPwCurrent(''); setPwNew(''); setPwConfirm('');
+      onToast('הסיסמה עודכנה בהצלחה ✓', 'success');
+      setTimeout(() => setPwSuccess(false), 3000);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code ?? '';
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setPwError('הסיסמה הנוכחית שגויה');
+      } else if (code === 'auth/requires-recent-login') {
+        setPwError('נדרש להתחבר מחדש לפני שינוי הסיסמה');
+      } else {
+        setPwError(`שגיאה: ${code || 'לא ידועה'}`);
+      }
+    } finally {
+      setPwLoading(false);
+    }
+  };
 
   // ── Security section state ──
   const [bypassAuth,        setBypassAuth]        = useState(false);
@@ -797,6 +843,92 @@ export default function Settings({
           </>
         )}
 
+        {/* ── CHANGE PASSWORD ── */}
+        {section === 'password' && (
+          <>
+            <SectionHeader icon={<Lock size={18} />} title="שינוי סיסמה" desc="עדכן את הסיסמה שלך ישירות — ללא צורך בשליחת מייל" />
+            <Card>
+              {pwSuccess && (
+                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-5 text-right">
+                  <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0" />
+                  <span className="text-emerald-700 text-sm font-semibold">הסיסמה עודכנה בהצלחה!</span>
+                </div>
+              )}
+              <div className="space-y-4">
+                {/* Current password */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">סיסמה נוכחית</label>
+                  <div className="relative">
+                    <input
+                      type={pwShowCur ? 'text' : 'password'}
+                      value={pwCurrent}
+                      onChange={e => setPwCurrent(e.target.value)}
+                      placeholder="הסיסמה שלך כרגע"
+                      className="w-full border border-slate-200 rounded-xl px-4 pl-10 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      dir="ltr"
+                    />
+                    <button type="button" onClick={() => setPwShowCur(v => !v)} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                      {pwShowCur ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </div>
+                {/* New password */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">סיסמה חדשה</label>
+                  <div className="relative">
+                    <input
+                      type={pwShowNew ? 'text' : 'password'}
+                      value={pwNew}
+                      onChange={e => setPwNew(e.target.value)}
+                      placeholder="לפחות 6 תווים"
+                      className="w-full border border-slate-200 rounded-xl px-4 pl-10 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      dir="ltr"
+                    />
+                    <button type="button" onClick={() => setPwShowNew(v => !v)} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                      {pwShowNew ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  {/* Strength bar */}
+                  {pwNew.length > 0 && (
+                    <div className="flex gap-1 mt-2">
+                      {[1,2,3,4].map(i => (
+                        <div key={i} className={`h-1 flex-1 rounded-full ${pwNew.length >= i * 3 ? (pwNew.length >= 10 ? 'bg-emerald-400' : pwNew.length >= 6 ? 'bg-amber-400' : 'bg-red-400') : 'bg-slate-200'}`} />
+                      ))}
+                      <span className="text-[10px] text-slate-400 w-10 text-left">{pwNew.length < 6 ? 'חלשה' : pwNew.length < 10 ? 'בינונית' : 'חזקה'}</span>
+                    </div>
+                  )}
+                </div>
+                {/* Confirm */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">אימות סיסמה חדשה</label>
+                  <input
+                    type={pwShowNew ? 'text' : 'password'}
+                    value={pwConfirm}
+                    onChange={e => setPwConfirm(e.target.value)}
+                    placeholder="הכנס שוב את הסיסמה החדשה"
+                    className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    dir="ltr"
+                  />
+                </div>
+                {/* Error */}
+                {pwError && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-right">
+                    <AlertTriangle size={14} className="flex-shrink-0" />
+                    {pwError}
+                  </div>
+                )}
+                <button
+                  onClick={handleChangePassword}
+                  disabled={pwLoading}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors shadow-sm"
+                >
+                  {pwLoading ? 'מעדכן...' : 'עדכן סיסמה'}
+                </button>
+              </div>
+            </Card>
+          </>
+        )}
+
         {/* ── SECURITY (admin only) ── */}
         {section === 'security' && isAdmin && (
           <>
@@ -845,7 +977,7 @@ export default function Settings({
         )}
 
         {/* ── Save Button ── */}
-        {section !== 'data' && section !== 'about' && section !== 'users' && section !== 'security' && (
+        {section !== 'data' && section !== 'about' && section !== 'users' && section !== 'security' && section !== 'password' && (
           <div className="flex justify-start">
             <button
               onClick={handleSave}

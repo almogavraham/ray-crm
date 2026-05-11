@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Zap, Mail, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Zap, Mail, AlertCircle, CheckCircle2, ArrowRight, ExternalLink } from 'lucide-react';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 
@@ -8,10 +8,11 @@ interface ForgotPasswordProps {
 }
 
 export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
-  const [email,   setEmail]   = useState('');
-  const [error,   setError]   = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sent,    setSent]    = useState(false);
+  const [email,       setEmail]       = useState('');
+  const [error,       setError]       = useState('');
+  const [loading,     setLoading]     = useState(false);
+  const [sent,        setSent]        = useState(false);
+  const [configError, setConfigError] = useState(false);
 
   const handle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,8 +32,8 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
         setError('כתובת המייל אינה תקינה');
       } else if (code === 'auth/too-many-requests') {
         setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
-      } else if (code === 'auth/unauthorized-continue-uri') {
-        setError('שגיאת הגדרות Firebase. פנה למנהל המערכת');
+      } else if (code === 'auth/configuration-not-found') {
+        setConfigError(true);
       } else {
         setError(`שגיאה: ${code || 'לא ידועה'}. נסה שוב`);
       }
@@ -134,13 +135,51 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25"
-                >
-                  {loading ? 'שולח...' : 'שלח קישור לאיפוס'}
-                </button>
+                {configError && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-right space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-amber-300 font-bold text-sm mb-1">נדרשת הגדרה ב-Firebase Console</p>
+                        <p className="text-amber-200/70 text-xs leading-relaxed">
+                          תבנית המייל לאיפוס סיסמה לא הופעלה בפרויקט Firebase שלך.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="bg-slate-800 rounded-lg p-3 text-xs text-slate-300 space-y-1.5">
+                      <p className="font-bold text-white">תיקון בשני שלבים:</p>
+                      <p>1. לחץ על הקישור למטה → Firebase Console</p>
+                      <p>2. לחץ על <span className="text-indigo-400 font-mono">Templates</span> → <span className="text-indigo-400 font-mono">Password reset</span> → ✏️ Edit → <span className="text-indigo-400 font-mono">Save</span></p>
+                      <p>3. חזור לכאן ונסה שוב</p>
+                    </div>
+                    <a
+                      href="https://console.firebase.google.com/project/chex-crm/authentication/emails"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 justify-center bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs px-4 py-2.5 rounded-xl transition-colors"
+                    >
+                      <ExternalLink size={13} />
+                      פתח Firebase Console → Email Templates
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setConfigError(false)}
+                      className="w-full text-slate-400 hover:text-white text-xs py-1 transition-colors"
+                    >
+                      נסה שוב
+                    </button>
+                  </div>
+                )}
+
+                {!configError && (
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25"
+                  >
+                    {loading ? 'שולח...' : 'שלח קישור לאיפוס'}
+                  </button>
+                )}
               </form>
             </>
           )}
