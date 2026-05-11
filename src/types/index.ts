@@ -192,21 +192,10 @@ export type ClientFile = {
 
 export type AccountData = {
   leadId: string;
-  contractStart: string;
-  contractEnd: string;
-  monthlyRetainer: number;
-  solutions: ManagedSolution[];
-  payments: PaymentRecord[];
-  activityLog: ActivityEntry[];
-  mediaRecords: MediaRecord[];
-  goals: ClientGoal[];
-  links: ClientLink[];
-  files: ClientFile[];
-  proposals: Proposal[];
+  contractStart: string;   // keep for backward compat
+  contractEnd: string;     // keep for backward compat
+  monthlyRetainer: number; // keep for backward compat
   projects: Project[];
-  upsellNote: string;
-  nextStep?: string;
-  satisfactionScore?: number;   // 1–5
   updatedAt: string;
 };
 
@@ -271,15 +260,29 @@ export type Project = {
   description?: string;
   status: ProjectStatus;
   priority: ProjectPriority;
+  color?: string;
   startDate?: string;
   dueDate?: string;
-  budget?: number;
+  monthlyRetainer?: number;
+  contractStart?: string;
+  contractEnd?: string;
   assignedTo?: string;
-  tasks: ProjectTask[];
-  notes?: string;
-  color?: string;
   createdAt: string;
   updatedAt: string;
+  // Management data (each project has its own)
+  tasks: ProjectTask[];
+  notes?: string;
+  solutions: ManagedSolution[];
+  payments: PaymentRecord[];
+  activityLog: ActivityEntry[];
+  mediaRecords: MediaRecord[];
+  goals: ClientGoal[];
+  links: ClientLink[];
+  files: ClientFile[];
+  proposals: Proposal[];
+  upsellNote: string;
+  nextStep?: string;
+  satisfactionScore?: number;
 };
 
 export type AppSettings = {

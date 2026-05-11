@@ -10,7 +10,7 @@ import {
   Upload, Image as ImageIcon, Film, FileCheck, Folder,
   BookOpen, Send, Eye, Download, Copy, CheckCheck,
   Percent, Receipt, PenLine, GripVertical,
-  Layers, FolderOpen, Flag, ListChecks, Palette, Sliders,
+  FolderOpen, Flag, Palette,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { getApiKey } from '../lib/apiKey';
@@ -72,12 +72,12 @@ const PLATFORM_CFG: Record<MediaPlatform, { label: string; color: string; bg: st
 /* ═══════════════════════════════════════════════════════════════════════════
    HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
-function calcHealth(lead: Lead, acc: AccountData | undefined): number {
+function calcHealth(lead: Lead, proj: Project | undefined, fallbackContractEnd?: string): number {
   let score = 100;
   const now = new Date();
   const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
   const allTs = [
-    ...(acc?.activityLog ?? []).map(a => a.timestamp),
+    ...(proj?.activityLog ?? []).map(a => a.timestamp),
     ...lead.notes.map(n => n.timestamp),
   ].sort((a, b) => b.localeCompare(a));
   if (!allTs.length) { score -= 30; }
@@ -87,11 +87,12 @@ function calcHealth(lead: Lead, acc: AccountData | undefined): number {
   }
   const overdue = lead.tasks.filter(t => { if (t.completed) return false; try { return new Date(t.date + 'T00:00:00') < midnight; } catch { return false; } });
   score -= Math.min(overdue.length * 15, 30);
-  if (acc?.contractEnd) {
-    const d = Math.ceil((new Date(acc.contractEnd).getTime() - now.getTime()) / 86_400_000);
+  const contractEnd = proj?.contractEnd ?? fallbackContractEnd;
+  if (contractEnd) {
+    const d = Math.ceil((new Date(contractEnd).getTime() - now.getTime()) / 86_400_000);
     if (d < 0) score -= 30; else if (d < 14) score -= 20; else if (d < 30) score -= 10;
   }
-  if (acc?.payments?.some(p => p.status === 'overdue')) score -= 20;
+  if (proj?.payments?.some(p => p.status === 'overdue')) score -= 20;
   return Math.max(0, Math.min(100, score));
 }
 
@@ -113,7 +114,7 @@ const prevMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new D
 const nextMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new Date(Number(y), Number(mo)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
 function blankAccount(leadId: string, budget: number): AccountData {
-  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, solutions: [], payments: [], activityLog: [], mediaRecords: [], goals: [], links: [], files: [], proposals: [], projects: [], upsellNote: '', updatedAt: '' };
+  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, projects: [], updatedAt: '' };
 }
 
 function getLast6Months() {
@@ -132,11 +133,11 @@ function getLast6Months() {
 interface EqResult { sentiment: 'positive' | 'neutral' | 'negative' | 'at-risk'; emoji: string; summary: string; action: string; }
 interface WgInsight { title: string; idea: string; emoji: string; }
 
-function OverviewTab({ lead, account, onSave, currentUser }: {
-  lead: Lead; account: AccountData; onSave: (a: AccountData) => void; currentUser: string;
+function OverviewTab({ lead, project, onSave, currentUser }: {
+  lead: Lead; project: Project; onSave: (p: Project) => void; currentUser: string;
 }) {
   const [editingContract, setEditingContract] = useState(false);
-  const [form, setForm] = useState(account);
+  const [form, setForm] = useState(project);
   const [newLog, setNewLog] = useState('');
   const [logType, setLogType] = useState<ActivityType>('note');
   const [addingLink, setAddingLink] = useState(false);
@@ -152,45 +153,45 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
   const [wgInsights, setWgInsights] = useState<WgInsight[] | null>(null);
   const [wgOpen,     setWgOpen]     = useState(false);
 
-  useEffect(() => { setForm(account); }, [account]);
+  useEffect(() => { setForm(project); }, [project]);
 
-  const score = calcHealth(lead, account);
+  const score = calcHealth(lead, project);
   const hm    = healthMeta(score);
   const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
   const overdueT = lead.tasks.filter(t => { if (t.completed) return false; try { return new Date(t.date + 'T00:00:00') < midnight; } catch { return false; } });
-  const totalPaid = (account.payments ?? []).filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+  const totalPaid = (project.payments ?? []).filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
 
   // Current month goal vs actuals
   const cm = currentMonth();
-  const goal = (account.goals ?? []).find(g => g.month === cm);
-  const cmMedia = (account.mediaRecords ?? []).filter(r => r.month === cm);
+  const goal = (project.goals ?? []).find(g => g.month === cm);
+  const cmMedia = (project.mediaRecords ?? []).filter(r => r.month === cm);
   const cmLeads = cmMedia.reduce((s, r) => s + r.leads, 0);
   const cmSpend = cmMedia.reduce((s, r) => s + r.spend, 0);
 
   function saveContract() {
-    onSave({ ...account, ...form, updatedAt: new Date().toISOString() });
+    onSave({ ...project, ...form, updatedAt: new Date().toISOString() });
     setEditingContract(false);
   }
   function addLog() {
     if (!newLog.trim()) return;
     const entry: ActivityEntry = { id: Date.now().toString(), type: logType, text: newLog.trim(), author: currentUser, timestamp: new Date().toISOString() };
-    onSave({ ...account, activityLog: [entry, ...(account.activityLog ?? [])], updatedAt: new Date().toISOString() });
+    onSave({ ...project, activityLog: [entry, ...(project.activityLog ?? [])], updatedAt: new Date().toISOString() });
     setNewLog('');
   }
   function addLink() {
     if (!linkForm.title.trim() || !linkForm.url.trim()) return;
     const link: ClientLink = { id: Date.now().toString(), title: linkForm.title.trim(), url: linkForm.url.trim() };
-    onSave({ ...account, links: [...(account.links ?? []), link], updatedAt: new Date().toISOString() });
+    onSave({ ...project, links: [...(project.links ?? []), link], updatedAt: new Date().toISOString() });
     setLinkForm({ title: '', url: '' }); setAddingLink(false);
   }
-  function removeLink(id: string) { onSave({ ...account, links: (account.links ?? []).filter(l => l.id !== id), updatedAt: new Date().toISOString() }); }
+  function removeLink(id: string) { onSave({ ...project, links: (project.links ?? []).filter(l => l.id !== id), updatedAt: new Date().toISOString() }); }
 
   // EQ Layer — analyze sentiment of recent activity
   const runEqAnalysis = useCallback(async () => {
     const apiKey = getApiKey();
     if (!apiKey) return;
     const recentTexts = [
-      ...(account.activityLog ?? []).slice(0, 10).map(e => `[${e.type}] ${e.text}`),
+      ...(project.activityLog ?? []).slice(0, 10).map(e => `[${e.type}] ${e.text}`),
       ...lead.notes.slice(0, 5).map(n => n.text),
     ].join('\n');
     if (!recentTexts.trim()) return;
@@ -208,13 +209,13 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
       if (jsonMatch) setEqResult(JSON.parse(jsonMatch[0]) as EqResult);
     } catch { setEqResult({ sentiment: 'neutral', emoji: '🟡', summary: 'לא הצלחתי לנתח', action: 'נסה שנית' }); }
     finally { setEqLoading(false); }
-  }, [account.activityLog, lead, account]);
+  }, [project.activityLog, lead]);
 
   // White Glove — scan for personal touches
   const runWhiteGlove = useCallback(async () => {
     const apiKey = getApiKey();
     if (!apiKey) return;
-    const allText = [...(account.activityLog ?? []).map(e => e.text), ...lead.notes.map(n => n.text), lead.company, lead.contactName].join('\n');
+    const allText = [...(project.activityLog ?? []).map(e => e.text), ...lead.notes.map(n => n.text), lead.company, lead.contactName].join('\n');
     setWgLoading(true); setWgInsights(null); setWgOpen(true);
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -229,17 +230,17 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
       if (jsonMatch) setWgInsights(JSON.parse(jsonMatch[0]) as WgInsight[]);
     } catch { setWgInsights([{ emoji: '🤝', title: 'שגיאה', idea: 'לא הצלחתי לנתח. נסה שנית.' }]); }
     finally { setWgLoading(false); }
-  }, [account.activityLog, lead]);
+  }, [project.activityLog, lead]);
 
   function saveGoal(field: keyof ClientGoal, value: number) {
-    const existing = (account.goals ?? []).find(g => g.month === cm);
+    const existing = (project.goals ?? []).find(g => g.month === cm);
     const goals = existing
-      ? (account.goals ?? []).map(g => g.month === cm ? { ...g, [field]: value } : g)
-      : [...(account.goals ?? []), { id: Date.now().toString(), month: cm, leadsTarget: 0, revenueTarget: 0, spendBudget: 0, [field]: value }];
-    onSave({ ...account, goals, updatedAt: new Date().toISOString() });
+      ? (project.goals ?? []).map(g => g.month === cm ? { ...g, [field]: value } : g)
+      : [...(project.goals ?? []), { id: Date.now().toString(), month: cm, leadsTarget: 0, revenueTarget: 0, spendBudget: 0, [field]: value }];
+    onSave({ ...project, goals, updatedAt: new Date().toISOString() });
   }
 
-  const recentLog = [...(account.activityLog ?? []), ...lead.notes.map(n => ({ id: n.id, type: 'note' as ActivityType, text: n.text, author: n.author, timestamp: n.timestamp }))].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 6);
+  const recentLog = [...(project.activityLog ?? []), ...lead.notes.map(n => ({ id: n.id, type: 'note' as ActivityType, text: n.text, author: n.author, timestamp: n.timestamp }))].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 6);
 
   return (
     <div className="space-y-5">
@@ -252,8 +253,8 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
         <div className="h-2 bg-white/60 rounded-full"><div className={`h-2 rounded-full ${hm.bg} transition-all duration-700`} style={{ width: `${score}%` }} /></div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {overdueT.length > 0 && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">⚠ {overdueT.length} משימות באיחור</span>}
-          {account.contractEnd && daysTo(account.contractEnd) <= 30 && daysTo(account.contractEnd) >= 0 && <span className="bg-amber-100 text-amber-700 font-semibold px-2 py-1 rounded-lg">📅 חידוש בעוד {daysTo(account.contractEnd)} ימים</span>}
-          {(account.payments ?? []).some(p => p.status === 'overdue') && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">💳 תשלום באיחור</span>}
+          {project.contractEnd && daysTo(project.contractEnd) <= 30 && daysTo(project.contractEnd) >= 0 && <span className="bg-amber-100 text-amber-700 font-semibold px-2 py-1 rounded-lg">📅 חידוש בעוד {daysTo(project.contractEnd)} ימים</span>}
+          {(project.payments ?? []).some(p => p.status === 'overdue') && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">💳 תשלום באיחור</span>}
         </div>
       </div>
 
@@ -262,7 +263,7 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
         {[
           { label: 'הכנסה כוללת', value: fmtK(totalPaid), icon: <DollarSign size={15} className="text-emerald-600" />, bg: 'bg-emerald-50' },
           { label: 'משימות פתוחות', value: lead.tasks.filter(t => !t.completed).length, icon: <Clock size={15} className="text-blue-600" />, bg: 'bg-blue-50' },
-          { label: 'פתרונות', value: `${(account.solutions ?? []).filter(s => s.status === 'approved').length}/${(account.solutions ?? []).length}`, icon: <Package size={15} className="text-violet-600" />, bg: 'bg-violet-50' },
+          { label: 'פתרונות', value: `${(project.solutions ?? []).filter(s => s.status === 'approved').length}/${(project.solutions ?? []).length}`, icon: <Package size={15} className="text-violet-600" />, bg: 'bg-violet-50' },
         ].map(s => (
           <div key={s.label} className="bg-white border border-slate-200 rounded-xl p-3 text-center shadow-sm">
             <div className={`w-8 h-8 ${s.bg} rounded-xl flex items-center justify-center mx-auto mb-1.5`}>{s.icon}</div>
@@ -315,8 +316,8 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
         {editingContract ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-xs text-slate-500 mb-1 block">תחילת חוזה</label><input type="date" value={form.contractStart} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-              <div><label className="text-xs text-slate-500 mb-1 block">סיום חוזה</label><input type="date" value={form.contractEnd} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+              <div><label className="text-xs text-slate-500 mb-1 block">תחילת חוזה</label><input type="date" value={form.contractStart || ''} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+              <div><label className="text-xs text-slate-500 mb-1 block">סיום חוזה</label><input type="date" value={form.contractEnd || ''} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             </div>
             <div><label className="text-xs text-slate-500 mb-1 block">ריטיינר חודשי (₪)</label><input type="number" min={0} value={form.monthlyRetainer || ''} onChange={e => setForm(p => ({ ...p, monthlyRetainer: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             <div><label className="text-xs text-slate-500 mb-1 block">הצעד הבא</label><input type="text" value={form.nextStep || ''} onChange={e => setForm(p => ({ ...p, nextStep: e.target.value }))} placeholder="מה הצעד הבא?" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
@@ -328,18 +329,18 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
         ) : (
           <div className="space-y-2 text-sm text-right">
             {[
-              { label: 'תחילת חוזה', value: account.contractStart ? fmtD(account.contractStart) : '—' },
-              { label: 'סיום חוזה', value: account.contractEnd ? `${fmtD(account.contractEnd)} (${daysTo(account.contractEnd)} ימים)` : '—' },
-              { label: 'ריטיינר', value: account.monthlyRetainer ? fmt(account.monthlyRetainer) : '—' },
+              { label: 'תחילת חוזה', value: project.contractStart ? fmtD(project.contractStart) : '—' },
+              { label: 'סיום חוזה', value: project.contractEnd ? `${fmtD(project.contractEnd)} (${daysTo(project.contractEnd)} ימים)` : '—' },
+              { label: 'ריטיינר', value: project.monthlyRetainer ? fmt(project.monthlyRetainer) : '—' },
             ].map(r => (
               <div key={r.label} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
                 <span className="text-slate-700 font-medium">{r.value}</span>
                 <span className="text-slate-400 text-xs">{r.label}</span>
               </div>
             ))}
-            {account.nextStep && <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-indigo-600 mb-1">→ הצעד הבא</p><p className="text-sm text-indigo-800">{account.nextStep}</p></div>}
-            {account.upsellNote && <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-violet-600 mb-1">🚀 אפסל</p><p className="text-sm text-violet-800">{account.upsellNote}</p></div>}
-            {(account.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(account.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</span>)}</div><span className="text-xs text-slate-400">שביעות רצון</span></div>}
+            {project.nextStep && <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-indigo-600 mb-1">→ הצעד הבא</p><p className="text-sm text-indigo-800">{project.nextStep}</p></div>}
+            {project.upsellNote && <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-violet-600 mb-1">🚀 אפסל</p><p className="text-sm text-violet-800">{project.upsellNote}</p></div>}
+            {(project.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(project.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</span>)}</div><span className="text-xs text-slate-400">שביעות רצון</span></div>}
           </div>
         )}
       </div>
@@ -357,9 +358,9 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
             <div className="flex gap-2 justify-end"><button onClick={() => setAddingLink(false)} className="text-xs text-slate-500 px-3 py-1.5 rounded-lg hover:bg-slate-200">ביטול</button><button onClick={addLink} className="text-xs font-bold text-white bg-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-500">הוסף</button></div>
           </div>
         )}
-        {(account.links ?? []).length === 0 && !addingLink && <p className="text-center text-slate-300 text-sm py-4">הוסף קישורים ל-Drive, Notion, Docs...</p>}
+        {(project.links ?? []).length === 0 && !addingLink && <p className="text-center text-slate-300 text-sm py-4">הוסף קישורים ל-Drive, Notion, Docs...</p>}
         <div className="space-y-2">
-          {(account.links ?? []).map(link => (
+          {(project.links ?? []).map(link => (
             <div key={link.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5 group">
               <div className="flex items-center gap-2">
                 <button onClick={() => removeLink(link.id)} className="w-5 h-5 rounded-md bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={10} /></button>
@@ -463,12 +464,12 @@ function OverviewTab({ lead, account, onSave, currentUser }: {
 /* ═══════════════════════════════════════════════════════════════════════════
    SOLUTIONS TAB
 ═══════════════════════════════════════════════════════════════════════════ */
-function SolutionsTab({ account, onSave, team }: { account: AccountData; onSave: (a: AccountData) => void; team: string[] }) {
+function SolutionsTab({ project, onSave, team }: { project: Project; onSave: (p: Project) => void; team: string[] }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const blank = (): Partial<ManagedSolution> => ({ name: '', description: '', status: 'not_started', dueDate: '', assignedTo: '', notes: '' });
   const [form, setForm] = useState<Partial<ManagedSolution>>(blank());
-  const solutions = account.solutions ?? [];
+  const solutions = project.solutions ?? [];
   const approved = solutions.filter(s => s.status === 'approved').length;
   const pct = solutions.length > 0 ? Math.round((approved / solutions.length) * 100) : 0;
 
@@ -476,11 +477,11 @@ function SolutionsTab({ account, onSave, team }: { account: AccountData; onSave:
     if (!form.name?.trim()) return;
     const now = new Date().toISOString();
     if (editId) {
-      onSave({ ...account, solutions: solutions.map(s => s.id === editId ? { ...s, ...form } as ManagedSolution : s), updatedAt: now });
+      onSave({ ...project, solutions: solutions.map(s => s.id === editId ? { ...s, ...form } as ManagedSolution : s), updatedAt: now });
       setEditId(null);
     } else {
       const sol: ManagedSolution = { id: Date.now().toString(), createdAt: now, ...form, name: form.name!, status: form.status ?? 'not_started' };
-      onSave({ ...account, solutions: [...solutions, sol], updatedAt: now });
+      onSave({ ...project, solutions: [...solutions, sol], updatedAt: now });
       setAdding(false);
     }
     setForm(blank());
@@ -524,7 +525,7 @@ function SolutionsTab({ account, onSave, team }: { account: AccountData; onSave:
             <div key={s.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={() => onSave({ ...account, solutions: solutions.filter(s2 => s2.id !== s.id), updatedAt: new Date().toISOString() })} className="w-7 h-7 rounded-xl bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400"><Trash2 size={12} /></button>
+                  <button onClick={() => onSave({ ...project, solutions: solutions.filter(s2 => s2.id !== s.id), updatedAt: new Date().toISOString() })} className="w-7 h-7 rounded-xl bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400"><Trash2 size={12} /></button>
                   <button onClick={() => { setEditId(s.id); setForm({ ...s }); setAdding(false); }} className="w-7 h-7 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500"><Edit2 size={12} /></button>
                 </div>
                 <div className="flex-1 text-right min-w-0">
@@ -538,7 +539,7 @@ function SolutionsTab({ account, onSave, team }: { account: AccountData; onSave:
               </div>
               <div className="mt-3 flex gap-1.5 justify-end flex-wrap">
                 {(Object.keys(SOL_STATUS) as SolutionStatus[]).map(k => (
-                  <button key={k} onClick={() => onSave({ ...account, solutions: solutions.map(s2 => s2.id === s.id ? { ...s2, status: k } : s2), updatedAt: new Date().toISOString() })}
+                  <button key={k} onClick={() => onSave({ ...project, solutions: solutions.map(s2 => s2.id === s.id ? { ...s2, status: k } : s2), updatedAt: new Date().toISOString() })}
                     className={`text-xs px-2.5 py-1 rounded-xl font-semibold transition-all border ${s.status === k ? `${SOL_STATUS[k].bg} ${SOL_STATUS[k].color} border-transparent` : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'}`}>
                     {SOL_STATUS[k].label}
                   </button>
@@ -555,10 +556,10 @@ function SolutionsTab({ account, onSave, team }: { account: AccountData; onSave:
 /* ═══════════════════════════════════════════════════════════════════════════
    PAYMENTS TAB
 ═══════════════════════════════════════════════════════════════════════════ */
-function PaymentsTab({ account, onSave }: { account: AccountData; onSave: (a: AccountData) => void }) {
+function PaymentsTab({ project, onSave }: { project: Project; onSave: (p: Project) => void }) {
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState<Partial<PaymentRecord>>({ date: todayStr(), type: 'retainer', status: 'paid', amount: account.monthlyRetainer });
-  const payments = (account.payments ?? []).sort((a, b) => b.date.localeCompare(a.date));
+  const [form, setForm] = useState<Partial<PaymentRecord>>({ date: todayStr(), type: 'retainer', status: 'paid', amount: project.monthlyRetainer });
+  const payments = (project.payments ?? []).sort((a, b) => b.date.localeCompare(a.date));
   const totalPaid = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
   const totalPending = payments.filter(p => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
   const totalOverdue = payments.filter(p => p.status === 'overdue').reduce((s, p) => s + p.amount, 0);
@@ -566,13 +567,13 @@ function PaymentsTab({ account, onSave }: { account: AccountData; onSave: (a: Ac
   function addPayment() {
     if (!form.amount || !form.date) return;
     const rec: PaymentRecord = { id: Date.now().toString(), date: form.date!, amount: Number(form.amount), type: form.type ?? 'retainer', status: form.status ?? 'paid', ...(form.invoiceNumber ? { invoiceNumber: form.invoiceNumber } : {}), ...(form.status === 'paid' ? { paidAt: new Date().toISOString() } : {}) };
-    onSave({ ...account, payments: [rec, ...payments], updatedAt: new Date().toISOString() });
-    setAdding(false); setForm({ date: todayStr(), type: 'retainer', status: 'paid', amount: account.monthlyRetainer });
+    onSave({ ...project, payments: [rec, ...payments], updatedAt: new Date().toISOString() });
+    setAdding(false); setForm({ date: todayStr(), type: 'retainer', status: 'paid', amount: project.monthlyRetainer });
   }
 
   function toggleStatus(id: string) {
     const upd = payments.map(p => { if (p.id !== id) return p; const next: PaymentRecord['status'] = p.status === 'paid' ? 'pending' : p.status === 'pending' ? 'overdue' : 'paid'; return { ...p, status: next, ...(next === 'paid' ? { paidAt: new Date().toISOString() } : {}) }; });
-    onSave({ ...account, payments: upd, updatedAt: new Date().toISOString() });
+    onSave({ ...project, payments: upd, updatedAt: new Date().toISOString() });
   }
 
   return (
@@ -602,7 +603,7 @@ function PaymentsTab({ account, onSave }: { account: AccountData; onSave: (a: Ac
         {payments.length === 0 && <div className="text-center py-12 text-slate-300"><CreditCard size={32} className="mx-auto mb-3 opacity-50" /><p className="font-semibold">אין תשלומים עדיין</p></div>}
         {payments.map((p, i) => { const ps = PAY_STATUS[p.status]; return (
           <div key={p.id} className={`flex items-center gap-3 px-4 py-3.5 ${i < payments.length - 1 ? 'border-b border-slate-100' : ''} hover:bg-slate-50 transition-colors`}>
-            <button onClick={() => onSave({ ...account, payments: payments.filter(p2 => p2.id !== p.id), updatedAt: new Date().toISOString() })} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400"><Trash2 size={11} /></button>
+            <button onClick={() => onSave({ ...project, payments: payments.filter(p2 => p2.id !== p.id), updatedAt: new Date().toISOString() })} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400"><Trash2 size={11} /></button>
             <div className="flex-1 text-right"><div className="flex items-center justify-end gap-2">{p.invoiceNumber && <span className="text-xs text-slate-400 font-mono">{p.invoiceNumber}</span>}<span className="text-xs text-slate-400">{PAY_TYPE[p.type]}</span><span className="font-bold text-slate-800">{fmt(p.amount)}</span></div><span className="text-xs text-slate-400">{fmtD(p.date)}</span></div>
             <button onClick={() => toggleStatus(p.id)} className={`text-xs font-bold px-2.5 py-1 rounded-full cursor-pointer transition-colors ${ps.bg} ${ps.color}`}>{ps.label}</button>
           </div>
@@ -615,15 +616,15 @@ function PaymentsTab({ account, onSave }: { account: AccountData; onSave: (a: Ac
 /* ═══════════════════════════════════════════════════════════════════════════
    MEDIA TAB
 ═══════════════════════════════════════════════════════════════════════════ */
-function MediaTab({ account, onSave }: { account: AccountData; onSave: (a: AccountData) => void }) {
+function MediaTab({ project, onSave }: { project: Project; onSave: (p: Project) => void }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState<Partial<MediaRecord>>({ month: currentMonth(), platform: 'meta', spend: 0, leads: 0, conversions: 0 });
-  const records = account.mediaRecords ?? [];
+  const records = project.mediaRecords ?? [];
 
   function addRecord() {
     if (!form.month || form.spend === undefined) return;
     const rec: MediaRecord = { id: Date.now().toString(), month: form.month!, platform: form.platform ?? 'meta', spend: Number(form.spend), leads: Number(form.leads ?? 0), conversions: Number(form.conversions ?? 0), ...(form.impressions ? { impressions: Number(form.impressions) } : {}), ...(form.clicks ? { clicks: Number(form.clicks) } : {}), ...(form.notes ? { notes: form.notes } : {}) };
-    onSave({ ...account, mediaRecords: [...records, rec], updatedAt: new Date().toISOString() });
+    onSave({ ...project, mediaRecords: [...records, rec], updatedAt: new Date().toISOString() });
     setAdding(false); setForm({ month: currentMonth(), platform: 'meta', spend: 0, leads: 0, conversions: 0 });
   }
 
@@ -744,7 +745,7 @@ function MediaTab({ account, onSave }: { account: AccountData; onSave: (a: Accou
               const cfg = PLATFORM_CFG[r.platform]; const cpl = r.leads > 0 ? Math.round(r.spend / r.leads) : 0;
               return (
                 <div key={r.id} className={`flex items-center gap-3 px-4 py-3 ${i < recs.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                  <button onClick={() => onSave({ ...account, mediaRecords: records.filter(rec => rec.id !== r.id), updatedAt: new Date().toISOString() })} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 flex-shrink-0"><Trash2 size={11} /></button>
+                  <button onClick={() => onSave({ ...project, mediaRecords: records.filter(rec => rec.id !== r.id), updatedAt: new Date().toISOString() })} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 flex-shrink-0"><Trash2 size={11} /></button>
                   <div className="flex-1 text-right">
                     <div className="flex items-center justify-end gap-3 text-sm">
                       <span className="text-slate-400 text-xs">CPL: {cpl ? fmt(cpl) : '—'}</span>
@@ -768,28 +769,28 @@ function MediaTab({ account, onSave }: { account: AccountData; onSave: (a: Accou
 /* ═══════════════════════════════════════════════════════════════════════════
    REPORT TAB
 ═══════════════════════════════════════════════════════════════════════════ */
-function ReportTab({ lead, account }: { lead: Lead; account: AccountData }) {
+function ReportTab({ lead, project }: { lead: Lead; project: Project }) {
   const [month, setMonth] = useState(currentMonth());
 
-  const mediaRecs = (account.mediaRecords ?? []).filter(r => r.month === month);
+  const mediaRecs = (project.mediaRecords ?? []).filter(r => r.month === month);
   const totalSpend = mediaRecs.reduce((s, r) => s + r.spend, 0);
   const totalLeads = mediaRecs.reduce((s, r) => s + r.leads, 0);
   const totalConv  = mediaRecs.reduce((s, r) => s + r.conversions, 0);
   const cpl = totalLeads > 0 ? Math.round(totalSpend / totalLeads) : 0;
   const totalImpressions = mediaRecs.reduce((s, r) => s + (r.impressions ?? 0), 0);
 
-  const solutions = account.solutions ?? [];
+  const solutions = project.solutions ?? [];
   const approved = solutions.filter(s => s.status === 'approved').length;
   const inProgress = solutions.filter(s => s.status === 'in_progress').length;
 
-  const cmPayment = (account.payments ?? []).filter(p => p.date.startsWith(month));
+  const cmPayment = (project.payments ?? []).filter(p => p.date.startsWith(month));
   const paidThisMonth = cmPayment.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
 
-  const goal = (account.goals ?? []).find(g => g.month === month);
+  const goal = (project.goals ?? []).find(g => g.month === month);
 
-  const activityThisMonth = (account.activityLog ?? []).filter(a => a.timestamp.startsWith(month));
+  const activityThisMonth = (project.activityLog ?? []).filter(a => a.timestamp.startsWith(month));
 
-  const score = calcHealth(lead, account);
+  const score = calcHealth(lead, project);
   const hm = healthMeta(score);
 
   const bestPlatform = mediaRecs.length > 0 ? mediaRecs.sort((a, b) => b.leads - a.leads)[0] : null;
@@ -899,10 +900,10 @@ function ReportTab({ lead, account }: { lead: Lead; account: AccountData }) {
           )}
 
           {/* Next step */}
-          {account.nextStep && (
+          {project.nextStep && (
             <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-right">
               <p className="text-xs font-bold text-indigo-600 mb-1">→ הצעד הבא</p>
-              <p className="text-sm text-indigo-800">{account.nextStep}</p>
+              <p className="text-sm text-indigo-800">{project.nextStep}</p>
             </div>
           )}
         </div>
@@ -912,7 +913,7 @@ function ReportTab({ lead, account }: { lead: Lead; account: AccountData }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   PROJECTS TAB
+   PROJECTS LIST + PROJECT DETAIL VIEW
 ═══════════════════════════════════════════════════════════════════════════ */
 const PROJ_STATUS: Record<ProjectStatus, { label: string; color: string; bg: string; dot: string }> = {
   planning:  { label: 'תכנון',     color: 'text-slate-600',   bg: 'bg-slate-100',   dot: 'bg-slate-400'   },
@@ -930,276 +931,321 @@ const PROJ_PRIORITY: Record<ProjectPriority, { label: string; color: string }> =
 
 const PROJ_COLORS = ['bg-indigo-500','bg-violet-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-blue-500','bg-teal-500','bg-orange-500'];
 
-function blankProject(): Omit<Project, 'id' | 'createdAt' | 'updatedAt'> {
-  return { name: '', description: '', status: 'planning', priority: 'medium', tasks: [], color: PROJ_COLORS[0] };
+const PROJ_STATUS_CFG = {
+  planning:  { label: 'תכנון',    color: 'text-slate-600',   bg: 'bg-slate-100'   },
+  active:    { label: 'פעיל',     color: 'text-blue-700',    bg: 'bg-blue-100'    },
+  review:    { label: 'סקירה',    color: 'text-amber-700',   bg: 'bg-amber-100'   },
+  completed: { label: 'הושלם ✓', color: 'text-emerald-700', bg: 'bg-emerald-100' },
+  paused:    { label: 'מושהה',    color: 'text-rose-600',    bg: 'bg-rose-100'    },
+};
+
+function blankProject(): Project {
+  return {
+    id: Date.now().toString(),
+    name: '',
+    description: '',
+    status: 'planning',
+    priority: 'medium',
+    color: PROJ_COLORS[0],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tasks: [],
+    solutions: [],
+    payments: [],
+    activityLog: [],
+    mediaRecords: [],
+    goals: [],
+    links: [],
+    files: [],
+    proposals: [],
+    upsellNote: '',
+  };
 }
 
-function ProjectDetail({ project, onSave, onClose, team }: {
-  project: Project; onSave: (p: Project) => void; onClose: () => void; team: string[];
+function ProjectsList({ account, team, onSelectProject, onSaveAccount }: {
+  account: AccountData;
+  team: string[];
+  onSelectProject: (p: Project) => void;
+  onSaveAccount: (a: AccountData) => void;
 }) {
-  const [p, setP] = useState<Project>(project);
-  const [newTask, setNewTask] = useState('');
-  const [editingMeta, setEditingMeta] = useState(false);
-
-  const completedTasks = p.tasks.filter(t => t.completed).length;
-  const progress = p.tasks.length > 0 ? Math.round((completedTasks / p.tasks.length) * 100) : 0;
-
-  function save(updated: Project) { setP(updated); onSave(updated); }
-
-  function toggleTask(id: string) {
-    const updated = { ...p, tasks: p.tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t), updatedAt: new Date().toISOString() };
-    save(updated);
-  }
-  function addTask() {
-    if (!newTask.trim()) return;
-    const task: ProjectTask = { id: Date.now().toString(), title: newTask.trim(), completed: false };
-    const updated = { ...p, tasks: [...p.tasks, task], updatedAt: new Date().toISOString() };
-    save(updated); setNewTask('');
-  }
-  function removeTask(id: string) {
-    save({ ...p, tasks: p.tasks.filter(t => t.id !== id), updatedAt: new Date().toISOString() });
-  }
-
-  return (
-    <div className="space-y-5">
-      {/* Back + Status row */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex gap-1.5 flex-wrap">
-          {(Object.keys(PROJ_STATUS) as ProjectStatus[]).map(s => (
-            <button key={s} onClick={() => save({ ...p, status: s, updatedAt: new Date().toISOString() })}
-              className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all ${p.status === s ? `${PROJ_STATUS[s].bg} ${PROJ_STATUS[s].color} border-current/20` : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'}`}>
-              {PROJ_STATUS[s].label}
-            </button>
-          ))}
-        </div>
-        <button onClick={onClose} className="flex items-center gap-1.5 text-sm font-bold text-slate-600 hover:text-slate-900">
-          חזרה לפרויקטים ←
-        </button>
-      </div>
-
-      {/* Header card */}
-      <div className={`${p.color ?? 'bg-indigo-500'} rounded-2xl p-6 text-white`}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button onClick={() => setEditingMeta(v => !v)} className="flex items-center gap-1.5 text-xs font-bold bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-xl transition-colors">
-              <Sliders size={11} /> {editingMeta ? 'סגור' : 'ערוך'}
-            </button>
-          </div>
-          <div className="text-right">
-            <h2 className="text-2xl font-black">{p.name}</h2>
-            {p.description && <p className="text-white/70 text-sm mt-0.5">{p.description}</p>}
-          </div>
-        </div>
-        {/* Progress */}
-        {p.tasks.length > 0 && (
-          <div className="mt-4">
-            <div className="flex justify-between text-xs text-white/70 mb-1.5"><span>{completedTasks}/{p.tasks.length} משימות</span><span>{progress}%</span></div>
-            <div className="h-2 bg-white/20 rounded-full"><div className="h-2 bg-white rounded-full transition-all duration-500" style={{ width: `${progress}%` }} /></div>
-          </div>
-        )}
-        <div className="mt-3 flex gap-3 text-xs text-white/70 flex-wrap">
-          {p.dueDate && <span>📅 יעד: {fmtD(p.dueDate)}</span>}
-          {p.budget && <span>💰 {fmt(p.budget)}</span>}
-          {p.assignedTo && <span>👤 {p.assignedTo}</span>}
-          <span className={`font-bold text-white`}>⚑ {PROJ_PRIORITY[p.priority].label}</span>
-        </div>
-      </div>
-
-      {/* Edit meta panel */}
-      {editingMeta && (
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-slate-500 mb-1 block">שם הפרויקט *</label><input value={p.name} onChange={e => setP(v => ({ ...v, name: e.target.value }))} onBlur={() => save(p)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">עדיפות</label>
-              <select value={p.priority} onChange={e => save({ ...p, priority: e.target.value as ProjectPriority, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none">
-                {(Object.keys(PROJ_PRIORITY) as ProjectPriority[]).map(k => <option key={k} value={k}>{PROJ_PRIORITY[k].label}</option>)}
-              </select>
-            </div>
-          </div>
-          <div><label className="text-xs text-slate-500 mb-1 block">תיאור</label><textarea value={p.description || ''} onChange={e => setP(v => ({ ...v, description: e.target.value }))} onBlur={() => save(p)} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className="text-xs text-slate-500 mb-1 block">תאריך התחלה</label><input type="date" value={p.startDate || ''} onChange={e => save({ ...p, startDate: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">תאריך יעד</label><input type="date" value={p.dueDate || ''} onChange={e => save({ ...p, dueDate: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">תקציב (₪)</label><input type="number" min={0} value={p.budget || ''} onChange={e => save({ ...p, budget: Number(e.target.value) || undefined, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
-          </div>
-          <div><label className="text-xs text-slate-500 mb-1 block">אחראי</label>
-            <select value={p.assignedTo || ''} onChange={e => save({ ...p, assignedTo: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none">
-              <option value="">ללא שיוך</option>{team.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-2 block">צבע</label>
-            <div className="flex gap-2 justify-end">{PROJ_COLORS.map(c => <button key={c} onClick={() => save({ ...p, color: c, updatedAt: new Date().toISOString() })} className={`w-7 h-7 rounded-xl ${c} transition-all ${p.color === c ? 'ring-2 ring-offset-1 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />)}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Tasks */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-        <h3 className="font-bold text-slate-800 mb-4 text-right flex items-center justify-end gap-2">
-          <ListChecks size={15} className="text-indigo-500" /> משימות פרויקט ({completedTasks}/{p.tasks.length})
-        </h3>
-        <div className="flex gap-2 mb-4">
-          <button onClick={addTask} disabled={!newTask.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">הוסף</button>
-          <input value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="משימה חדשה..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
-        </div>
-        <div className="space-y-2">
-          {p.tasks.length === 0 && <p className="text-center text-slate-300 text-sm py-4">הוסף משימות לפרויקט</p>}
-          {p.tasks.map(t => (
-            <div key={t.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-colors ${t.completed ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}>
-              <button onClick={() => removeTask(t.id)} className="w-5 h-5 rounded-md bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 flex-shrink-0"><X size={10} /></button>
-              <div className="flex-1 text-right">
-                <span className={`text-sm ${t.completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>{t.title}</span>
-                {t.dueDate && <span className="text-xs text-slate-400 block">{fmtD(t.dueDate)}</span>}
-              </div>
-              <button onClick={() => toggleTask(t.id)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${t.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 hover:border-emerald-400'}`}>
-                {t.completed && <Check size={11} className="text-white" />}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Notes */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-        <h3 className="font-bold text-slate-800 mb-3 text-right">הערות פרויקט</h3>
-        <textarea value={p.notes || ''} onChange={e => setP(v => ({ ...v, notes: e.target.value }))} onBlur={() => save(p)} rows={4} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" placeholder="הערות, קישורים, מידע חשוב..." />
-      </div>
-    </div>
-  );
-}
-
-function ProjectsTab({ account, onSave, team }: { account: AccountData; onSave: (a: AccountData) => void; team: string[] }) {
-  const projects = account.projects ?? [];
-  const [openId, setOpenId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState(blankProject());
+  const [form, setForm] = useState<{ name: string; description: string; color: string; status: ProjectStatus; priority: ProjectPriority; monthlyRetainer: string; contractStart: string; contractEnd: string; assignedTo: string }>({
+    name: '', description: '', color: PROJ_COLORS[0], status: 'planning', priority: 'medium',
+    monthlyRetainer: '', contractStart: '', contractEnd: '', assignedTo: '',
+  });
 
-  function createProject() {
+  const projects = account.projects ?? [];
+
+  const createProject = () => {
     if (!form.name.trim()) return;
-    const now = new Date().toISOString();
-    const proj: Project = { ...form, id: Date.now().toString(), createdAt: now, updatedAt: now };
-    onSave({ ...account, projects: [...projects, proj], updatedAt: now });
-    setOpenId(proj.id);
+    const newProj: Project = {
+      ...blankProject(),
+      name: form.name.trim(),
+      description: form.description.trim(),
+      color: form.color,
+      status: form.status,
+      priority: form.priority,
+      monthlyRetainer: form.monthlyRetainer ? Number(form.monthlyRetainer) : undefined,
+      contractStart: form.contractStart || undefined,
+      contractEnd: form.contractEnd || undefined,
+      assignedTo: form.assignedTo || undefined,
+    };
+    onSaveAccount({
+      ...account,
+      projects: [...projects, newProj],
+      updatedAt: new Date().toISOString(),
+    });
     setCreating(false);
-    setForm(blankProject());
-  }
+    setForm({ name: '', description: '', color: PROJ_COLORS[0], status: 'planning', priority: 'medium', monthlyRetainer: '', contractStart: '', contractEnd: '', assignedTo: '' });
+  };
 
-  function updateProject(proj: Project) {
-    onSave({ ...account, projects: projects.map(p => p.id === proj.id ? proj : p), updatedAt: new Date().toISOString() });
-  }
-
-  function deleteProject(id: string) {
-    onSave({ ...account, projects: projects.filter(p => p.id !== id), updatedAt: new Date().toISOString() });
-    if (openId === id) setOpenId(null);
-  }
-
-  const openProject = openId ? projects.find(p => p.id === openId) : null;
-  if (openProject) {
-    return <ProjectDetail project={openProject} onSave={updateProject} onClose={() => setOpenId(null)} team={team} />;
-  }
-
-  const active = projects.filter(p => p.status === 'active').length;
-  const completed = projects.filter(p => p.status === 'completed').length;
+  const deleteProject = (id: string) => {
+    onSaveAccount({
+      ...account,
+      projects: projects.filter(p => p.id !== id),
+      updatedAt: new Date().toISOString(),
+    });
+  };
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <button onClick={() => setCreating(true)} className="flex items-center gap-1.5 text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl shadow-sm transition-colors">
-          <Plus size={14} /> פרויקט חדש
+        <button
+          onClick={() => setCreating(true)}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-sm"
+        >
+          <Plus size={15} /> פרויקט חדש
         </button>
-        {projects.length > 0 && (
-          <div className="flex gap-4 text-xs text-slate-500">
-            <span className="text-blue-600 font-bold">{active} פעילים</span>
-            <span className="text-emerald-600 font-bold">{completed} הושלמו</span>
-            <span>{projects.length} סה״כ</span>
-          </div>
-        )}
+        <div className="text-right">
+          <p className="text-xs text-slate-400">פרויקטים</p>
+          <p className="font-black text-slate-800 text-lg">{projects.length}</p>
+        </div>
       </div>
 
       {/* Create form */}
       {creating && (
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-          <h4 className="font-bold text-slate-800 text-sm text-right">פרויקט חדש</h4>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-slate-500 mb-1 block">שם הפרויקט *</label><input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" placeholder="קמפיין Q3, הדמיות לפרויקט X..." /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">עדיפות</label>
-              <select value={form.priority} onChange={e => setForm(p => ({ ...p, priority: e.target.value as ProjectPriority }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none">
-                {(Object.keys(PROJ_PRIORITY) as ProjectPriority[]).map(k => <option key={k} value={k}>{PROJ_PRIORITY[k].label}</option>)}
-              </select>
+        <div className="bg-white border-2 border-indigo-200 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <button onClick={() => setCreating(false)} className="w-7 h-7 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-400"><X size={14} /></button>
+            <h3 className="font-black text-slate-900">פרויקט חדש</h3>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">שם הפרויקט *</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                placeholder="שם הפרויקט..." autoFocus />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">תיאור</label>
+              <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                placeholder="תיאור קצר..." />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">ריטיינר חודשי (₪)</label>
+                <input type="number" value={form.monthlyRetainer} onChange={e => setForm(f => ({ ...f, monthlyRetainer: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  placeholder="0" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">אחראי</label>
+                <select value={form.assignedTo} onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  <option value="">בחר...</option>
+                  {team.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">תחילת חוזה</label>
+                <input type="date" value={form.contractStart} onChange={e => setForm(f => ({ ...f, contractStart: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">סיום חוזה</label>
+                <input type="date" value={form.contractEnd} onChange={e => setForm(f => ({ ...f, contractEnd: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+              </div>
+            </div>
+            {/* Color picker */}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-2">צבע</label>
+              <div className="flex gap-2 flex-wrap">
+                {PROJ_COLORS.map(c => (
+                  <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
+                    className={`w-7 h-7 rounded-lg ${c} transition-all ${form.color === c ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />
+                ))}
+              </div>
             </div>
           </div>
-          <div><label className="text-xs text-slate-500 mb-1 block">תיאור קצר</label><input value={form.description || ''} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-slate-500 mb-1 block">תאריך יעד</label><input type="date" value={form.dueDate || ''} onChange={e => setForm(p => ({ ...p, dueDate: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">תקציב (₪)</label><input type="number" min={0} value={form.budget || ''} onChange={e => setForm(p => ({ ...p, budget: Number(e.target.value) || undefined }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none" /></div>
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-2 block">צבע</label>
-            <div className="flex gap-2 justify-end">{PROJ_COLORS.map(c => <button key={c} onClick={() => setForm(p => ({ ...p, color: c }))} className={`w-7 h-7 rounded-xl ${c} transition-all ${form.color === c ? 'ring-2 ring-offset-1 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />)}</div>
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => { setCreating(false); setForm(blankProject()); }} className="px-4 py-2 text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-xl">ביטול</button>
-            <button onClick={createProject} disabled={!form.name.trim()} className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-500 disabled:opacity-40">צור פרויקט</button>
-          </div>
+
+          <button onClick={createProject}
+            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-colors">
+            צור פרויקט
+          </button>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {projects.length === 0 && !creating && (
+        <div className="text-center py-16 text-slate-300">
+          <FolderOpen size={48} className="mx-auto mb-3 opacity-50" />
+          <p className="font-semibold text-slate-400">אין פרויקטים עדיין</p>
+          <p className="text-sm mt-1">לחץ "פרויקט חדש" כדי להתחיל</p>
         </div>
       )}
 
       {/* Projects grid */}
-      {projects.length === 0 && !creating ? (
-        <div className="text-center py-12 text-slate-300">
-          <Layers size={40} className="mx-auto mb-3 opacity-50" />
-          <p className="font-semibold">אין פרויקטים עדיין</p>
-          <p className="text-sm mt-1">צור פרויקט לניהול עבודה ומשימות ללקוח</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {projects.map(proj => {
-            const st = PROJ_STATUS[proj.status];
-            const completedT = proj.tasks.filter(t => t.completed).length;
-            const prog = proj.tasks.length > 0 ? Math.round((completedT / proj.tasks.length) * 100) : null;
-            const overdue = proj.dueDate && new Date(proj.dueDate) < new Date() && proj.status !== 'completed';
-            return (
-              <div key={proj.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden group">
-                {/* Color bar */}
-                <div className={`h-1.5 ${proj.color ?? 'bg-indigo-500'}`} />
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button onClick={() => deleteProject(proj.id)} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={11} /></button>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {projects.map(proj => {
+          const st = PROJ_STATUS_CFG[proj.status];
+          const doneTasks = proj.tasks.filter(t => t.completed).length;
+          const totalTasks = proj.tasks.length;
+          const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+          return (
+            <div key={proj.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group">
+              {/* Color bar */}
+              <div className={`h-1.5 ${proj.color ?? 'bg-indigo-500'}`} />
+              <div className="p-4">
+                <div className="flex items-start justify-between mb-3">
+                  <button onClick={() => deleteProject(proj.id)}
+                    className="opacity-0 group-hover:opacity-100 w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 transition-all flex-shrink-0">
+                    <Trash2 size={11} />
+                  </button>
+                  <div className="text-right flex-1 min-w-0 mr-2">
+                    <div className="flex items-center justify-end gap-2 mb-0.5">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>{st.label}</span>
+                      <h3 className="font-black text-slate-900 truncate">{proj.name}</h3>
                     </div>
-                    <div className="text-right min-w-0 flex-1">
-                      <div className="flex items-center justify-end gap-2 mb-0.5">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>{st.label}</span>
-                        <h4 className="font-black text-slate-900 truncate">{proj.name}</h4>
-                      </div>
-                      {proj.description && <p className="text-xs text-slate-500 truncate">{proj.description}</p>}
-                    </div>
-                  </div>
-                  {prog !== null && (
-                    <div className="mb-3">
-                      <div className="flex justify-between text-xs text-slate-400 mb-1"><span>{prog}%</span><span>{completedT}/{proj.tasks.length} משימות</span></div>
-                      <div className="h-1.5 bg-slate-100 rounded-full"><div className={`h-1.5 rounded-full ${proj.color ?? 'bg-indigo-500'} transition-all`} style={{ width: `${prog}%` }} /></div>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <div className="flex gap-2 text-xs text-slate-400 flex-wrap">
-                      {overdue && <span className="text-red-500 font-bold">⚠ פג תוקף</span>}
-                      {proj.dueDate && !overdue && <span>📅 {fmtD(proj.dueDate)}</span>}
-                      {proj.budget && <span>₪{(proj.budget / 1000).toFixed(0)}K</span>}
-                      <span className={PROJ_PRIORITY[proj.priority].color + ' font-semibold'}>⚑ {PROJ_PRIORITY[proj.priority].label}</span>
-                    </div>
-                    <button onClick={() => setOpenId(proj.id)} className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700 transition-colors">
-                      פתח <FolderOpen size={12} />
-                    </button>
+                    {proj.description && <p className="text-xs text-slate-400 truncate">{proj.description}</p>}
                   </div>
                 </div>
+
+                {/* Stats row */}
+                <div className="flex gap-2 mb-3 text-xs">
+                  {proj.monthlyRetainer && (
+                    <div className="bg-slate-50 rounded-lg px-2.5 py-1.5 text-right flex-1">
+                      <p className="text-slate-400 text-[10px]">ריטיינר</p>
+                      <p className="font-bold text-slate-700">{fmtK(proj.monthlyRetainer)}</p>
+                    </div>
+                  )}
+                  <div className="bg-slate-50 rounded-lg px-2.5 py-1.5 text-right flex-1">
+                    <p className="text-slate-400 text-[10px]">הצעות מחיר</p>
+                    <p className="font-bold text-indigo-600">{proj.proposals?.length ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-50 rounded-lg px-2.5 py-1.5 text-right flex-1">
+                    <p className="text-slate-400 text-[10px]">תשלומים</p>
+                    <p className="font-bold text-emerald-600">{proj.payments?.filter(p => p.status === 'paid').length ?? 0}</p>
+                  </div>
+                </div>
+
+                {/* Task progress */}
+                {totalTasks > 0 && (
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                      <span>{pct}%</span>
+                      <span>משימות {doneTasks}/{totalTasks}</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full">
+                      <div className={`h-1.5 rounded-full ${proj.color ?? 'bg-indigo-500'} transition-all`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Contract dates */}
+                {proj.contractEnd && (
+                  <p className="text-[10px] text-slate-400 mb-3 text-right">
+                    {daysTo(proj.contractEnd) > 0 ? `${daysTo(proj.contractEnd)} ימים לסיום החוזה` : 'החוזה הסתיים'}
+                  </p>
+                )}
+
+                <button onClick={() => onSelectProject(proj)}
+                  className={`w-full py-2 rounded-xl text-white text-xs font-bold transition-colors ${proj.color ?? 'bg-indigo-500'} hover:opacity-90`}>
+                  פתח פרויקט
+                </button>
               </div>
-            );
-          })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const PROJ_TABS = [
+  { key: 'overview'  as const, label: 'סקירה',      icon: Activity   },
+  { key: 'solutions' as const, label: 'פתרונות',    icon: Package    },
+  { key: 'payments'  as const, label: 'תשלומים',    icon: CreditCard },
+  { key: 'media'     as const, label: 'מדיה',       icon: BarChart2  },
+  { key: 'materials' as const, label: 'חומרים',     icon: Folder     },
+  { key: 'proposals' as const, label: 'הצעות מחיר', icon: Receipt    },
+  { key: 'report'    as const, label: 'דוח',         icon: FileText   },
+];
+
+function ProjectDetailView({ lead, account, project, onSaveProject, onBack, onLeadClick, currentUser, team }: {
+  lead: Lead;
+  account: AccountData;
+  project: Project;
+  onSaveProject: (p: Project) => void;
+  onBack: () => void;
+  onLeadClick: (l: Lead) => void;
+  currentUser: string;
+  team: string[];
+}) {
+  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'proposals' | 'report'>('overview');
+  const st = PROJ_STATUS_CFG[project.status];
+
+  return (
+    <div className="space-y-5">
+      {/* Breadcrumb */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => onLeadClick(lead)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl transition-colors"><Zap size={12} className="text-indigo-500" /> פתח כרטיס ליד</button>
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors">{lead.company} <ArrowRight size={16} /></button>
+      </div>
+
+      {/* Project header */}
+      <div className={`rounded-2xl p-5 text-white shadow-lg ${project.color ?? 'bg-indigo-500'}`}>
+        <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-white/20 self-start">{st.label}</span>
+            {project.contractEnd && (
+              <span className="text-xs text-white/70">{daysTo(project.contractEnd) > 0 ? `${daysTo(project.contractEnd)} ימים נותרו` : 'הסתיים'}</span>
+            )}
+          </div>
+          <div className="text-right">
+            <h2 className="text-2xl font-black">{project.name}</h2>
+            {project.description && <p className="text-white/70 text-sm mt-0.5">{project.description}</p>}
+          </div>
         </div>
-      )}
+        {project.monthlyRetainer && (
+          <div className="mt-4 flex justify-end">
+            <span className="text-white/70 text-xs">ריטיינר חודשי: </span>
+            <span className="text-white font-bold text-sm mr-1">{fmtK(project.monthlyRetainer)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-2xl overflow-x-auto">
+        {PROJ_TABS.map(t => { const Icon = t.icon; return (
+          <button key={t.key} onClick={() => setTab(t.key)} className={`flex-1 min-w-fit flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${tab === t.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+            <Icon size={13} />{t.label}
+          </button>
+        ); })}
+      </div>
+
+      {tab === 'overview'  && <OverviewTab   lead={lead} project={project} onSave={onSaveProject} currentUser={currentUser} />}
+      {tab === 'solutions' && <SolutionsTab  project={project} onSave={onSaveProject} team={team} />}
+      {tab === 'payments'  && <PaymentsTab   project={project} onSave={onSaveProject} />}
+      {tab === 'media'     && <MediaTab      project={project} onSave={onSaveProject} />}
+      {tab === 'materials' && <MaterialsTab  project={project} onSave={onSaveProject} currentUser={currentUser} leadId={lead.id} />}
+      {tab === 'proposals' && <ProposalsTab  project={project} onSave={onSaveProject} clientName={lead.company} />}
+      {tab === 'report'    && <ReportTab     lead={lead} project={project} />}
     </div>
   );
 }
@@ -1223,10 +1269,10 @@ function kindIcon(kind: FileKind, className = 'w-full h-full object-cover') {
   return <FileText size={22} className="text-slate-400" />;
 }
 
-function MaterialsTab({ account, onSave, currentUser, leadId }: {
-  account: AccountData; onSave: (a: AccountData) => void; currentUser: string; leadId: string;
+function MaterialsTab({ project, onSave, currentUser, leadId }: {
+  project: Project; onSave: (p: Project) => void; currentUser: string; leadId: string;
 }) {
-  const files = account.files ?? [];
+  const files = project.files ?? [];
   const [catFilter,  setCatFilter]  = useState<FileCategory | 'all'>('all');
   const [uploading,  setUploading]  = useState(false);
   const [progress,   setProgress]   = useState(0);
@@ -1264,7 +1310,7 @@ function MaterialsTab({ account, onSave, currentUser, leadId }: {
           id: Date.now().toString(), title: file.name, category: 'documents', kind,
           url, storagePath: path, size: file.size, createdAt: new Date().toISOString(), uploadedBy: currentUser,
         };
-        onSave({ ...account, files: [...files, newFile], updatedAt: new Date().toISOString() });
+        onSave({ ...project, files: [...files, newFile], updatedAt: new Date().toISOString() });
         setUploading(false);
       }
     );
@@ -1274,11 +1320,11 @@ function MaterialsTab({ account, onSave, currentUser, leadId }: {
     if (!linkForm.title?.trim() || !linkForm.url?.trim()) return;
     const now = new Date().toISOString();
     if (editId) {
-      onSave({ ...account, files: files.map(f => f.id === editId ? { ...f, ...linkForm } as ClientFile : f), updatedAt: now });
+      onSave({ ...project, files: files.map(f => f.id === editId ? { ...f, ...linkForm } as ClientFile : f), updatedAt: now });
       setEditId(null);
     } else {
       const f: ClientFile = { id: Date.now().toString(), title: linkForm.title!, category: linkForm.category ?? 'documents', kind: linkForm.kind ?? 'link', url: linkForm.url!, aiContext: linkForm.aiContext, notes: linkForm.notes, createdAt: now, uploadedBy: currentUser };
-      onSave({ ...account, files: [...files, f], updatedAt: now });
+      onSave({ ...project, files: [...files, f], updatedAt: now });
     }
     setLinkForm({ category: 'documents', kind: 'link', title: '', url: '', aiContext: '', notes: '' });
     setAddingLink(false);
@@ -1288,7 +1334,7 @@ function MaterialsTab({ account, onSave, currentUser, leadId }: {
     if (f.storagePath) {
       try { await deleteObject(ref(storage, f.storagePath)); } catch { /* already deleted */ }
     }
-    onSave({ ...account, files: files.filter(x => x.id !== f.id), updatedAt: new Date().toISOString() });
+    onSave({ ...project, files: files.filter(x => x.id !== f.id), updatedAt: new Date().toISOString() });
   }
 
   function startEdit(f: ClientFile) { setLinkForm({ ...f }); setEditId(f.id); setAddingLink(true); }
@@ -1725,23 +1771,23 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
   );
 }
 
-function ProposalsTab({ account, onSave, clientName }: { account: AccountData; onSave: (a: AccountData) => void; clientName: string }) {
-  const proposals = account.proposals ?? [];
+function ProposalsTab({ project, onSave, clientName }: { project: Project; onSave: (p: Project) => void; clientName: string }) {
+  const proposals = project.proposals ?? [];
   const [openId, setOpenId] = useState<string | null>(null);
 
   function createProposal() {
     const now = new Date().toISOString();
     const p: Proposal = { id: Date.now().toString(), title: 'הצעת מחיר חדשה', clientName, items: [blankItem()], status: 'draft', createdAt: now };
-    onSave({ ...account, proposals: [...proposals, p], updatedAt: now });
+    onSave({ ...project, proposals: [...proposals, p], updatedAt: now });
     setOpenId(p.id);
   }
 
   function updateProposal(p: Proposal) {
-    onSave({ ...account, proposals: proposals.map(x => x.id === p.id ? p : x), updatedAt: new Date().toISOString() });
+    onSave({ ...project, proposals: proposals.map(x => x.id === p.id ? p : x), updatedAt: new Date().toISOString() });
   }
 
   function deleteProposal(id: string) {
-    onSave({ ...account, proposals: proposals.filter(p => p.id !== id), updatedAt: new Date().toISOString() });
+    onSave({ ...project, proposals: proposals.filter(p => p.id !== id), updatedAt: new Date().toISOString() });
     if (openId === id) setOpenId(null);
   }
 
@@ -1819,29 +1865,50 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
   onBack: () => void; onLeadClick: (l: Lead) => void;
   currentUser: string; team: string[];
 }) {
-  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'projects' | 'proposals' | 'report'>('overview');
-  const score = calcHealth(lead, account);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const score = calcHealth(lead, undefined, account.contractEnd);
   const hm = healthMeta(score);
 
-  const TABS = [
-    { key: 'overview'   as const, label: 'סקירה',       icon: Activity  },
-    { key: 'solutions'  as const, label: 'פתרונות',     icon: Package   },
-    { key: 'payments'   as const, label: 'תשלומים',     icon: CreditCard},
-    { key: 'media'      as const, label: 'מדיה',        icon: BarChart2 },
-    { key: 'projects'   as const, label: 'פרויקטים',    icon: Layers    },
-    { key: 'materials'  as const, label: 'חומרים',      icon: Folder    },
-    { key: 'proposals'  as const, label: 'הצעות מחיר',  icon: Receipt   },
-    { key: 'report'     as const, label: 'דוח',          icon: FileText  },
-  ];
+  // Save a project back into the account
+  const saveProject = (updatedProject: Project) => {
+    const updatedAccount: AccountData = {
+      ...account,
+      projects: account.projects.some(p => p.id === updatedProject.id)
+        ? account.projects.map(p => p.id === updatedProject.id ? updatedProject : p)
+        : [...account.projects, updatedProject],
+      updatedAt: new Date().toISOString(),
+    };
+    onSave(updatedAccount);
+    setSelectedProject(updatedProject);
+  };
 
+  // If a project is selected, show the project detail
+  if (selectedProject) {
+    const freshProject = account.projects.find(p => p.id === selectedProject.id) ?? selectedProject;
+    return (
+      <ProjectDetailView
+        lead={lead}
+        account={account}
+        project={freshProject}
+        onSaveProject={saveProject}
+        onBack={() => setSelectedProject(null)}
+        onLeadClick={onLeadClick}
+        currentUser={currentUser}
+        team={team}
+      />
+    );
+  }
+
+  // Otherwise show the projects list
   return (
     <div className="space-y-5">
+      {/* Back + open lead */}
       <div className="flex items-center justify-between">
         <button onClick={() => onLeadClick(lead)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl transition-colors"><Zap size={12} className="text-indigo-500" /> פתח כרטיס ליד</button>
         <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors">חזרה לרשימה <ArrowRight size={16} /></button>
       </div>
 
-      {/* Header */}
+      {/* Client header card */}
       <div className={`bg-white rounded-2xl border-2 ${hm.ring} shadow-sm p-5`}>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
@@ -1857,26 +1924,15 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
             <p className="text-slate-500 text-sm">{lead.contactName} · {lead.assignedTo}</p>
           </div>
         </div>
-        <div className="mt-4 h-2 bg-slate-100 rounded-full"><div className={`h-2 rounded-full ${hm.bg} transition-all duration-700`} style={{ width: `${score}%` }} /></div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-2xl overflow-x-auto">
-        {TABS.map(t => { const Icon = t.icon; return (
-          <button key={t.key} onClick={() => setTab(t.key)} className={`flex-1 min-w-fit flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${tab === t.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <Icon size={13} />{t.label}
-          </button>
-        ); })}
-      </div>
-
-      {tab === 'overview'   && <OverviewTab   lead={lead} account={account} onSave={onSave} currentUser={currentUser} />}
-      {tab === 'solutions'  && <SolutionsTab  account={account} onSave={onSave} team={team} />}
-      {tab === 'payments'   && <PaymentsTab   account={account} onSave={onSave} />}
-      {tab === 'media'      && <MediaTab      account={account} onSave={onSave} />}
-      {tab === 'projects'   && <ProjectsTab   account={account} onSave={onSave} team={team} />}
-      {tab === 'materials'  && <MaterialsTab  account={account} onSave={onSave} currentUser={currentUser} leadId={lead.id} />}
-      {tab === 'proposals'  && <ProposalsTab  account={account} onSave={onSave} clientName={lead.company} />}
-      {tab === 'report'     && <ReportTab     lead={lead} account={account} />}
+      {/* Projects section */}
+      <ProjectsList
+        account={account}
+        team={team}
+        onSelectProject={setSelectedProject}
+        onSaveAccount={onSave}
+      />
     </div>
   );
 }
@@ -1885,17 +1941,17 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
    CLIENT CARD (grid)
 ═══════════════════════════════════════════════════════════════════════════ */
 function ClientCard({ lead, account, onClick }: { lead: Lead; account: AccountData | undefined; onClick: () => void }) {
-  const score = calcHealth(lead, account);
+  const score = calcHealth(lead, undefined, account?.contractEnd);
   const hm = healthMeta(score);
-  const solutions = account?.solutions ?? [];
-  const approved = solutions.filter(s => s.status === 'approved').length;
-  const solPct = solutions.length > 0 ? Math.round((approved / solutions.length) * 100) : 0;
+  const allPayments = (account?.projects ?? []).flatMap(p => p.payments ?? []);
+  const overduePay = allPayments.some(p => p.status === 'overdue');
+  const daysLeft = account?.contractEnd ? daysTo(account.contractEnd) : null;
+  const cmMedia = (account?.projects ?? []).flatMap(p => (p.mediaRecords ?? []).filter(r => r.month === currentMonth()));
+  const cmLeads = cmMedia.reduce((s, r) => s + r.leads, 0);
   const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
   const overdueT = lead.tasks.filter(t => { if (t.completed) return false; try { return new Date(t.date + 'T00:00:00') < midnight; } catch { return false; } });
-  const overduePay = (account?.payments ?? []).some(p => p.status === 'overdue');
-  const daysLeft = account?.contractEnd ? daysTo(account.contractEnd) : null;
-  const cmMedia = (account?.mediaRecords ?? []).filter(r => r.month === currentMonth());
-  const cmLeads = cmMedia.reduce((s, r) => s + r.leads, 0);
+  const projectCount = account?.projects?.length ?? 0;
+  const allUpsell = (account?.projects ?? []).some(p => p.upsellNote);
 
   return (
     <button onClick={onClick} className={`w-full text-right bg-white rounded-2xl border-2 ${hm.ring} shadow-sm hover:shadow-lg transition-all p-5 group`}>
@@ -1908,13 +1964,13 @@ function ClientCard({ lead, account, onClick }: { lead: Lead; account: AccountDa
         <div className="bg-slate-50 rounded-xl p-2 text-right"><p className="text-slate-400 mb-0.5">ריטיינר</p><p className="font-bold text-slate-800">{account?.monthlyRetainer ? fmtK(account.monthlyRetainer) : '—'}</p></div>
         <div className="bg-slate-50 rounded-xl p-2 text-right"><p className="text-slate-400 mb-0.5">לידים החודש</p><p className="font-bold text-indigo-600">{cmLeads || '—'}</p></div>
       </div>
-      {solutions.length > 0 && <div className="mb-3"><div className="flex justify-between text-xs text-slate-400 mb-1"><span>{approved}/{solutions.length}</span><span>פתרונות</span></div><div className="h-1.5 bg-slate-100 rounded-full"><div className="h-1.5 bg-indigo-400 rounded-full" style={{ width: `${solPct}%` }} /></div></div>}
+      {projectCount > 0 && <div className="mb-3 text-xs text-slate-500 text-right">{projectCount} פרויקטים</div>}
       <div className="flex gap-1.5 flex-wrap">
         {score < 40 && <span className="text-xs bg-red-600 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><Shield size={9} /> Deal Shield</span>}
         {overdueT.length > 0 && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">⚠ {overdueT.length} משימות</span>}
         {overduePay && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">💳 תשלום</span>}
         {daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && <span className="text-xs bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">📅 חידוש {daysLeft}י</span>}
-        {account?.upsellNote && <span className="text-xs bg-violet-100 text-violet-700 font-semibold px-2 py-0.5 rounded-full">🚀 אפסל</span>}
+        {allUpsell && <span className="text-xs bg-violet-100 text-violet-700 font-semibold px-2 py-0.5 rounded-full">🚀 אפסל</span>}
       </div>
     </button>
   );
@@ -1973,7 +2029,7 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
     if (!apiKey) return;
     setShieldLoading(true); setShieldAlerts(null); setShieldOpen(true);
     const atRisk = activeClients
-      .map(l => ({ l, a: getAcc(l.id), score: calcHealth(l, getAcc(l.id)) }))
+      .map(l => ({ l, a: getAcc(l.id), score: calcHealth(l, undefined, getAcc(l.id)?.contractEnd) }))
       .filter(x => x.score < 60)
       .sort((a, b) => a.score - b.score)
       .slice(0, 6);
@@ -1982,7 +2038,8 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
       const issues = [];
       const overdueT = l.tasks.filter(t => !t.completed && new Date(t.date + 'T00:00:00') < new Date()).length;
       if (overdueT > 0) issues.push(`${overdueT} משימות באיחור`);
-      if (a?.payments?.some(p => p.status === 'overdue')) issues.push('תשלום באיחור');
+      const allPayments = (a?.projects ?? []).flatMap(p => p.payments ?? []);
+      if (allPayments.some(p => p.status === 'overdue')) issues.push('תשלום באיחור');
       if (a?.contractEnd && (new Date(a.contractEnd).getTime() - Date.now()) / 86400000 < 30) issues.push('חוזה מסתיים');
       return `${l.company} (${score}%) - ${issues.join(', ') || 'ללא קשר אחרון'}`;
     }).join('\n');
@@ -2003,12 +2060,12 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
   }
 
   const mrr = activeClients.reduce((s, l) => s + (getAcc(l.id)?.monthlyRetainer ?? l.budget ?? 0), 0);
-  const attention = activeClients.filter(l => calcHealth(l, getAcc(l.id)) < 60).length;
-  const totalManagedMedia = accounts.reduce((s, a) => s + (a.mediaRecords ?? []).reduce((ss, r) => ss + r.spend, 0), 0);
+  const attention = activeClients.filter(l => calcHealth(l, undefined, getAcc(l.id)?.contractEnd) < 60).length;
+  const totalManagedMedia = accounts.reduce((s, a) => s + (a.projects ?? []).flatMap(p => p.mediaRecords ?? []).reduce((ss, r) => ss + r.spend, 0), 0);
   const renewalSoon = activeClients.filter(l => { const a = getAcc(l.id); if (!a?.contractEnd) return false; const d = daysTo(a.contractEnd); return d >= 0 && d <= 30; }).length;
 
   const filtered = useMemo(() => activeClients.filter(l => {
-    const a = getAcc(l.id); const sc = calcHealth(l, a);
+    const a = getAcc(l.id); const sc = calcHealth(l, undefined, a?.contractEnd);
     switch (filter) {
       case 'healthy':  return sc >= 70;
       case 'warning':  return sc >= 40 && sc < 70;
@@ -2016,13 +2073,13 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
       case 'renewal':  { const d = a?.contractEnd ? daysTo(a.contractEnd) : null; return d !== null && d >= 0 && d <= 30; }
       default: return true;
     }
-  }).sort((a, b) => calcHealth(a, getAcc(a.id)) - calcHealth(b, getAcc(b.id))), [activeClients, accounts, filter]);
+  }).sort((a, b) => calcHealth(a, undefined, getAcc(a.id)?.contractEnd) - calcHealth(b, undefined, getAcc(b.id)?.contractEnd)), [activeClients, accounts, filter]);
 
   const FILTERS: { key: FilterKey; label: string; count: number }[] = [
     { key: 'all',      label: 'הכל',          count: activeClients.length },
-    { key: 'critical', label: '🔴 קריטי',     count: activeClients.filter(l => calcHealth(l, getAcc(l.id)) < 40).length },
-    { key: 'warning',  label: '🟡 דורש טיפול',count: activeClients.filter(l => { const s = calcHealth(l, getAcc(l.id)); return s >= 40 && s < 70; }).length },
-    { key: 'healthy',  label: '🟢 תקין',      count: activeClients.filter(l => calcHealth(l, getAcc(l.id)) >= 70).length },
+    { key: 'critical', label: '🔴 קריטי',     count: activeClients.filter(l => calcHealth(l, undefined, getAcc(l.id)?.contractEnd) < 40).length },
+    { key: 'warning',  label: '🟡 דורש טיפול',count: activeClients.filter(l => { const s = calcHealth(l, undefined, getAcc(l.id)?.contractEnd); return s >= 40 && s < 70; }).length },
+    { key: 'healthy',  label: '🟢 תקין',      count: activeClients.filter(l => calcHealth(l, undefined, getAcc(l.id)?.contractEnd) >= 70).length },
     { key: 'renewal',  label: '📅 חידוש',     count: renewalSoon },
   ];
 
