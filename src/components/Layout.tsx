@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, UserCheck, Settings,
-  Plus, Menu, X, ChevronLeft, Bell, Zap,
+  Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -15,6 +15,9 @@ interface LayoutProps {
   overdueBadge?: number;
   userInitials?: string;
   userName?: string;
+  allowedPages?: Page[];
+  isAdmin?: boolean;
+  onSignOut?: () => void;
 }
 
 const NAV_GROUPS = [
@@ -48,10 +51,21 @@ const NAV_GROUPS = [
 export default function Layout({
   children, currentPage, onPageChange, onNewLead,
   overdueBadge = 0, userInitials = 'A', userName = 'משתמש',
+  allowedPages = [], isAdmin = false, onSignOut,
 }: LayoutProps) {
   const [open, setOpen] = useState(false);
 
   const go = (p: Page) => { onPageChange(p); setOpen(false); };
+
+  // Filter nav groups based on role and allowed pages
+  const filteredGroups = NAV_GROUPS.map(group => ({
+    ...group,
+    items: group.items.filter(({ page }) => {
+      if (page === 'settings') return isAdmin; // settings: admin only
+      if (isAdmin) return true;
+      return allowedPages.includes(page);
+    }),
+  })).filter(g => g.items.length > 0);
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -77,7 +91,7 @@ export default function Layout({
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5 scrollbar-hide">
-        {NAV_GROUPS.map(group => (
+        {filteredGroups.map(group => (
           <div key={group.label}>
             <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-3 pt-4 pb-1.5 select-none">
               {group.label}
@@ -111,18 +125,22 @@ export default function Layout({
         ))}
       </nav>
 
-      {/* User + notifications */}
+      {/* User + logout */}
       <div className="border-t border-slate-800/60 p-3">
-        <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-800 transition-colors cursor-default group">
+        <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-800 transition-colors cursor-default">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
             {userInitials}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-white text-xs font-semibold truncate">{userName}</p>
-            <p className="text-slate-500 text-[10px]">מנהל</p>
+            <p className="text-slate-500 text-[10px]">{isAdmin ? 'מנהל' : 'סוכן'}</p>
           </div>
-          <button className="relative text-slate-500 hover:text-white transition-colors">
-            <Bell size={14} />
+          <button
+            onClick={onSignOut}
+            className="text-slate-500 hover:text-red-400 transition-colors"
+            title="התנתק"
+          >
+            <LogOut size={14} />
           </button>
         </div>
       </div>
@@ -161,9 +179,14 @@ export default function Layout({
           </div>
           <span className="text-white font-black text-sm">RAY</span>
         </div>
-        <button onClick={onNewLead} className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
-          <Plus size={15} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={onNewLead} className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+            <Plus size={15} />
+          </button>
+          <button onClick={onSignOut} className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 hover:text-red-400 transition-colors">
+            <LogOut size={15} />
+          </button>
+        </div>
       </div>
 
       {/* ── Main Content ────────────────────────────────────────────────── */}

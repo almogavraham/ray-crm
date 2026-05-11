@@ -13,10 +13,12 @@ import ContentHub from './pages/ContentHub';
 import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
 import LeadModal from './components/LeadModal';
-import InviteAcceptance from './components/InviteAcceptance';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
 import Toast from './components/Toast';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
@@ -115,7 +117,13 @@ function loadSettings(): AppSettings {
   catch { return DEFAULT_SETTINGS; }
 }
 
-export default function App() {
+// ─── AppInner: rendered inside AuthProvider ──────────────────────────────────
+function AppInner() {
+  const { user, profile, loading, isAdmin, signOut } = useAuth();
+
+  // Invite token in URL?
+  const inviteToken = new URLSearchParams(window.location.search).get('token') ?? '';
+
   const [page, setPage]               = useState<Page>('home');
   const [leads, setLeads]             = useState<Lead[]>(loadLeadsLocal);
   const [team, setTeam]               = useState<TeamMember[]>(loadTeamLocal);
@@ -127,12 +135,6 @@ export default function App() {
   const [fbReady, setFbReady]             = useState(false);
   const [standaloneTask, setStandaloneTask] = useState<StandaloneTask[]>([]);
   const initialSyncDone                   = useRef(false);
-
-  // ─── Invite via URL param (?invite=email@...) ─────────────────────────────
-  const [inviteEmail, setInviteEmail] = useState<string>(() => {
-    const params = new URLSearchParams(window.location.search);
-    return decodeURIComponent(params.get('invite') || '');
-  });
 
   // ─── Overdue badge ────────────────────────────────────────────────────────
   const overdueBadge = useMemo(() => {
@@ -173,9 +175,9 @@ export default function App() {
           const fbLeads = ss.docs
             .map(d => normalizeLead(d.data()))
             .sort((a, b) => {
-              const aTime = (a as any).createdAt ?? 0;
-              const bTime = (b as any).createdAt ?? 0;
-              return bTime - aTime;
+              const aTime = (a as Record<string, unknown>).createdAt ?? 0;
+              const bTime = (b as Record<string, unknown>).createdAt ?? 0;
+              return (bTime as number) - (aTime as number);
             });
           setLeads(fbLeads);
           localStorage.setItem('crm-leads', JSON.stringify(fbLeads));
@@ -400,20 +402,6 @@ export default function App() {
     addToast('הערה נוספה ✓', 'success');
   };
 
-  const handleInviteSuccess = (name: string, email: string) => {
-    setInviteEmail('');
-    const exists = team.some(m => m.email === email);
-    if (!exists) {
-      setTeam(prev => [...prev, {
-        id:    Date.now().toString(),
-        name,
-        email,
-        role:  'סוכן',
-      }]);
-    }
-    addToast(`ברוך הבא, ${name}! 🎉`, 'success');
-  };
-
   // ─── Settings handlers ────────────────────────────────────────────────────
   const handleSettingsChange = (s: AppSettings) => {
     setSettings(s);
@@ -432,18 +420,46 @@ export default function App() {
     addToast('הנתונים אופסו', 'info');
   };
 
+  // ─── Derive display name/initials from profile ────────────────────────────
+  const displayName     = profile ? `${profile.firstName} ${profile.lastName}` : settings.userName;
+  const displayInitials = profile && profile.firstName && profile.lastName
+    ? `${profile.firstName[0]}${profile.lastName[0]}`
+    : settings.userInitials;
+
+  // ─── Auth gates ──────────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  if (inviteToken) {
+    return (
+      <Register
+        token={inviteToken}
+        onSuccess={() => {
+          window.history.replaceState({}, '', '/');
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
+  if (!user) return <Login />;
+
   return (
-    <ErrorBoundary>
     <>
       <Layout
         currentPage={page}
         onPageChange={setPage}
         onNewLead={() => setShowNewLead(true)}
         onRefresh={() => addToast(fbReady ? 'מחובר ל-Firebase ✓' : 'טוען...', 'info')}
-        
         overdueBadge={overdueBadge}
-        userInitials={settings.userInitials}
-        userName={settings.userName}
+        userInitials={displayInitials}
+        userName={displayName}
+        allowedPages={profile?.allowedPages ?? []}
+        isAdmin={isAdmin}
+        onSignOut={signOut}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -457,7 +473,7 @@ export default function App() {
           <HomeDashboard
             leads={leads}
             standaloneTask={standaloneTask}
-            currentUser={settings.userName}
+            currentUser={displayName}
             onLeadClick={setSelectedLead}
             onPageChange={setPage}
           />
@@ -484,7 +500,7 @@ export default function App() {
           <AiAssistant
             leads={leads}
             team={team}
-            currentUser={settings.userName}
+            currentUser={displayName}
             standaloneTask={standaloneTask}
             onCreateTask={handleStandaloneAdd}
             onUpdateLead={handleLeadUpdate}
@@ -498,7 +514,7 @@ export default function App() {
           <Tasks
             leads={leads}
             team={team}
-            currentUser={settings.userName}
+            currentUser={displayName}
             standaloneTask={standaloneTask}
             onLeadClick={setSelectedLead}
             onLeadTaskComplete={handleTaskComplete}
@@ -510,7 +526,7 @@ export default function App() {
             onStandaloneEdit={handleStandaloneEdit}
           />
         )}
-        {page === 'settings' && (
+        {page === 'settings' && isAdmin && (
           <Settings
             settings={settings}
             leads={leads}
@@ -518,13 +534,15 @@ export default function App() {
             onImportLeads={handleImportLeads}
             onResetData={handleResetData}
             onToast={addToast}
+            isAdmin={isAdmin}
+            currentUserUid={user?.uid ?? ''}
           />
         )}
         {page === 'content' && (
           <ContentHub />
         )}
         {page === 'deals' && (
-          <Deals leads={leads} team={team} currentUser={settings.userName} onLeadClick={setSelectedLead} onToast={addToast} />
+          <Deals leads={leads} team={team} currentUser={displayName} onLeadClick={setSelectedLead} onToast={addToast} />
         )}
       </Layout>
 
@@ -554,21 +572,16 @@ export default function App() {
       )}
 
       <Toast toasts={toasts} onRemove={removeToast} />
-
-      {/* Invite acceptance modal — shown when ?invite=email is in URL */}
-      {inviteEmail && (
-        <InviteAcceptance
-          inviteEmail={inviteEmail}
-          onSuccess={handleInviteSuccess}
-          onDismiss={() => {
-            setInviteEmail('');
-            const url = new URL(window.location.href);
-            url.searchParams.delete('invite');
-            window.history.replaceState({}, document.title, url.toString());
-          }}
-        />
-      )}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
     </ErrorBoundary>
   );
 }

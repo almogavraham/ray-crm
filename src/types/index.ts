@@ -291,3 +291,24 @@ export type AppSettings = {
   defaultPage: Page;
   accentColor: 'indigo' | 'blue' | 'emerald' | 'rose' | 'violet';
 };
+
+// ─── Auth & Permissions ──────────────────────────────────────────────────────
+export type UserProfile = {
+  uid: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: 'admin' | 'agent';
+  allowedPages: Page[];
+  createdAt: string;
+};
+
+export type Invite = {
+  token: string;
+  email: string;
+  role: 'admin' | 'agent';
+  allowedPages: Page[];
+  createdAt: string;
+  used: boolean;
+  createdBy: string;
+};

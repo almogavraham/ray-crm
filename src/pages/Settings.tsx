@@ -1,10 +1,14 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   User, Palette, Database, Info, Save, RefreshCw, Download,
   Upload, CheckCircle2, AlertTriangle, Shield, Zap, Bell,
-  ChevronLeft, Monitor, Moon, Globe,
+  ChevronLeft, Monitor, Moon, Globe, Users2, Copy, Link,
+  Mail, KeyRound,
 } from 'lucide-react';
-import type { Lead, AppSettings, Page } from '../types';
+import { collection, getDocs, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { db, auth } from '../lib/firebase';
+import type { Lead, AppSettings, Page, UserProfile } from '../types';
 
 interface SettingsProps {
   settings: AppSettings;
@@ -13,16 +17,22 @@ interface SettingsProps {
   onImportLeads: (leads: Lead[]) => void;
   onResetData: () => void;
   onToast: (msg: string, type?: 'success' | 'error' | 'info') => void;
+  isAdmin?: boolean;
+  currentUserUid?: string;
 }
 
-type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about';
+type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users';
 
-const SECTIONS: { key: Section; label: string; desc: string; Icon: React.ElementType }[] = [
-  { key: 'profile',       label: 'פרופיל',        desc: 'שם משתמש ותפקיד',         Icon: User    },
-  { key: 'appearance',    label: 'מראה',           desc: 'ערכת נושא ותצוגה',         Icon: Palette },
-  { key: 'notifications', label: 'התראות',         desc: 'הגדרות התראות',            Icon: Bell    },
-  { key: 'data',          label: 'נתונים',         desc: 'ייצוא, ייבוא ואיפוס',       Icon: Database},
-  { key: 'about',         label: 'אודות',          desc: 'גרסה ומידע על המערכת',      Icon: Info    },
+const ALL_PAGES: { page: Page; label: string }[] = [
+  { page: 'home',      label: 'לוח בקרה' },
+  { page: 'dashboard', label: 'לידים' },
+  { page: 'kanban',    label: 'פייפליין' },
+  { page: 'deals',     label: 'ניהול לקוחות' },
+  { page: 'tasks',     label: 'משימות' },
+  { page: 'content',   label: 'קריאייטיב' },
+  { page: 'overview',  label: 'דוחות' },
+  { page: 'ai',        label: 'עוזר AI' },
+  { page: 'team',      label: 'צוות' },
 ];
 
 const ACCENT_COLORS: { key: AppSettings['accentColor']; label: string; swatch: string }[] = [
@@ -35,12 +45,48 @@ const ACCENT_COLORS: { key: AppSettings['accentColor']; label: string; swatch: s
 
 export default function Settings({
   settings, leads, onSettingsChange, onImportLeads, onResetData, onToast,
+  isAdmin = false,
 }: SettingsProps) {
+  const BASE_SECTIONS: { key: Section; label: string; desc: string; Icon: React.ElementType }[] = [
+    { key: 'profile',       label: 'פרופיל',        desc: 'שם משתמש ותפקיד',         Icon: User    },
+    { key: 'appearance',    label: 'מראה',           desc: 'ערכת נושא ותצוגה',         Icon: Palette },
+    { key: 'notifications', label: 'התראות',         desc: 'הגדרות התראות',            Icon: Bell    },
+    { key: 'data',          label: 'נתונים',         desc: 'ייצוא, ייבוא ואיפוס',       Icon: Database},
+    { key: 'about',         label: 'אודות',          desc: 'גרסה ומידע על המערכת',      Icon: Info    },
+  ];
+
+  const SECTIONS = isAdmin
+    ? [...BASE_SECTIONS, { key: 'users' as Section, label: 'משתמשים', desc: 'ניהול משתמשים והרשאות', Icon: Users2 }]
+    : BASE_SECTIONS;
+
   const [section, setSection]     = useState<Section>('profile');
   const [local, setLocal]         = useState<AppSettings>({ ...settings });
   const [saved, setSaved]         = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const fileRef                   = useRef<HTMLInputElement>(null);
+
+  // ── Users section state ──
+  const [users, setUsers]             = useState<UserProfile[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [editingUid, setEditingUid]   = useState<string | null>(null);
+  const [editPages, setEditPages]     = useState<Page[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole]   = useState<'admin' | 'agent'>('agent');
+  const [invitePages, setInvitePages] = useState<Page[]>([...ALL_PAGES.map(p => p.page)]);
+  const [inviteLink, setInviteLink]   = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+
+  useEffect(() => {
+    if (section === 'users' && isAdmin) {
+      setUsersLoading(true);
+      getDocs(collection(db, 'users'))
+        .then(snap => {
+          setUsers(snap.docs.map(d => d.data() as UserProfile));
+        })
+        .catch(() => onToast('שגיאה בטעינת משתמשים', 'error'))
+        .finally(() => setUsersLoading(false));
+    }
+  }, [section, isAdmin]); // eslint-disable-line
 
   const handleChange = <K extends keyof AppSettings>(key: K, val: AppSettings[K]) => {
     setLocal(s => ({ ...s, [key]: val }));
@@ -128,6 +174,53 @@ export default function Settings({
     onResetData();
     setConfirmReset(false);
     onToast('הנתונים אופסו להגדרות ברירת המחדל', 'info');
+  };
+
+  /* ── Create invite ── */
+  const handleCreateInvite = async () => {
+    if (!inviteEmail.trim()) { onToast('הכנס כתובת אימייל', 'error'); return; }
+    setInviteLoading(true);
+    try {
+      const token = crypto.randomUUID();
+      await setDoc(doc(db, 'invites', token), {
+        token,
+        email: inviteEmail.trim(),
+        role: inviteRole,
+        allowedPages: invitePages,
+        createdAt: new Date().toISOString(),
+        used: false,
+        createdBy: 'admin',
+      });
+      const link = `${window.location.origin}?token=${token}`;
+      setInviteLink(link);
+      onToast('קישור הזמנה נוצר בהצלחה ✓', 'success');
+    } catch {
+      onToast('שגיאה ביצירת ההזמנה', 'error');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
+  /* ── Update user pages ── */
+  const handleSaveUserPages = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { allowedPages: editPages });
+      setUsers(prev => prev.map(u => u.uid === uid ? { ...u, allowedPages: editPages } : u));
+      setEditingUid(null);
+      onToast('הרשאות עודכנו ✓', 'success');
+    } catch {
+      onToast('שגיאה בעדכון הרשאות', 'error');
+    }
+  };
+
+  /* ── Send password reset ── */
+  const handlePasswordReset = async (email: string) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      onToast(`מייל שחזור סיסמה נשלח ל-${email}`, 'success');
+    } catch {
+      onToast('שגיאה בשליחת מייל שחזור', 'error');
+    }
   };
 
   const activeLeads   = leads.filter(l => l.status === 'לקוח פעיל').length;
@@ -461,7 +554,7 @@ export default function Settings({
                   { label: 'גרסה',        value: 'v2.4.0',         icon: <Zap size={14} /> },
                   { label: 'מסד נתונים',  value: 'Firebase Firestore', icon: <Database size={14} /> },
                   { label: 'ממשק',        value: 'React + TypeScript + Tailwind', icon: <Monitor size={14} /> },
-                  { label: 'AI',          value: 'Claude (Anthropic)', icon: <Sparkles size={14} /> },
+                  { label: 'AI',          value: 'Claude (Anthropic)', icon: <SparklesIcon size={14} /> },
                   { label: 'אחסון',       value: 'Vercel Edge Network', icon: <Globe size={14} /> },
                   { label: 'עיצוב',       value: 'RTL Hebrew, Dark/Light', icon: <Moon size={14} /> },
                 ].map(({ label, value, icon }) => (
@@ -494,8 +587,190 @@ export default function Settings({
           </>
         )}
 
+        {/* ── USERS (admin only) ── */}
+        {section === 'users' && isAdmin && (
+          <>
+            <SectionHeader icon={<Users2 size={18} />} title="ניהול משתמשים" desc="הרשאות, הזמנות ואיפוס סיסמאות" />
+
+            {/* Create Invite */}
+            <Card>
+              <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
+                <span>יצירת קישור הזמנה</span>
+                <Link size={15} className="text-slate-400" />
+              </div>
+              <div className="space-y-4">
+                <FormField label="אימייל מוזמן">
+                  <input
+                    type="email"
+                    value={inviteEmail}
+                    onChange={e => setInviteEmail(e.target.value)}
+                    className={inputCls}
+                    placeholder="user@example.com"
+                    dir="ltr"
+                  />
+                </FormField>
+                <FormField label="תפקיד">
+                  <select
+                    value={inviteRole}
+                    onChange={e => setInviteRole(e.target.value as 'admin' | 'agent')}
+                    className={inputCls}
+                  >
+                    <option value="agent">סוכן</option>
+                    <option value="admin">מנהל</option>
+                  </select>
+                </FormField>
+                <div>
+                  <div className="text-sm font-medium text-slate-700 mb-2 text-right">עמודים מורשים</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {ALL_PAGES.map(({ page, label }) => (
+                      <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
+                        <span className="text-xs text-slate-600">{label}</span>
+                        <input
+                          type="checkbox"
+                          checked={invitePages.includes(page)}
+                          onChange={e => {
+                            if (e.target.checked) setInvitePages(prev => [...prev, page]);
+                            else setInvitePages(prev => prev.filter(p => p !== page));
+                          }}
+                          className="w-4 h-4 rounded accent-indigo-600"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleCreateInvite}
+                    disabled={inviteLoading}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors"
+                  >
+                    <Link size={14} />
+                    {inviteLoading ? 'יוצר...' : 'צור קישור הזמנה'}
+                  </button>
+                </div>
+
+                {inviteLink && (
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                    <div className="text-xs font-semibold text-indigo-700 mb-2 text-right">קישור הזמנה:</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(inviteLink); onToast('הקישור הועתק ✓', 'success'); }}
+                        className="flex-shrink-0 p-2 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+                        title="העתק"
+                      >
+                        <Copy size={14} className="text-indigo-600" />
+                      </button>
+                      <input
+                        readOnly
+                        value={inviteLink}
+                        className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-indigo-800 truncate"
+                        dir="ltr"
+                        onClick={e => (e.target as HTMLInputElement).select()}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            {/* Users list */}
+            <Card>
+              <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
+                <span>משתמשים רשומים</span>
+                <Users2 size={15} className="text-slate-400" />
+              </div>
+
+              {usersLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : users.length === 0 ? (
+                <p className="text-sm text-slate-400 text-right py-4">אין משתמשים רשומים עדיין</p>
+              ) : (
+                <div className="space-y-3">
+                  {users.map(u => (
+                    <div key={u.uid} className="border border-slate-100 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handlePasswordReset(u.email)}
+                            className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-300 rounded-lg px-2.5 py-1.5 transition-colors"
+                            title="שלח מייל איפוס סיסמה"
+                          >
+                            <KeyRound size={12} />
+                            <span>שחזור סיסמה</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (editingUid === u.uid) {
+                                setEditingUid(null);
+                              } else {
+                                setEditingUid(u.uid);
+                                setEditPages([...u.allowedPages]);
+                              }
+                            }}
+                            className="flex items-center gap-1 text-xs text-white bg-slate-700 hover:bg-slate-600 rounded-lg px-2.5 py-1.5 transition-colors"
+                          >
+                            {editingUid === u.uid ? 'ביטול' : 'ערוך הרשאות'}
+                          </button>
+                        </div>
+                        <div className="text-right">
+                          <div className="flex items-center gap-2 justify-end">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {u.role === 'admin' ? 'מנהל' : 'סוכן'}
+                            </span>
+                            <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
+                          </div>
+                          <div className="flex items-center gap-1 justify-end mt-0.5">
+                            <Mail size={10} className="text-slate-400" />
+                            <p className="text-xs text-slate-400" dir="ltr">{u.email}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {editingUid === u.uid && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <div className="text-xs font-semibold text-slate-600 mb-2 text-right">עמודים מורשים:</div>
+                          <div className="grid grid-cols-3 gap-2 mb-3">
+                            {ALL_PAGES.map(({ page, label }) => (
+                              <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
+                                <span className="text-xs text-slate-600">{label}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={editPages.includes(page)}
+                                  onChange={e => {
+                                    if (e.target.checked) setEditPages(prev => [...prev, page]);
+                                    else setEditPages(prev => prev.filter(p => p !== page));
+                                  }}
+                                  className="w-4 h-4 rounded accent-indigo-600"
+                                />
+                              </label>
+                            ))}
+                          </div>
+                          <div className="flex justify-end">
+                            <button
+                              onClick={() => handleSaveUserPages(u.uid)}
+                              className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                            >
+                              <CheckCircle2 size={12} />
+                              שמור הרשאות
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </>
+        )}
+
         {/* ── Save Button ── */}
-        {section !== 'data' && section !== 'about' && (
+        {section !== 'data' && section !== 'about' && section !== 'users' && (
           <div className="flex justify-start">
             <button
               onClick={handleSave}
@@ -581,8 +856,8 @@ function NotifRow({ icon, title, desc, value, onChange }: {
 
 const inputCls = 'w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:border-neutral-400 transition-all';
 
-// Need this for the sparkles icon in about section
-function Sparkles({ size }: { size: number }) {
+// SparklesIcon used in about section
+function SparklesIcon({ size }: { size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
       <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
