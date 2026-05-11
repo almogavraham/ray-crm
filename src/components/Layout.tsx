@@ -57,15 +57,15 @@ export default function Layout({
 
   const go = (p: Page) => { onPageChange(p); setOpen(false); };
 
-  // Filter nav groups based on role and allowed pages
-  const filteredGroups = NAV_GROUPS.map(group => ({
-    ...group,
-    items: group.items.filter(({ page }) => {
-      if (isAdmin) return true;                          // admin sees everything
-      if (page === 'settings') return false;             // agents never see settings
-      return allowedPages.includes(page);
-    }),
-  })).filter(g => g.items.length > 0);
+  // Show all pages when isAdmin or no allowedPages restriction; otherwise filter
+  const filteredGroups = isAdmin || allowedPages.length === 0
+    ? NAV_GROUPS
+    : NAV_GROUPS.map(group => ({
+        ...group,
+        items: group.items.filter(({ page }) =>
+          page !== 'settings' && allowedPages.includes(page)
+        ),
+      })).filter(g => g.items.length > 0);
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
