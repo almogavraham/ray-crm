@@ -83,7 +83,7 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents';
+export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'admin';
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
@@ -304,6 +304,7 @@ export type UserProfile = {
   role: 'admin' | 'agent';
   allowedPages: Page[];
   createdAt: string;
+  workspaceId?: string;   // link to workspace tenant
 };
 
 export type Invite = {
@@ -314,4 +315,28 @@ export type Invite = {
   createdAt: string;
   used: boolean;
   createdBy: string;
+  workspaceId?: string;   // which workspace this invite belongs to
+};
+
+// ─── White Label / Multi-tenant ─────────────────────────────────────────────
+export type WorkspacePlan   = 'trial' | 'basic' | 'pro' | 'enterprise';
+export type WorkspaceStatus = 'pending' | 'trial' | 'active' | 'suspended';
+
+export type WorkspaceProfile = {
+  id: string;                    // Firestore doc ID  (= workspaceId)
+  name: string;                  // שם העסק
+  businessId: string;            // ח.פ
+  phone: string;
+  email: string;                 // owner email
+  ownerId: string;               // Firebase Auth UID
+  logoUrl?: string;              // base64 or storage URL
+  prompt?: string;               // AI context — describe the business
+  industry?: string;             // סוג עסק
+  teamSize?: string;
+  status: WorkspaceStatus;
+  plan: WorkspacePlan;
+  trialEndsAt?: string;          // ISO date — end of 14-day trial
+  createdAt: string;
+  onboardingComplete: boolean;
+  memberCount?: number;          // denormalized counter
 };

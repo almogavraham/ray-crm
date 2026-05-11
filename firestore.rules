@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSuperAdmin() {
+      return request.auth != null &&
+             request.auth.token.email == 'almogavraham30@gmail.com';
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── Workspaces
+    match /workspaces/{workspaceId} {
+      // Public read allowed — only name/logoUrl used by login branding (unauthenticated)
+      allow read:   if true;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() &&
+        (request.auth.uid == resource.data.ownerId || isSuperAdmin());
+      allow delete: if isSuperAdmin();
+
+      // Workspace subcollections — authenticated only
+      match /{subcol}/{docId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+
+    // ── Users
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      allow read:        if isSuperAdmin();
+    }
+
+    // ── Invites
+    match /invites/{token} {
+      allow read:  if true;
+      allow write: if isSignedIn();
+    }
+
+    // ── System config (feature flags, deploy settings)
+    match /system/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── Announcements
+    match /announcements/{annId} {
+      allow read:  if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── Releases
+    match /releases/{relId} {
+      allow read:  if isSuperAdmin();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── Everything else
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

@@ -1,0 +1,44 @@
+name: Deploy Client Site
+
+# Triggered manually via admin panel "פרסם" button (GitHub Actions API)
+# or manually from GitHub Actions UI
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version being deployed (e.g. 1.2.0)'
+        required: false
+        default: 'latest'
+      release_notes:
+        description: 'Release notes'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    name: Build & Deploy to ray-crm-app.web.app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy client site to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_CHEX_CRM }}
+          projectId: chex-crm
+          target: client
+          channelId: live

@@ -20,6 +20,10 @@ import Toast from './components/Toast';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ResetPassword from './pages/ResetPassword';
+import PublicRegister from './pages/PublicRegister';
+import WorkspaceOnboarding from './pages/WorkspaceOnboarding';
+import WorkspaceSettings from './pages/WorkspaceSettings';
+import AdminPanel from './pages/AdminPanel';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
@@ -121,18 +125,26 @@ function loadSettings(): AppSettings {
 
 // ─── AppInner: rendered inside AuthProvider ──────────────────────────────────
 function AppInner() {
-  const { user, profile, loading, isAdmin, signOut } = useAuth();
+  const { user, profile, workspace, loading, isAdmin, isSuperAdmin, signOut, refreshWorkspace } = useAuth();
 
-  // Invite token in URL?
-  const inviteToken = new URLSearchParams(window.location.search).get('token') ?? '';
+  // URL params
+  const urlSearch   = new URLSearchParams(window.location.search);
+  const inviteToken = urlSearch.get('token') ?? '';
+  const isSignup    = urlSearch.get('signup') === '1';
 
-  // ── bypassAuth — כניסה ללא אימות מופעלת ──────────────────────────────────
-  const bypassAuth = true;
+  // ── Workspace detection ───────────────────────────────────────────────────
+  // isWorkspaceUser = a real tenant user (has workspaceId, not super admin)
+  const isWorkspaceUser = !!(user && profile?.workspaceId && !isSuperAdmin);
+  const wid             = isWorkspaceUser ? (profile?.workspaceId ?? null) : null;
+
+  // bypassAuth — only on localhost (dev mode). On production always require login.
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const bypassAuth  = isLocalhost && !user;
   void getDoc; // suppress unused import warning
 
   const [page, setPage]               = useState<Page>('home');
-  const [leads, setLeads]             = useState<Lead[]>(loadLeadsLocal);
-  const [team, setTeam]               = useState<TeamMember[]>(loadTeamLocal);
+  const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
+  const [team, setTeam]               = useState<TeamMember[]>([]);  // populated by effects
   const [settings, setSettings]       = useState<AppSettings>(loadSettings);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [showNewLead, setShowNewLead] = useState(false);
@@ -166,8 +178,12 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // ─── Firestore init & real-time sync ─────────────────────────────────────
+  // ─── ROOT Firestore init (Almog / super admin only) ──────────────────────
   useEffect(() => {
+    // Workspace users get their own isolated data — skip root collections
+    if (loading) return;
+    if (isWorkspaceUser) return;
+
     let unsub: (() => void) | null = null;
     async function init() {
       try {
@@ -202,29 +218,76 @@ function AppInner() {
         initialSyncDone.current = true;
         setFbReady(true);
       } catch {
+        setLeads(loadLeadsLocal());
+        setTeam(loadTeamLocal());
         setFbReady(true);
       }
     }
     init();
     return () => { if (unsub) unsub(); };
-  }, []);
+  }, [loading, isWorkspaceUser]); // eslint-disable-line
 
-  // ─── Save team to Firestore ───────────────────────────────────────────────
+  // ─── WORKSPACE Firestore init (isolated tenant data) ─────────────────────
+  useEffect(() => {
+    if (!isWorkspaceUser || !wid) return;
+
+    let unsubLeads: (() => void) | null = null;
+    let unsubTasks: (() => void) | null = null;
+
+    // Listen to workspace leads subcollection
+    unsubLeads = onSnapshot(collection(db, 'workspaces', wid, 'leads'), ss => {
+      const wsLeads = ss.docs
+        .map(d => normalizeLead(d.data()))
+        .sort((a, b) => {
+          const aTime = (a as Record<string, unknown>).createdAt ?? 0;
+          const bTime = (b as Record<string, unknown>).createdAt ?? 0;
+          return (bTime as number) - (aTime as number);
+        });
+      setLeads(wsLeads);
+    });
+
+    // Listen to workspace tasks subcollection
+    unsubTasks = onSnapshot(collection(db, 'workspaces', wid, 'tasks'), snap => {
+      const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
+      tasks.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      setStandaloneTask(tasks);
+    });
+
+    // Load workspace team
+    getDocs(collection(db, 'workspaces', wid, 'team')).then(snap => {
+      setTeam(snap.docs.map(d => d.data() as TeamMember));
+    }).catch(() => setTeam([]));
+
+    initialSyncDone.current = true;
+    setFbReady(true);
+
+    return () => {
+      if (unsubLeads) unsubLeads();
+      if (unsubTasks) unsubTasks();
+    };
+  }, [isWorkspaceUser, wid]); // eslint-disable-line
+
+  // ─── Save team to Firestore (workspace-aware) ─────────────────────────────
   useEffect(() => {
     if (!fbReady || !initialSyncDone.current) return;
-    localStorage.setItem('crm-team', JSON.stringify(team));
-    team.forEach(m => setDoc(doc(db, 'team', m.id), m).catch(console.error));
-  }, [team, fbReady]);
+    if (isWorkspaceUser && wid) {
+      team.forEach(m => setDoc(doc(db, 'workspaces', wid, 'team', m.id), m).catch(console.error));
+    } else {
+      localStorage.setItem('crm-team', JSON.stringify(team));
+      team.forEach(m => setDoc(doc(db, 'team', m.id), m).catch(console.error));
+    }
+  }, [team, fbReady, isWorkspaceUser, wid]); // eslint-disable-line
 
-  // ─── Standalone tasks — real-time sync ───────────────────────────────────
+  // ─── Standalone tasks — root collection (non-workspace users only) ────────
   useEffect(() => {
+    if (loading || isWorkspaceUser) return; // workspace tasks handled in workspace effect
     const unsub = onSnapshot(collection(db, 'tasks'), snap => {
       const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
       tasks.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       setStandaloneTask(tasks);
     });
     return () => unsub();
-  }, []);
+  }, [loading, isWorkspaceUser]); // eslint-disable-line
 
   // ─── Save settings to localStorage ───────────────────────────────────────
   useEffect(() => {
@@ -240,11 +303,16 @@ function AppInner() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  // ─── Save single lead ────────────────────────────────────────────────────
+  // ─── Save single lead (workspace-aware) ─────────────────────────────────
   const saveLead = useCallback(async (lead: Lead) => {
-    try { await setDoc(doc(db, 'leads', lead.id), lead); }
-    catch (err) { console.error('Error saving lead:', err); }
-  }, []);
+    try {
+      if (isWorkspaceUser && wid) {
+        await setDoc(doc(db, 'workspaces', wid, 'leads', lead.id), lead);
+      } else {
+        await setDoc(doc(db, 'leads', lead.id), lead);
+      }
+    } catch (err) { console.error('Error saving lead:', err); }
+  }, [isWorkspaceUser, wid]);
 
   // ─── Lead handlers ────────────────────────────────────────────────────────
   const handleLeadSave = (updated: Lead) => {
@@ -262,7 +330,11 @@ function AppInner() {
   const handleLeadDelete = (id: string) => {
     setLeads(prev => prev.filter(l => l.id !== id));
     setSelectedLead(null);
-    deleteDoc(doc(db, 'leads', id)).catch(console.error);
+    if (isWorkspaceUser && wid) {
+      deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
+    } else {
+      deleteDoc(doc(db, 'leads', id)).catch(console.error);
+    }
     addToast('הליד נמחק', 'info');
   };
 
@@ -314,7 +386,13 @@ function AppInner() {
 
   const handleBulkDelete = (leadIds: string[]) => {
     setLeads(prev => prev.filter(l => !leadIds.includes(l.id)));
-    leadIds.forEach(id => deleteDoc(doc(db, 'leads', id)).catch(console.error));
+    leadIds.forEach(id => {
+      if (isWorkspaceUser && wid) {
+        deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
+      } else {
+        deleteDoc(doc(db, 'leads', id)).catch(console.error);
+      }
+    });
     addToast(`${leadIds.length} לידים נמחקו`, 'info');
   };
 
@@ -353,7 +431,7 @@ function AppInner() {
     setTeam(prev => prev.filter(m => m.id !== id));
     addToast('חבר הצוות הוסר', 'info');
   };
-  // ─── Standalone task handlers ─────────────────────────────────────────────
+  // ─── Standalone task handlers (workspace-aware) ──────────────────────────
   const handleStandaloneAdd = async (task: StandaloneTask) => {
     // Optimistic update — show immediately without waiting for Firestore
     setStandaloneTask(prev =>
@@ -363,21 +441,31 @@ function AppInner() {
     const firestoreTask = Object.fromEntries(
       Object.entries(task).filter(([, v]) => v !== undefined)
     ) as StandaloneTask;
-    await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
+    if (isWorkspaceUser && wid) {
+      await setDoc(doc(db, 'workspaces', wid, 'tasks', task.id), firestoreTask).catch(console.error);
+    } else {
+      await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
+    }
     addToast('משימה נוספה ✓', 'success');
   };
   const handleStandaloneComplete = async (taskId: string) => {
     const task = standaloneTask.find(t => t.id === taskId);
     if (!task) return;
     const updated = { ...task, completed: true, completedAt: new Date().toISOString() };
-    // Optimistic update
     setStandaloneTask(prev => prev.map(t => t.id === taskId ? updated : t));
-    await setDoc(doc(db, 'tasks', taskId), updated).catch(console.error);
+    if (isWorkspaceUser && wid) {
+      await setDoc(doc(db, 'workspaces', wid, 'tasks', taskId), updated).catch(console.error);
+    } else {
+      await setDoc(doc(db, 'tasks', taskId), updated).catch(console.error);
+    }
   };
   const handleStandaloneDelete = async (taskId: string) => {
-    // Optimistic update
     setStandaloneTask(prev => prev.filter(t => t.id !== taskId));
-    await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
+    if (isWorkspaceUser && wid) {
+      await deleteDoc(doc(db, 'workspaces', wid, 'tasks', taskId)).catch(console.error);
+    } else {
+      await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
+    }
   };
 
   const handleStandaloneEdit = async (task: StandaloneTask) => {
@@ -385,7 +473,11 @@ function AppInner() {
     const firestoreTask = Object.fromEntries(
       Object.entries(task).filter(([, v]) => v !== undefined)
     ) as StandaloneTask;
-    await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
+    if (isWorkspaceUser && wid) {
+      await setDoc(doc(db, 'workspaces', wid, 'tasks', task.id), firestoreTask).catch(console.error);
+    } else {
+      await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
+    }
     addToast('משימה עודכנה ✓', 'success');
   };
 
@@ -427,8 +519,11 @@ function AppInner() {
   };
 
   // ─── Derive display name/initials from profile ────────────────────────────
-  const displayName     = profile ? `${profile.firstName} ${profile.lastName}` : settings.userName;
-  const displayInitials = profile && profile.firstName && profile.lastName
+  // Super admin always uses settings (RAY branding); workspace users use their profile
+  const displayName = isWorkspaceUser && profile
+    ? `${profile.firstName} ${profile.lastName}`
+    : settings.userName;
+  const displayInitials = isWorkspaceUser && profile?.firstName && profile?.lastName
     ? `${profile.firstName[0]}${profile.lastName[0]}`
     : settings.userInitials;
 
@@ -455,6 +550,23 @@ function AppInner() {
     );
   }
 
+  // Public self-service registration
+  if (isSignup && !user) {
+    return (
+      <PublicRegister
+        onSuccess={() => {
+          window.history.replaceState({}, '', '/');
+          window.location.reload();
+        }}
+        onBack={() => {
+          window.history.replaceState({}, '', '/');
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
+  // Invite-based registration
   if (inviteToken) {
     return (
       <Register
@@ -469,6 +581,18 @@ function AppInner() {
 
   if (!user && !bypassAuth) return <Login />;
 
+  // Workspace onboarding — show when workspace exists but onboarding not complete
+  if (user && workspace && !workspace.onboardingComplete) {
+    return (
+      <WorkspaceOnboarding
+        workspace={workspace}
+        onComplete={async () => {
+          await refreshWorkspace();
+        }}
+      />
+    );
+  }
+
   return (
     <>
       <Layout
@@ -479,9 +603,18 @@ function AppInner() {
         overdueBadge={overdueBadge}
         userInitials={displayInitials}
         userName={displayName}
-        allowedPages={profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents'] : [])}
-        isAdmin={bypassAuth ? true : isAdmin}
+        allowedPages={
+          isWorkspaceUser
+            // Workspace users: use their stored allowedPages, never include 'admin'
+            ? (profile?.allowedPages ?? []).filter(p => p !== 'admin')
+            // Super admin / dev bypass: full access
+            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin'] : []))
+        }
+        isAdmin={isAdmin || bypassAuth}
+        isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
         onSignOut={signOut}
+        logoUrl={isWorkspaceUser ? workspace?.logoUrl : undefined}
+        workspaceName={isWorkspaceUser ? workspace?.name : undefined}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -548,7 +681,17 @@ function AppInner() {
             onStandaloneEdit={handleStandaloneEdit}
           />
         )}
-        {page === 'settings' && (bypassAuth || isAdmin) && (
+        {page === 'settings' && isWorkspaceUser && workspace && (
+          <WorkspaceSettings
+            workspace={workspace}
+            team={team}
+            currentUserUid={user?.uid ?? ''}
+            currentUserEmail={user?.email ?? ''}
+            onToast={addToast}
+            onWorkspaceUpdate={refreshWorkspace}
+          />
+        )}
+        {page === 'settings' && !isWorkspaceUser && (bypassAuth || isAdmin) && (
           <Settings
             settings={settings}
             leads={leads}
@@ -556,7 +699,7 @@ function AppInner() {
             onImportLeads={handleImportLeads}
             onResetData={handleResetData}
             onToast={addToast}
-            isAdmin={bypassAuth ? true : isAdmin}
+            isAdmin={isAdmin || bypassAuth}
             currentUserUid={user?.uid ?? ''}
           />
         )}
@@ -576,6 +719,9 @@ function AppInner() {
         )}
         {page === 'deals' && (
           <Deals leads={leads} team={team} currentUser={displayName} onLeadClick={setSelectedLead} onToast={addToast} />
+        )}
+        {page === 'admin' && !isWorkspaceUser && (bypassAuth || isSuperAdmin) && (
+          <AdminPanel onToast={addToast} />
         )}
       </Layout>
 

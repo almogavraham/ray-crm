@@ -873,7 +873,7 @@ export default function ContentHub() {
                 צור לקוח חדש בסרגל הצדדי, הוסף פרויקט עם פרומפט מותאם, העלה קבצי מותג — ו-AI יבנה עבורך תוכן שיווקי מותאם אישית.
               </p>
             </div>
-            <div className="grid grid-cols-4 gap-3 text-xs text-slate-400 max-w-lg">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-400 max-w-lg">
               {[
                 { icon: <Building2 size={18}/>, label: 'לקוחות שמורים' },
                 { icon: <FolderOpen size={18}/>, label: 'פרויקטים מאורגנים' },

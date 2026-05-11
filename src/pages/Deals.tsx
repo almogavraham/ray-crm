@@ -1652,9 +1652,10 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
       </div>
 
       {/* Proposal document */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden print:shadow-none print:border-0">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-x-auto print:shadow-none print:border-0">
+        <div className="min-w-[640px]">
         {/* Header */}
-        <div className={`${headerClass} px-8 py-7 print:px-6 print:py-5`}>
+        <div className={`${headerClass} px-4 md:px-8 py-5 md:py-7 print:px-6 print:py-5`}>
           {p.logoUrl && <img src={p.logoUrl} alt="logo" className="h-10 w-auto object-contain mb-3 rounded" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />}
           <div className="flex items-start justify-between">
             <div>
@@ -1766,6 +1767,7 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
             <textarea value={p.notes || ''} onChange={e => setP(v => ({ ...v, notes: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right print:border-0" placeholder="תנאי תשלום, לו״ז אספקה, הגבלות אחריות..." />
           </div>
         </div>
+        </div>{/* end min-w-[640px] */}
       </div>
     </div>
   );

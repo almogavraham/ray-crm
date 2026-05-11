@@ -1314,35 +1314,36 @@ export default function AiAssistant({
     <div className="flex flex-col h-[calc(100vh-116px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between px-3 md:px-5 py-2.5 md:py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0 gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
           {/* History toggle — always visible */}
           <button onClick={() => setShowHistory(v => !v)}
-            className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-800/60 text-indigo-300' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
+            className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg transition-colors flex-shrink-0 ${showHistory ? 'bg-indigo-800/60 text-indigo-300' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
             <History size={12} />
-            {messages.length > 0 ? `${messages.length} הודעות` : 'היסטוריה'}
+            <span className="hidden sm:inline">{messages.length > 0 ? `${messages.length} הודעות` : 'היסטוריה'}</span>
           </button>
           {/* Clear — only when there are messages */}
           {messages.length > 0 && !showHistory && (
             <button onClick={clearChat}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1.5 rounded-lg hover:bg-slate-800">
-              <Trash2 size={12} /> נקה
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1.5 rounded-lg hover:bg-slate-800 flex-shrink-0">
+              <Trash2 size={12} />
+              <span className="hidden sm:inline">נקה</span>
             </button>
           )}
           {/* Web search toggle */}
           <button onClick={() => setWebSearchEnabled(v => !v)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+            className={`flex items-center gap-1 px-2 md:px-3 py-1.5 rounded-full text-xs font-semibold transition-all border flex-shrink-0 ${
               webSearchEnabled
                 ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/40'
                 : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-400'
             }`}>
             <Globe size={12} className={webSearchEnabled ? 'text-indigo-400' : 'text-slate-600'} />
-            {webSearchEnabled ? 'אינטרנט פעיל' : 'ללא אינטרנט'}
+            <span className="hidden xs:inline sm:inline">{webSearchEnabled ? 'אינטרנט' : 'ללא'}</span>
           </button>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="text-right hidden sm:block">
             <div className="font-bold text-white text-sm flex items-center gap-2 justify-end">
               עוזר AI אישי
               <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
@@ -1351,8 +1352,8 @@ export default function AiAssistant({
               claude-opus-4-6 · כלי CRM {webSearchEnabled && '· חיפוש אינטרנט'}
             </div>
           </div>
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-900 flex items-center justify-center shadow-lg">
-            <Sparkles size={16} className="text-white" />
+          <div className="w-8 h-8 md:w-9 md:h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-900 flex items-center justify-center shadow-lg flex-shrink-0">
+            <Sparkles size={14} className="text-white" />
           </div>
         </div>
       </div>

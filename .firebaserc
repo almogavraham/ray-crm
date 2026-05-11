@@ -1,0 +1,13 @@
+{
+  "projects": {
+    "default": "chex-crm"
+  },
+  "targets": {
+    "chex-crm": {
+      "hosting": {
+        "admin": ["chex-crm"],
+        "client": ["ray-crm-app"]
+      }
+    }
+  }
+}

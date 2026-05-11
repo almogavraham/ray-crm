@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, UserCheck, Settings,
-  Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot,
+  Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot, Shield,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -17,7 +17,10 @@ interface LayoutProps {
   userName?: string;
   allowedPages?: Page[];
   isAdmin?: boolean;
+  isSuperAdmin?: boolean;
   onSignOut?: () => void;
+  logoUrl?: string;         // workspace logo for branding
+  workspaceName?: string;   // workspace name
 }
 
 const NAV_GROUPS = [
@@ -49,17 +52,26 @@ const NAV_GROUPS = [
   },
 ];
 
+// Super-admin only nav group (not shown to regular admins)
+const SUPER_ADMIN_GROUP = {
+  label: 'מערכת',
+  items: [
+    { page: 'admin' as Page, label: 'לוח אדמין', icon: Shield },
+  ],
+};
+
 export default function Layout({
   children, currentPage, onPageChange, onNewLead,
   overdueBadge = 0, userInitials = 'A', userName = 'משתמש',
-  allowedPages = [], isAdmin = false, onSignOut,
+  allowedPages = [], isAdmin = false, isSuperAdmin = false,
+  onSignOut, logoUrl, workspaceName,
 }: LayoutProps) {
   const [open, setOpen] = useState(false);
 
   const go = (p: Page) => { onPageChange(p); setOpen(false); };
 
   // Show all pages when isAdmin or no allowedPages restriction; otherwise filter
-  const filteredGroups = isAdmin || allowedPages.length === 0
+  const baseGroups = isAdmin || allowedPages.length === 0
     ? NAV_GROUPS
     : NAV_GROUPS.map(group => ({
         ...group,
@@ -68,16 +80,25 @@ export default function Layout({
         ),
       })).filter(g => g.items.length > 0);
 
+  const filteredGroups = isSuperAdmin ? [...baseGroups, SUPER_ADMIN_GROUP] : baseGroups;
+
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="px-5 pt-6 pb-5 border-b border-slate-800/60">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/30 flex-shrink-0">
-            <Zap size={18} className="text-white" />
-          </div>
+          {logoUrl ? (
+            <img src={logoUrl} alt="logo"
+              className="w-9 h-9 rounded-xl object-contain bg-white p-0.5 flex-shrink-0" />
+          ) : (
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/30 flex-shrink-0">
+              <Zap size={18} className="text-white" />
+            </div>
+          )}
           <div>
-            <p className="text-white font-black text-lg leading-tight tracking-tight">RAY</p>
+            <p className="text-white font-black text-lg leading-tight tracking-tight">
+              {workspaceName ?? 'RAY'}
+            </p>
             <p className="text-slate-500 text-[10px] font-medium -mt-0.5">Lead Manager</p>
           </div>
         </div>
