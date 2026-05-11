@@ -547,7 +547,7 @@ function AppInner() {
             onStandaloneEdit={handleStandaloneEdit}
           />
         )}
-        {page === 'settings' && isAdmin && (
+        {page === 'settings' && (bypassAuth || isAdmin) && (
           <Settings
             settings={settings}
             leads={leads}
@@ -555,7 +555,7 @@ function AppInner() {
             onImportLeads={handleImportLeads}
             onResetData={handleResetData}
             onToast={addToast}
-            isAdmin={isAdmin}
+            isAdmin={bypassAuth ? true : isAdmin}
             currentUserUid={user?.uid ?? ''}
           />
         )}
