@@ -5,13 +5,13 @@ import {
   Globe, Search, X, Zap,
   Building2, TrendingUp, FileText, MessageSquare,
   Mic, MicOff, CheckCircle2, ListTodo, Tag, StickyNote,
-  History, Trash2, Brain, Dna, Copy, ChevronDown,
+  History, Trash2, Brain, Dna, Copy, ChevronDown, ArrowRight,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, StandaloneTask, TaskPriority, TeamMember, AccountData } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { db } from '../lib/firebase';
-import { doc, getDoc, setDoc, collection, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, onSnapshot, getDocs, query, orderBy, limit } from 'firebase/firestore';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ToolAction {
@@ -27,6 +27,15 @@ interface Message {
   searches?: string[];
   actions?: ToolAction[];
   timestamp?: string; // ISO string for localStorage serialization
+}
+
+interface Session {
+  id: string;
+  messages: Message[];
+  startedAt: string;
+  endedAt: string;
+  preview: string;      // first user message (up to 120 chars)
+  messageCount: number;
 }
 
 interface AiAssistantProps {
@@ -125,7 +134,7 @@ const CRM_TOOLS = [
 /* ─── History persistence (localStorage + Firestore) ────────────────────── */
 const HISTORY_KEY   = 'ray-ai-history';
 const FS_HISTORY_ID = 'ai-history/messages'; // Firestore path: collection/docId
-const MAX_HISTORY   = 60;
+const MAX_HISTORY   = 300; // keep up to 300 messages in current session
 
 function loadLocalHistory(): Message[] {
   try {
@@ -159,6 +168,33 @@ async function saveFirestoreHistory(msgs: Message[]) {
       updatedAt: new Date().toISOString(),
     });
   } catch { /* network issue - silently ignore */ }
+}
+
+/* ─── Session persistence ─────────────────────────────────────────────────── */
+async function saveSessionToFirestore(messages: Message[]): Promise<string | null> {
+  if (messages.length < 2) return null; // skip trivial sessions
+  const sessionId = Date.now().toString();
+  const firstUserMsg = messages.find(m => m.role === 'user');
+  const session: Session = {
+    id:           sessionId,
+    messages:     messages.slice(-MAX_HISTORY),
+    startedAt:    messages[0]?.timestamp   ?? new Date().toISOString(),
+    endedAt:      messages[messages.length - 1]?.timestamp ?? new Date().toISOString(),
+    preview:      firstUserMsg?.content.slice(0, 120) ?? '',
+    messageCount: messages.length,
+  };
+  try {
+    await setDoc(doc(db, 'ai-sessions', sessionId), session);
+    return sessionId;
+  } catch { return null; }
+}
+
+async function loadSessionsFromFirestore(): Promise<Session[]> {
+  try {
+    const q    = query(collection(db, 'ai-sessions'), orderBy('startedAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Session);
+  } catch { return []; }
 }
 
 /* ─── Build system prompt ────────────────────────────────────────────────── */
@@ -670,6 +706,151 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   HISTORY PANEL
+═══════════════════════════════════════════════════════════════════════════ */
+function HistoryPanel({
+  sessions,
+  currentMessages,
+  onClose,
+  loading: sessionsLoading,
+}: {
+  sessions: Session[];
+  currentMessages: Message[];
+  onClose: () => void;
+  loading: boolean;
+}) {
+  const [selected, setSelected] = useState<Session | null>(null);
+
+  const fmtDate = (iso: string) => {
+    try { return new Date(iso).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch { return iso; }
+  };
+  const fmtTime = (iso: string) => {
+    try { return new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); }
+    catch { return ''; }
+  };
+
+  /* ── Session detail view ── */
+  if (selected) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/60 flex-shrink-0">
+          <button
+            onClick={() => setSelected(null)}
+            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            <ArrowRight size={14} /> חזור לרשימה
+          </button>
+          <div className="text-right">
+            <p className="text-white font-bold text-sm">{fmtDate(selected.startedAt)}</p>
+            <p className="text-slate-500 text-xs">{selected.messageCount} הודעות · {fmtTime(selected.startedAt)}</p>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {selected.messages.map((msg, i) => (
+            <MessageBubble key={i} msg={msg} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Session list view ── */
+  const hasCurrent = currentMessages.length >= 2;
+  const currentAsSession: Session | null = hasCurrent ? {
+    id:           'current',
+    messages:     currentMessages,
+    startedAt:    currentMessages[0]?.timestamp   ?? new Date().toISOString(),
+    endedAt:      currentMessages[currentMessages.length - 1]?.timestamp ?? new Date().toISOString(),
+    preview:      currentMessages.find(m => m.role === 'user')?.content.slice(0, 120) ?? '',
+    messageCount: currentMessages.length,
+  } : null;
+
+  const isEmpty = !hasCurrent && sessions.length === 0 && !sessionsLoading;
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/60 flex-shrink-0">
+        <button
+          onClick={onClose}
+          className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowRight size={14} /> חזור לשיחה
+        </button>
+        <div className="flex items-center gap-2">
+          <History size={14} className="text-indigo-400" />
+          <span className="text-white font-bold text-sm">היסטוריית שיחות</span>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+
+        {/* Current session */}
+        {currentAsSession && (
+          <div>
+            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 mb-2">שיחה נוכחית</p>
+            <button
+              onClick={() => setSelected(currentAsSession)}
+              className="w-full text-right bg-slate-800 hover:bg-slate-700 border border-indigo-600/40 rounded-2xl p-4 transition-all"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-[10px] text-indigo-400 bg-indigo-900/40 border border-indigo-700/40 px-2 py-0.5 rounded-full flex-shrink-0">
+                  {currentAsSession.messageCount} הודעות
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white text-sm font-medium leading-snug line-clamp-2">{currentAsSession.preview || 'שיחה נוכחית'}</p>
+                  <p className="text-slate-500 text-xs mt-1">{fmtTime(currentAsSession.startedAt)}</p>
+                </div>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {/* Past sessions */}
+        {sessionsLoading ? (
+          <div className="text-center py-8">
+            <Loader2 size={20} className="animate-spin text-slate-500 mx-auto" />
+            <p className="text-slate-500 text-xs mt-2">טוען היסטוריה...</p>
+          </div>
+        ) : isEmpty ? (
+          <div className="text-center py-16">
+            <History size={36} className="text-slate-700 mx-auto mb-4" />
+            <p className="text-slate-500 text-sm font-medium">אין היסטוריית שיחות עדיין</p>
+            <p className="text-slate-600 text-xs mt-1.5 leading-relaxed">
+              כל שיחה תישמר אוטומטית<br />כאשר תלחץ על כפתור "נקה"
+            </p>
+          </div>
+        ) : (
+          <>
+            {sessions.length > 0 && (
+              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 pt-2">שיחות קודמות ({sessions.length})</p>
+            )}
+            {sessions.map(session => (
+              <button
+                key={session.id}
+                onClick={() => setSelected(session)}
+                className="w-full text-right bg-slate-800 hover:bg-slate-700 border border-slate-700/50 hover:border-slate-600/50 rounded-2xl p-4 transition-all"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-[10px] text-slate-500 bg-slate-700/60 px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap">
+                    {session.messageCount} הודעות
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium leading-snug line-clamp-2">{session.preview || 'שיחה'}</p>
+                    <p className="text-slate-500 text-xs mt-1">{fmtDate(session.startedAt)} · {fmtTime(session.startedAt)}</p>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function AiAssistant({
@@ -689,6 +870,8 @@ export default function AiAssistant({
   const [showHistory,       setShowHistory]       = useState(false);
   const [activeView,        setActiveView]        = useState<'chat' | 'mirror' | 'dna'>('chat');
   const [accounts,          setAccounts]          = useState<AccountData[]>([]);
+  const [sessions,          setSessions]          = useState<Session[]>([]);
+  const [sessionsLoading,   setSessionsLoading]   = useState(false);
   const messagesEndRef  = useRef<HTMLDivElement>(null);
   const inputRef        = useRef<HTMLTextAreaElement>(null);
   const voiceRecogRef   = useRef<unknown>(null);
@@ -703,6 +886,14 @@ export default function AiAssistant({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load session history from Firestore on mount
+  useEffect(() => {
+    setSessionsLoading(true);
+    loadSessionsFromFirestore()
+      .then(s => setSessions(s))
+      .finally(() => setSessionsLoading(false));
   }, []);
 
   // Load accounts (files, proposals) for AI context
@@ -1075,7 +1266,22 @@ export default function AiAssistant({
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const clearChat = () => {
+  const clearChat = async () => {
+    // Save current conversation as a session before clearing
+    if (messages.length >= 2) {
+      const sessionId = await saveSessionToFirestore(messages);
+      if (sessionId) {
+        const newSession: Session = {
+          id:           sessionId,
+          messages,
+          startedAt:    messages[0]?.timestamp   ?? new Date().toISOString(),
+          endedAt:      messages[messages.length - 1]?.timestamp ?? new Date().toISOString(),
+          preview:      messages.find(m => m.role === 'user')?.content.slice(0, 120) ?? '',
+          messageCount: messages.length,
+        };
+        setSessions(prev => [newSession, ...prev].slice(0, 50));
+      }
+    }
     setMessages([]);
     localStorage.removeItem(HISTORY_KEY);
     if (fsSaveTimer.current) clearTimeout(fsSaveTimer.current);
@@ -1084,6 +1290,7 @@ export default function AiAssistant({
     setStreamingText('');
     setSearchLabel(undefined);
     setCurrentSearches([]);
+    setShowHistory(false);
   };
 
   /* ── Suggestion chips ─────────────────────────────────────────────────── */
@@ -1109,15 +1316,14 @@ export default function AiAssistant({
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0">
         <div className="flex items-center gap-2">
-          {/* History toggle */}
-          {messages.length > 0 && (
-            <button onClick={() => setShowHistory(v => !v)}
-              className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-800/60 text-indigo-300' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
-              <History size={12} /> {messages.length} הודעות
-            </button>
-          )}
-          {/* Clear */}
-          {messages.length > 0 && (
+          {/* History toggle — always visible */}
+          <button onClick={() => setShowHistory(v => !v)}
+            className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg transition-colors ${showHistory ? 'bg-indigo-800/60 text-indigo-300' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
+            <History size={12} />
+            {messages.length > 0 ? `${messages.length} הודעות` : 'היסטוריה'}
+          </button>
+          {/* Clear — only when there are messages */}
+          {messages.length > 0 && !showHistory && (
             <button onClick={clearChat}
               className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1.5 rounded-lg hover:bg-slate-800">
               <Trash2 size={12} /> נקה
@@ -1191,8 +1397,18 @@ export default function AiAssistant({
       {/* ── DNA Match ───────────────────────────────────────────────────────── */}
       {activeView === 'dna' && <DnaMatchPanel leads={leads} />}
 
+      {/* ── History Panel ──────────────────────────────────────────────────── */}
+      {activeView === 'chat' && showHistory && (
+        <HistoryPanel
+          sessions={sessions}
+          currentMessages={messages}
+          onClose={() => setShowHistory(false)}
+          loading={sessionsLoading}
+        />
+      )}
+
       {/* ── Messages ───────────────────────────────────────────────────────── */}
-      {activeView === 'chat' && <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+      {activeView === 'chat' && !showHistory && <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
 
         {/* Welcome / idle state */}
         {isIdle && (
@@ -1313,7 +1529,7 @@ export default function AiAssistant({
       </div>}
 
       {/* ── Input bar (chat only) ───────────────────────────────────────────── */}
-      {activeView === 'chat' && <div className="border-t border-slate-700/60 px-4 py-3 bg-slate-900 flex-shrink-0">
+      {activeView === 'chat' && !showHistory && <div className="border-t border-slate-700/60 px-4 py-3 bg-slate-900 flex-shrink-0">
         <div className={`flex gap-2 items-end bg-slate-800 border rounded-xl px-3 py-2.5 transition-all ${
           voiceRecording
             ? 'border-red-500/60 ring-1 ring-red-500/20'
