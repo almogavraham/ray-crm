@@ -61,8 +61,8 @@ export default function Layout({
   const filteredGroups = NAV_GROUPS.map(group => ({
     ...group,
     items: group.items.filter(({ page }) => {
-      if (page === 'settings') return isAdmin; // settings: admin only
-      if (isAdmin) return true;
+      if (isAdmin) return true;                          // admin sees everything
+      if (page === 'settings') return false;             // agents never see settings
       return allowedPages.includes(page);
     }),
   })).filter(g => g.items.length > 0);
