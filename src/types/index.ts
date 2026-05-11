@@ -203,6 +203,7 @@ export type AccountData = {
   links: ClientLink[];
   files: ClientFile[];
   proposals: Proposal[];
+  projects: Project[];
   upsellNote: string;
   nextStep?: string;
   satisfactionScore?: number;   // 1–5
@@ -230,6 +231,8 @@ export type Proposal = {
   notes?: string;
   status: 'draft' | 'sent' | 'viewed' | 'accepted' | 'rejected';
   createdAt: string;
+  templateId?: string;
+  logoUrl?: string;
 };
 
 export type Deal = {
@@ -249,6 +252,34 @@ export type Deal = {
   wonAt?: string;
   lostAt?: string;
   lostReason?: string;
+};
+
+export type ProjectStatus   = 'planning' | 'active' | 'review' | 'completed' | 'paused';
+export type ProjectPriority = 'high' | 'medium' | 'low';
+
+export type ProjectTask = {
+  id: string;
+  title: string;
+  completed: boolean;
+  assignedTo?: string;
+  dueDate?: string;
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  description?: string;
+  status: ProjectStatus;
+  priority: ProjectPriority;
+  startDate?: string;
+  dueDate?: string;
+  budget?: number;
+  assignedTo?: string;
+  tasks: ProjectTask[];
+  notes?: string;
+  color?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AppSettings = {

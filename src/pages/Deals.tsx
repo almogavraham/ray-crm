@@ -10,6 +10,7 @@ import {
   Upload, Image as ImageIcon, Film, FileCheck, Folder,
   BookOpen, Send, Eye, Download, Copy, CheckCheck,
   Percent, Receipt, PenLine, GripVertical,
+  Layers, FolderOpen, Flag, ListChecks, Palette, Sliders,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { getApiKey } from '../lib/apiKey';
@@ -27,6 +28,7 @@ import type {
   MediaRecord, MediaPlatform, ClientGoal, ClientLink,
   ClientFile, FileCategory, FileKind,
   Proposal, ProposalItem,
+  Project, ProjectStatus, ProjectPriority, ProjectTask,
 } from '../types';
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -111,7 +113,7 @@ const prevMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new D
 const nextMonth = (m: string) => { const [y, mo] = m.split('-'); const d = new Date(Number(y), Number(mo)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
 function blankAccount(leadId: string, budget: number): AccountData {
-  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, solutions: [], payments: [], activityLog: [], mediaRecords: [], goals: [], links: [], files: [], proposals: [], upsellNote: '', updatedAt: '' };
+  return { leadId, contractStart: '', contractEnd: '', monthlyRetainer: budget, solutions: [], payments: [], activityLog: [], mediaRecords: [], goals: [], links: [], files: [], proposals: [], projects: [], upsellNote: '', updatedAt: '' };
 }
 
 function getLast6Months() {
@@ -910,6 +912,299 @@ function ReportTab({ lead, account }: { lead: Lead; account: AccountData }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   PROJECTS TAB
+═══════════════════════════════════════════════════════════════════════════ */
+const PROJ_STATUS: Record<ProjectStatus, { label: string; color: string; bg: string; dot: string }> = {
+  planning:  { label: 'תכנון',     color: 'text-slate-600',   bg: 'bg-slate-100',   dot: 'bg-slate-400'   },
+  active:    { label: 'פעיל',      color: 'text-blue-700',    bg: 'bg-blue-100',    dot: 'bg-blue-500'    },
+  review:    { label: 'סקירה',     color: 'text-amber-700',   bg: 'bg-amber-100',   dot: 'bg-amber-500'   },
+  completed: { label: 'הושלם ✓',  color: 'text-emerald-700', bg: 'bg-emerald-100', dot: 'bg-emerald-500' },
+  paused:    { label: 'מושהה',     color: 'text-rose-600',    bg: 'bg-rose-100',    dot: 'bg-rose-500'    },
+};
+
+const PROJ_PRIORITY: Record<ProjectPriority, { label: string; color: string }> = {
+  high:   { label: 'דחוף',  color: 'text-red-600'    },
+  medium: { label: 'בינוני', color: 'text-amber-600'  },
+  low:    { label: 'נמוך',  color: 'text-slate-400'  },
+};
+
+const PROJ_COLORS = ['bg-indigo-500','bg-violet-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-blue-500','bg-teal-500','bg-orange-500'];
+
+function blankProject(): Omit<Project, 'id' | 'createdAt' | 'updatedAt'> {
+  return { name: '', description: '', status: 'planning', priority: 'medium', tasks: [], color: PROJ_COLORS[0] };
+}
+
+function ProjectDetail({ project, onSave, onClose, team }: {
+  project: Project; onSave: (p: Project) => void; onClose: () => void; team: string[];
+}) {
+  const [p, setP] = useState<Project>(project);
+  const [newTask, setNewTask] = useState('');
+  const [editingMeta, setEditingMeta] = useState(false);
+
+  const completedTasks = p.tasks.filter(t => t.completed).length;
+  const progress = p.tasks.length > 0 ? Math.round((completedTasks / p.tasks.length) * 100) : 0;
+
+  function save(updated: Project) { setP(updated); onSave(updated); }
+
+  function toggleTask(id: string) {
+    const updated = { ...p, tasks: p.tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t), updatedAt: new Date().toISOString() };
+    save(updated);
+  }
+  function addTask() {
+    if (!newTask.trim()) return;
+    const task: ProjectTask = { id: Date.now().toString(), title: newTask.trim(), completed: false };
+    const updated = { ...p, tasks: [...p.tasks, task], updatedAt: new Date().toISOString() };
+    save(updated); setNewTask('');
+  }
+  function removeTask(id: string) {
+    save({ ...p, tasks: p.tasks.filter(t => t.id !== id), updatedAt: new Date().toISOString() });
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Back + Status row */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-1.5 flex-wrap">
+          {(Object.keys(PROJ_STATUS) as ProjectStatus[]).map(s => (
+            <button key={s} onClick={() => save({ ...p, status: s, updatedAt: new Date().toISOString() })}
+              className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all ${p.status === s ? `${PROJ_STATUS[s].bg} ${PROJ_STATUS[s].color} border-current/20` : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'}`}>
+              {PROJ_STATUS[s].label}
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} className="flex items-center gap-1.5 text-sm font-bold text-slate-600 hover:text-slate-900">
+          חזרה לפרויקטים ←
+        </button>
+      </div>
+
+      {/* Header card */}
+      <div className={`${p.color ?? 'bg-indigo-500'} rounded-2xl p-6 text-white`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={() => setEditingMeta(v => !v)} className="flex items-center gap-1.5 text-xs font-bold bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-xl transition-colors">
+              <Sliders size={11} /> {editingMeta ? 'סגור' : 'ערוך'}
+            </button>
+          </div>
+          <div className="text-right">
+            <h2 className="text-2xl font-black">{p.name}</h2>
+            {p.description && <p className="text-white/70 text-sm mt-0.5">{p.description}</p>}
+          </div>
+        </div>
+        {/* Progress */}
+        {p.tasks.length > 0 && (
+          <div className="mt-4">
+            <div className="flex justify-between text-xs text-white/70 mb-1.5"><span>{completedTasks}/{p.tasks.length} משימות</span><span>{progress}%</span></div>
+            <div className="h-2 bg-white/20 rounded-full"><div className="h-2 bg-white rounded-full transition-all duration-500" style={{ width: `${progress}%` }} /></div>
+          </div>
+        )}
+        <div className="mt-3 flex gap-3 text-xs text-white/70 flex-wrap">
+          {p.dueDate && <span>📅 יעד: {fmtD(p.dueDate)}</span>}
+          {p.budget && <span>💰 {fmt(p.budget)}</span>}
+          {p.assignedTo && <span>👤 {p.assignedTo}</span>}
+          <span className={`font-bold text-white`}>⚑ {PROJ_PRIORITY[p.priority].label}</span>
+        </div>
+      </div>
+
+      {/* Edit meta panel */}
+      {editingMeta && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-slate-500 mb-1 block">שם הפרויקט *</label><input value={p.name} onChange={e => setP(v => ({ ...v, name: e.target.value }))} onBlur={() => save(p)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">עדיפות</label>
+              <select value={p.priority} onChange={e => save({ ...p, priority: e.target.value as ProjectPriority, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none">
+                {(Object.keys(PROJ_PRIORITY) as ProjectPriority[]).map(k => <option key={k} value={k}>{PROJ_PRIORITY[k].label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div><label className="text-xs text-slate-500 mb-1 block">תיאור</label><textarea value={p.description || ''} onChange={e => setP(v => ({ ...v, description: e.target.value }))} onBlur={() => save(p)} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs text-slate-500 mb-1 block">תאריך התחלה</label><input type="date" value={p.startDate || ''} onChange={e => save({ ...p, startDate: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">תאריך יעד</label><input type="date" value={p.dueDate || ''} onChange={e => save({ ...p, dueDate: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">תקציב (₪)</label><input type="number" min={0} value={p.budget || ''} onChange={e => save({ ...p, budget: Number(e.target.value) || undefined, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+          </div>
+          <div><label className="text-xs text-slate-500 mb-1 block">אחראי</label>
+            <select value={p.assignedTo || ''} onChange={e => save({ ...p, assignedTo: e.target.value, updatedAt: new Date().toISOString() })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none">
+              <option value="">ללא שיוך</option>{team.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-2 block">צבע</label>
+            <div className="flex gap-2 justify-end">{PROJ_COLORS.map(c => <button key={c} onClick={() => save({ ...p, color: c, updatedAt: new Date().toISOString() })} className={`w-7 h-7 rounded-xl ${c} transition-all ${p.color === c ? 'ring-2 ring-offset-1 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />)}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Tasks */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+        <h3 className="font-bold text-slate-800 mb-4 text-right flex items-center justify-end gap-2">
+          <ListChecks size={15} className="text-indigo-500" /> משימות פרויקט ({completedTasks}/{p.tasks.length})
+        </h3>
+        <div className="flex gap-2 mb-4">
+          <button onClick={addTask} disabled={!newTask.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">הוסף</button>
+          <input value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="משימה חדשה..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
+        </div>
+        <div className="space-y-2">
+          {p.tasks.length === 0 && <p className="text-center text-slate-300 text-sm py-4">הוסף משימות לפרויקט</p>}
+          {p.tasks.map(t => (
+            <div key={t.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-colors ${t.completed ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}>
+              <button onClick={() => removeTask(t.id)} className="w-5 h-5 rounded-md bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 flex-shrink-0"><X size={10} /></button>
+              <div className="flex-1 text-right">
+                <span className={`text-sm ${t.completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>{t.title}</span>
+                {t.dueDate && <span className="text-xs text-slate-400 block">{fmtD(t.dueDate)}</span>}
+              </div>
+              <button onClick={() => toggleTask(t.id)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${t.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 hover:border-emerald-400'}`}>
+                {t.completed && <Check size={11} className="text-white" />}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+        <h3 className="font-bold text-slate-800 mb-3 text-right">הערות פרויקט</h3>
+        <textarea value={p.notes || ''} onChange={e => setP(v => ({ ...v, notes: e.target.value }))} onBlur={() => save(p)} rows={4} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" placeholder="הערות, קישורים, מידע חשוב..." />
+      </div>
+    </div>
+  );
+}
+
+function ProjectsTab({ account, onSave, team }: { account: AccountData; onSave: (a: AccountData) => void; team: string[] }) {
+  const projects = account.projects ?? [];
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState(blankProject());
+
+  function createProject() {
+    if (!form.name.trim()) return;
+    const now = new Date().toISOString();
+    const proj: Project = { ...form, id: Date.now().toString(), createdAt: now, updatedAt: now };
+    onSave({ ...account, projects: [...projects, proj], updatedAt: now });
+    setOpenId(proj.id);
+    setCreating(false);
+    setForm(blankProject());
+  }
+
+  function updateProject(proj: Project) {
+    onSave({ ...account, projects: projects.map(p => p.id === proj.id ? proj : p), updatedAt: new Date().toISOString() });
+  }
+
+  function deleteProject(id: string) {
+    onSave({ ...account, projects: projects.filter(p => p.id !== id), updatedAt: new Date().toISOString() });
+    if (openId === id) setOpenId(null);
+  }
+
+  const openProject = openId ? projects.find(p => p.id === openId) : null;
+  if (openProject) {
+    return <ProjectDetail project={openProject} onSave={updateProject} onClose={() => setOpenId(null)} team={team} />;
+  }
+
+  const active = projects.filter(p => p.status === 'active').length;
+  const completed = projects.filter(p => p.status === 'completed').length;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => setCreating(true)} className="flex items-center gap-1.5 text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl shadow-sm transition-colors">
+          <Plus size={14} /> פרויקט חדש
+        </button>
+        {projects.length > 0 && (
+          <div className="flex gap-4 text-xs text-slate-500">
+            <span className="text-blue-600 font-bold">{active} פעילים</span>
+            <span className="text-emerald-600 font-bold">{completed} הושלמו</span>
+            <span>{projects.length} סה״כ</span>
+          </div>
+        )}
+      </div>
+
+      {/* Create form */}
+      {creating && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+          <h4 className="font-bold text-slate-800 text-sm text-right">פרויקט חדש</h4>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-slate-500 mb-1 block">שם הפרויקט *</label><input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" placeholder="קמפיין Q3, הדמיות לפרויקט X..." /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">עדיפות</label>
+              <select value={form.priority} onChange={e => setForm(p => ({ ...p, priority: e.target.value as ProjectPriority }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none">
+                {(Object.keys(PROJ_PRIORITY) as ProjectPriority[]).map(k => <option key={k} value={k}>{PROJ_PRIORITY[k].label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div><label className="text-xs text-slate-500 mb-1 block">תיאור קצר</label><input value={form.description || ''} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-slate-500 mb-1 block">תאריך יעד</label><input type="date" value={form.dueDate || ''} onChange={e => setForm(p => ({ ...p, dueDate: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">תקציב (₪)</label><input type="number" min={0} value={form.budget || ''} onChange={e => setForm(p => ({ ...p, budget: Number(e.target.value) || undefined }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none" /></div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-2 block">צבע</label>
+            <div className="flex gap-2 justify-end">{PROJ_COLORS.map(c => <button key={c} onClick={() => setForm(p => ({ ...p, color: c }))} className={`w-7 h-7 rounded-xl ${c} transition-all ${form.color === c ? 'ring-2 ring-offset-1 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />)}</div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setCreating(false); setForm(blankProject()); }} className="px-4 py-2 text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-xl">ביטול</button>
+            <button onClick={createProject} disabled={!form.name.trim()} className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-500 disabled:opacity-40">צור פרויקט</button>
+          </div>
+        </div>
+      )}
+
+      {/* Projects grid */}
+      {projects.length === 0 && !creating ? (
+        <div className="text-center py-12 text-slate-300">
+          <Layers size={40} className="mx-auto mb-3 opacity-50" />
+          <p className="font-semibold">אין פרויקטים עדיין</p>
+          <p className="text-sm mt-1">צור פרויקט לניהול עבודה ומשימות ללקוח</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {projects.map(proj => {
+            const st = PROJ_STATUS[proj.status];
+            const completedT = proj.tasks.filter(t => t.completed).length;
+            const prog = proj.tasks.length > 0 ? Math.round((completedT / proj.tasks.length) * 100) : null;
+            const overdue = proj.dueDate && new Date(proj.dueDate) < new Date() && proj.status !== 'completed';
+            return (
+              <div key={proj.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden group">
+                {/* Color bar */}
+                <div className={`h-1.5 ${proj.color ?? 'bg-indigo-500'}`} />
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button onClick={() => deleteProject(proj.id)} className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={11} /></button>
+                    </div>
+                    <div className="text-right min-w-0 flex-1">
+                      <div className="flex items-center justify-end gap-2 mb-0.5">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>{st.label}</span>
+                        <h4 className="font-black text-slate-900 truncate">{proj.name}</h4>
+                      </div>
+                      {proj.description && <p className="text-xs text-slate-500 truncate">{proj.description}</p>}
+                    </div>
+                  </div>
+                  {prog !== null && (
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs text-slate-400 mb-1"><span>{prog}%</span><span>{completedT}/{proj.tasks.length} משימות</span></div>
+                      <div className="h-1.5 bg-slate-100 rounded-full"><div className={`h-1.5 rounded-full ${proj.color ?? 'bg-indigo-500'} transition-all`} style={{ width: `${prog}%` }} /></div>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <div className="flex gap-2 text-xs text-slate-400 flex-wrap">
+                      {overdue && <span className="text-red-500 font-bold">⚠ פג תוקף</span>}
+                      {proj.dueDate && !overdue && <span>📅 {fmtD(proj.dueDate)}</span>}
+                      {proj.budget && <span>₪{(proj.budget / 1000).toFixed(0)}K</span>}
+                      <span className={PROJ_PRIORITY[proj.priority].color + ' font-semibold'}>⚑ {PROJ_PRIORITY[proj.priority].label}</span>
+                    </div>
+                    <button onClick={() => setOpenId(proj.id)} className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700 transition-colors">
+                      פתח <FolderOpen size={12} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    MATERIALS TAB
 ═══════════════════════════════════════════════════════════════════════════ */
 const FILE_CATS: Record<FileCategory, { label: string; icon: React.ElementType; color: string; bg: string }> = {
@@ -1125,18 +1420,124 @@ const PROPOSAL_STATUS: Record<Proposal['status'], { label: string; color: string
 
 function blankItem(): ProposalItem { return { id: Date.now().toString(), name: '', description: '', quantity: 1, unitPrice: 0 }; }
 
+function exportToPdf(proposal: Proposal, tmpl: string, includeVat: boolean) {
+  const subtotal = proposal.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
+  const discountAmt = subtotal * ((proposal.discount ?? 0) / 100);
+  const afterDiscount = subtotal - discountAmt;
+  const vatAmt = includeVat ? afterDiscount * 0.17 : 0;
+  const total = afterDiscount + vatAmt;
+  const fmtN = (n: number) => `₪${n.toLocaleString('he-IL')}`;
+
+  const headerStyle = tmpl === 'dark' ? 'background:#0f172a;color:#fff;'
+    : tmpl === 'minimal' ? 'background:#fff;color:#1e293b;border-bottom:4px solid #6366f1;'
+    : tmpl === 'pro' ? 'background:linear-gradient(135deg,#059669,#0d9488);color:#fff;'
+    : 'background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;';
+
+  const subtitleColor = tmpl === 'minimal' ? '#6366f1' : 'rgba(255,255,255,0.7)';
+  const headerTextColor = tmpl === 'minimal' ? '#1e293b' : '#fff';
+
+  const itemsHtml = proposal.items.map((item, i) => `
+    <tr style="background:${i%2===0?'#f8fafc':'#fff'}">
+      <td style="padding:10px 16px;font-weight:700;color:#1e293b;text-align:right">${item.name}${item.description ? `<div style="font-size:11px;color:#94a3b8;font-weight:400">${item.description}</div>` : ''}</td>
+      <td style="padding:10px 16px;text-align:center;color:#64748b">${item.quantity}</td>
+      <td style="padding:10px 16px;text-align:center;color:#64748b">${fmtN(item.unitPrice)}</td>
+      <td style="padding:10px 16px;text-align:left;font-weight:700;color:#1e293b">${fmtN(item.quantity * item.unitPrice)}</td>
+    </tr>
+  `).join('');
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="UTF-8">
+<title>הצעת מחיר — ${proposal.title}</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color:#1e293b; background:#fff; }
+  @media print { body { print-color-adjust:exact; -webkit-print-color-adjust:exact; } }
+  .header { ${headerStyle} padding:40px 48px; }
+  .header h1 { font-size:28px; font-weight:900; color:${headerTextColor}; margin-bottom:4px; }
+  .header .subtitle { font-size:13px; color:${subtitleColor}; margin-bottom:20px; }
+  .header .meta { display:flex; gap:32px; align-items:flex-start; justify-content:space-between; }
+  .header .client { text-align:right; }
+  .header .client-label { font-size:11px; color:${subtitleColor}; }
+  .header .client-name { font-size:20px; font-weight:800; color:${headerTextColor}; }
+  .body { padding:36px 48px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:24px; }
+  th { background:#f1f5f9; padding:10px 16px; font-size:11px; color:#64748b; text-align:right; font-weight:700; }
+  .totals { margin-right:auto; max-width:320px; }
+  .totals-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #f1f5f9; font-size:14px; color:#64748b; }
+  .totals-total { display:flex; justify-content:space-between; padding:12px 0; border-top:2px solid #e2e8f0; margin-top:8px; }
+  .totals-total .amount { font-size:24px; font-weight:900; color:#4f46e5; }
+  .totals-total .label { font-size:15px; font-weight:700; color:#1e293b; }
+  .notes { background:#f8fafc; border-radius:12px; padding:20px; margin-top:24px; }
+  .notes h3 { font-size:13px; font-weight:700; color:#64748b; margin-bottom:8px; }
+  .notes p { font-size:14px; color:#475569; line-height:1.7; }
+  .footer { text-align:center; margin-top:40px; color:#cbd5e1; font-size:11px; }
+  ${proposal.logoUrl ? `.logo { height:44px; width:auto; object-fit:contain; margin-bottom:12px; }` : ''}
+</style>
+</head>
+<body>
+<div class="header">
+  ${proposal.logoUrl ? `<img src="${proposal.logoUrl}" alt="logo" class="logo" />` : ''}
+  <div class="meta">
+    <div>
+      ${proposal.validUntil ? `<div style="font-size:13px;color:${subtitleColor}">בתוקף עד: ${new Date(proposal.validUntil).toLocaleDateString('he-IL')}</div>` : ''}
+      <div style="font-size:13px;color:${subtitleColor};margin-top:4px">תאריך: ${new Date().toLocaleDateString('he-IL')}</div>
+    </div>
+    <div class="client">
+      <div class="client-label">הצעת מחיר עבור</div>
+      <div class="client-name">${proposal.clientName}</div>
+      ${proposal.clientEmail ? `<div style="font-size:13px;color:${subtitleColor}">${proposal.clientEmail}</div>` : ''}
+    </div>
+  </div>
+  <div class="subtitle">הצעת מחיר</div>
+  <h1>${proposal.title}</h1>
+</div>
+<div class="body">
+  <table>
+    <thead><tr><th>שם / תיאור</th><th style="text-align:center">כמות</th><th style="text-align:center">מחיר יח׳</th><th style="text-align:left">סה״כ</th></tr></thead>
+    <tbody>${itemsHtml}</tbody>
+  </table>
+  <div class="totals">
+    <div class="totals-row"><span>${fmtN(subtotal)}</span><span>סכום ביניים</span></div>
+    ${discountAmt > 0 ? `<div class="totals-row"><span style="color:#10b981">-${fmtN(discountAmt)}</span><span>הנחה (${proposal.discount}%)</span></div>` : ''}
+    ${vatAmt > 0 ? `<div class="totals-row"><span>+${fmtN(vatAmt)}</span><span>מע״מ 17%</span></div>` : ''}
+    <div class="totals-total"><span class="amount">${fmtN(total)}</span><span class="label">סה״כ לתשלום</span></div>
+  </div>
+  ${proposal.notes ? `<div class="notes"><h3>הערות והתניות</h3><p>${proposal.notes.replace(/\n/g,'<br>')}</p></div>` : ''}
+  <div class="footer">מסמך זה הופק אוטומטית במערכת RAY CRM</div>
+</div>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) return;
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 600);
+}
+
 function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
   proposal: Proposal; onSave: (p: Proposal) => void; onClose: () => void; clientName: string;
 }) {
   const [p, setP] = useState<Proposal>(proposal);
   const [vat, setVat] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [templateId, setTemplateId] = useState<'indigo'|'minimal'|'dark'|'pro'>((p.templateId as 'indigo'|'minimal'|'dark'|'pro') ?? 'indigo');
 
   const subtotal = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
   const discountAmt = subtotal * ((p.discount ?? 0) / 100);
   const afterDiscount = subtotal - discountAmt;
   const vatAmt = vat ? afterDiscount * 0.17 : 0;
   const total = afterDiscount + vatAmt;
+
+  const headerClass = templateId === 'dark' ? 'bg-slate-900 text-white'
+    : templateId === 'minimal' ? 'bg-white border-b-4 border-indigo-600 text-slate-900'
+    : templateId === 'pro' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white'
+    : 'bg-gradient-to-br from-indigo-600 to-violet-700 text-white';
+
+  const subtitleClass = templateId === 'minimal' ? 'text-indigo-600' : 'text-white/70';
+  const inputClass = templateId === 'minimal' ? 'text-slate-900 border-slate-300' : 'text-white border-white/30';
 
   function updateItem(id: string, field: keyof ProposalItem, value: string | number) {
     setP(prev => ({ ...prev, items: prev.items.map(i => i.id === id ? { ...i, [field]: value } : i) }));
@@ -1152,6 +1553,36 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
 
   return (
     <div className="space-y-5">
+      {/* Template + Logo bar */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-2">
+            {([
+              { id: 'indigo', label: 'אינדיגו', preview: 'bg-gradient-to-r from-indigo-600 to-violet-600' },
+              { id: 'minimal', label: 'מינימלי', preview: 'bg-white border-2 border-indigo-600' },
+              { id: 'dark', label: 'כהה', preview: 'bg-slate-900' },
+              { id: 'pro', label: 'פרו', preview: 'bg-gradient-to-r from-emerald-500 to-teal-500' },
+            ] as { id: 'indigo'|'minimal'|'dark'|'pro'; label: string; preview: string }[]).map(t => (
+              <button key={t.id} onClick={() => { setTemplateId(t.id); setP(v => ({...v, templateId: t.id})); }}
+                className={`flex flex-col items-center gap-1 transition-all ${templateId === t.id ? 'opacity-100' : 'opacity-50 hover:opacity-75'}`}>
+                <div className={`w-10 h-7 rounded-lg ${t.preview} ${templateId === t.id ? 'ring-2 ring-indigo-500 ring-offset-1 scale-110' : ''}`} />
+                <span className="text-[10px] text-slate-500 font-semibold">{t.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Palette size={13} className="text-slate-400" />
+            <span className="text-xs font-bold text-slate-500">תבנית</span>
+          </div>
+        </div>
+        {/* Logo URL */}
+        <div className="flex items-center gap-3">
+          <input dir="ltr" value={p.logoUrl || ''} onChange={e => setP(v => ({...v, logoUrl: e.target.value}))} className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-slate-400" placeholder="https://... URL ללוגו החברה (אופציונלי)" />
+          {p.logoUrl && <img src={p.logoUrl} alt="logo" className="h-8 w-auto object-contain rounded" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />}
+          <span className="text-xs text-slate-500 flex-shrink-0">לוגו</span>
+        </div>
+      </div>
+
       {/* Back + status + actions */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-2 flex-wrap">
@@ -1165,7 +1596,7 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
           <button onClick={copyLink} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
             {copied ? <CheckCheck size={12} className="text-emerald-500" /> : <Copy size={12} />} {copied ? 'הועתק!' : 'העתק'}
           </button>
-          <button onClick={() => window.print()} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
+          <button onClick={() => exportToPdf(p, templateId, vat)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors">
             <Printer size={12} /> הדפס / PDF
           </button>
           <button onClick={() => { onSave(p); onClose(); }} className="flex items-center gap-1.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl transition-colors">
@@ -1177,29 +1608,30 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
       {/* Proposal document */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden print:shadow-none print:border-0">
         {/* Header */}
-        <div className="bg-gradient-to-br from-indigo-600 to-violet-700 px-8 py-7 text-white print:px-6 print:py-5">
+        <div className={`${headerClass} px-8 py-7 print:px-6 print:py-5`}>
+          {p.logoUrl && <img src={p.logoUrl} alt="logo" className="h-10 w-auto object-contain mb-3 rounded" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />}
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-indigo-200 text-sm">הצעת מחיר</p>
+              <p className={`text-sm ${subtitleClass}`}>הצעת מחיר</p>
               <div className="flex items-center gap-3 mt-1">
-                <input value={p.title} onChange={e => setP(v => ({ ...v, title: e.target.value }))} className="text-2xl font-black bg-transparent border-b border-white/30 focus:outline-none focus:border-white/80 text-white placeholder-white/50 w-72 print:border-0" placeholder="שם ההצעה..." dir="rtl" />
+                <input value={p.title} onChange={e => setP(v => ({ ...v, title: e.target.value }))} className={`text-2xl font-black bg-transparent border-b focus:outline-none focus:border-current/80 placeholder-current/50 w-72 print:border-0 ${inputClass}`} placeholder="שם ההצעה..." dir="rtl" />
               </div>
             </div>
             <div className="text-right">
-              <p className="text-indigo-200 text-xs">לקוח</p>
-              <input value={p.clientName} onChange={e => setP(v => ({ ...v, clientName: e.target.value }))} className="font-bold text-lg bg-transparent border-b border-white/30 focus:outline-none focus:border-white/80 text-white text-right print:border-0" dir="rtl" />
+              <p className={`text-xs ${subtitleClass}`}>לקוח</p>
+              <input value={p.clientName} onChange={e => setP(v => ({ ...v, clientName: e.target.value }))} className={`font-bold text-lg bg-transparent border-b focus:outline-none text-right print:border-0 ${inputClass}`} dir="rtl" />
               {p.clientEmail !== undefined && (
-                <input value={p.clientEmail || ''} onChange={e => setP(v => ({ ...v, clientEmail: e.target.value }))} className="block text-sm bg-transparent text-indigo-200 border-b border-white/20 focus:outline-none mt-0.5 print:border-0" placeholder="מייל..." dir="ltr" />
+                <input value={p.clientEmail || ''} onChange={e => setP(v => ({ ...v, clientEmail: e.target.value }))} className={`block text-sm bg-transparent border-b focus:outline-none mt-0.5 print:border-0 ${subtitleClass}`} placeholder="מייל..." dir="ltr" />
               )}
             </div>
           </div>
           <div className="mt-4 flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2 text-sm text-indigo-200">
+            <div className={`flex items-center gap-2 text-sm ${subtitleClass}`}>
               <Calendar size={13} />
               <span>בתוקף עד:</span>
-              <input type="date" value={p.validUntil || ''} onChange={e => setP(v => ({ ...v, validUntil: e.target.value }))} className="bg-transparent border-b border-white/30 focus:outline-none text-white print:border-0" />
+              <input type="date" value={p.validUntil || ''} onChange={e => setP(v => ({ ...v, validUntil: e.target.value }))} className={`bg-transparent border-b focus:outline-none print:border-0 ${inputClass}`} />
             </div>
-            <span className={`text-xs font-bold px-2.5 py-1 rounded-full bg-white/20 text-white`}>{PROPOSAL_STATUS[p.status].label}</span>
+            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${templateId === 'minimal' ? 'bg-indigo-100 text-indigo-700' : 'bg-white/20 text-white'}`}>{PROPOSAL_STATUS[p.status].label}</span>
           </div>
         </div>
 
@@ -1387,7 +1819,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
   onBack: () => void; onLeadClick: (l: Lead) => void;
   currentUser: string; team: string[];
 }) {
-  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'proposals' | 'report'>('overview');
+  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'projects' | 'proposals' | 'report'>('overview');
   const score = calcHealth(lead, account);
   const hm = healthMeta(score);
 
@@ -1396,6 +1828,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
     { key: 'solutions'  as const, label: 'פתרונות',     icon: Package   },
     { key: 'payments'   as const, label: 'תשלומים',     icon: CreditCard},
     { key: 'media'      as const, label: 'מדיה',        icon: BarChart2 },
+    { key: 'projects'   as const, label: 'פרויקטים',    icon: Layers    },
     { key: 'materials'  as const, label: 'חומרים',      icon: Folder    },
     { key: 'proposals'  as const, label: 'הצעות מחיר',  icon: Receipt   },
     { key: 'report'     as const, label: 'דוח',          icon: FileText  },
@@ -1440,6 +1873,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
       {tab === 'solutions'  && <SolutionsTab  account={account} onSave={onSave} team={team} />}
       {tab === 'payments'   && <PaymentsTab   account={account} onSave={onSave} />}
       {tab === 'media'      && <MediaTab      account={account} onSave={onSave} />}
+      {tab === 'projects'   && <ProjectsTab   account={account} onSave={onSave} team={team} />}
       {tab === 'materials'  && <MaterialsTab  account={account} onSave={onSave} currentUser={currentUser} leadId={lead.id} />}
       {tab === 'proposals'  && <ProposalsTab  account={account} onSave={onSave} clientName={lead.company} />}
       {tab === 'report'     && <ReportTab     lead={lead} account={account} />}
