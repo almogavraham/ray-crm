@@ -125,14 +125,9 @@ function AppInner() {
   // Invite token in URL?
   const inviteToken = new URLSearchParams(window.location.search).get('token') ?? '';
 
-  // ── bypassAuth — loaded from Firestore once on mount ──────────────────────
-  const [bypassAuth, setBypassAuth] = useState<boolean | null>(null); // null = loading
-
-  useEffect(() => {
-    getDoc(doc(db, 'app-settings', 'auth'))
-      .then(snap => setBypassAuth(snap.exists() ? snap.data().bypassAuth === true : false))
-      .catch(() => setBypassAuth(false));
-  }, []);
+  // ── bypassAuth — כניסה ללא אימות מופעלת ──────────────────────────────────
+  const bypassAuth = true;
+  void getDoc; // suppress unused import warning
 
   const [page, setPage]               = useState<Page>('home');
   const [leads, setLeads]             = useState<Lead[]>(loadLeadsLocal);
@@ -437,7 +432,7 @@ function AppInner() {
     : settings.userInitials;
 
   // ─── Auth gates ──────────────────────────────────────────────────────────
-  if (loading || bypassAuth === null) return (
+  if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
     </div>
