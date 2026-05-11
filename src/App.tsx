@@ -18,13 +18,14 @@ import CommandPalette from './components/CommandPalette';
 import Toast from './components/Toast';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ResetPassword from './pages/ResetPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
 import {
-  collection, doc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
+  collection, doc, getDoc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
 } from 'firebase/firestore';
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -123,6 +124,15 @@ function AppInner() {
 
   // Invite token in URL?
   const inviteToken = new URLSearchParams(window.location.search).get('token') ?? '';
+
+  // ── bypassAuth — loaded from Firestore once on mount ──────────────────────
+  const [bypassAuth, setBypassAuth] = useState<boolean | null>(null); // null = loading
+
+  useEffect(() => {
+    getDoc(doc(db, 'app-settings', 'auth'))
+      .then(snap => setBypassAuth(snap.exists() ? snap.data().bypassAuth === true : false))
+      .catch(() => setBypassAuth(false));
+  }, []);
 
   const [page, setPage]               = useState<Page>('home');
   const [leads, setLeads]             = useState<Lead[]>(loadLeadsLocal);
@@ -427,11 +437,27 @@ function AppInner() {
     : settings.userInitials;
 
   // ─── Auth gates ──────────────────────────────────────────────────────────
-  if (loading) return (
+  if (loading || bypassAuth === null) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
     </div>
   );
+
+  // Password reset link from Firebase email (?mode=resetPassword&oobCode=xxx)
+  const urlParams   = new URLSearchParams(window.location.search);
+  const resetMode   = urlParams.get('mode');
+  const resetCode   = urlParams.get('oobCode') ?? '';
+  if (resetMode === 'resetPassword' && resetCode) {
+    return (
+      <ResetPassword
+        oobCode={resetCode}
+        onDone={() => {
+          window.history.replaceState({}, '', '/');
+          window.location.reload();
+        }}
+      />
+    );
+  }
 
   if (inviteToken) {
     return (
@@ -445,7 +471,7 @@ function AppInner() {
     );
   }
 
-  if (!user) return <Login />;
+  if (!user && !bypassAuth) return <Login />;
 
   return (
     <>

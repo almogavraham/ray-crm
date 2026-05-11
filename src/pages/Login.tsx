@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Zap, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import ForgotPassword from './ForgotPassword';
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -9,6 +10,11 @@ export default function Login() {
   const [showPw,   setShowPw]   = useState(false);
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
+
+  if (showForgot) {
+    return <ForgotPassword onBack={() => setShowForgot(false)} />;
+  }
 
   const handle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,6 +113,17 @@ export default function Login() {
             >
               {loading ? 'מתחבר...' : 'התחברות'}
             </button>
+
+            {/* Forgot password */}
+            <div className="text-center pt-1">
+              <button
+                type="button"
+                onClick={() => setShowForgot(true)}
+                className="text-slate-500 hover:text-indigo-400 text-sm transition-colors"
+              >
+                שכחתי סיסמה
+              </button>
+            </div>
           </form>
         </div>
 

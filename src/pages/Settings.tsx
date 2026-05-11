@@ -3,9 +3,9 @@ import {
   User, Palette, Database, Info, Save, RefreshCw, Download,
   Upload, CheckCircle2, AlertTriangle, Shield, Zap, Bell,
   ChevronLeft, Monitor, Moon, Globe, Users2, Copy, Link,
-  Mail, KeyRound,
+  Mail, KeyRound, Lock, Unlock,
 } from 'lucide-react';
-import { collection, getDocs, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
 import type { Lead, AppSettings, Page, UserProfile } from '../types';
@@ -21,7 +21,7 @@ interface SettingsProps {
   currentUserUid?: string;
 }
 
-type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users';
+type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users' | 'security';
 
 const ALL_PAGES: { page: Page; label: string }[] = [
   { page: 'home',      label: 'לוח בקרה' },
@@ -56,7 +56,11 @@ export default function Settings({
   ];
 
   const SECTIONS = isAdmin
-    ? [...BASE_SECTIONS, { key: 'users' as Section, label: 'משתמשים', desc: 'ניהול משתמשים והרשאות', Icon: Users2 }]
+    ? [
+        ...BASE_SECTIONS,
+        { key: 'users'    as Section, label: 'משתמשים', desc: 'ניהול משתמשים והרשאות', Icon: Users2  },
+        { key: 'security' as Section, label: 'אבטחה',   desc: 'הגדרות גישה ואימות',    Icon: Shield  },
+      ]
     : BASE_SECTIONS;
 
   const [section, setSection]     = useState<Section>('profile');
@@ -64,6 +68,30 @@ export default function Settings({
   const [saved, setSaved]         = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const fileRef                   = useRef<HTMLInputElement>(null);
+
+  // ── Security section state ──
+  const [bypassAuth,        setBypassAuth]        = useState(false);
+  const [bypassAuthLoading, setBypassAuthLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    getDoc(doc(db, 'app-settings', 'auth'))
+      .then(snap => { if (snap.exists()) setBypassAuth(snap.data().bypassAuth === true); })
+      .catch(() => {});
+  }, [isAdmin]);
+
+  const handleToggleBypassAuth = async (val: boolean) => {
+    setBypassAuthLoading(true);
+    try {
+      await setDoc(doc(db, 'app-settings', 'auth'), { bypassAuth: val }, { merge: true });
+      setBypassAuth(val);
+      onToast(val ? 'כניסה ללא אימות הופעלה' : 'כניסה ללא אימות בוטלה', 'info');
+    } catch {
+      onToast('שגיאה בעדכון הגדרת האבטחה', 'error');
+    } finally {
+      setBypassAuthLoading(false);
+    }
+  };
 
   // ── Users section state ──
   const [users, setUsers]             = useState<UserProfile[]>([]);
@@ -769,8 +797,55 @@ export default function Settings({
           </>
         )}
 
+        {/* ── SECURITY (admin only) ── */}
+        {section === 'security' && isAdmin && (
+          <>
+            <SectionHeader icon={<Shield size={18} />} title="אבטחה וגישה" desc="שליטה על אימות וכניסת משתמשים" />
+
+            <Card>
+              <div className="text-right mb-5">
+                <p className="font-semibold text-slate-700 mb-1">כניסה ללא אימות</p>
+                <p className="text-sm text-slate-400">כשמופעל, כל אחד שיגיע לאפליקציה יוכל להיכנס ישירות מבלי להזין שם משתמש וסיסמה</p>
+              </div>
+
+              <div className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${bypassAuth ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
+                <button
+                  onClick={() => handleToggleBypassAuth(!bypassAuth)}
+                  disabled={bypassAuthLoading}
+                  className={`relative w-12 h-6 rounded-full transition-all flex-shrink-0 ${bypassAuth ? 'bg-amber-400' : 'bg-slate-300'} ${bypassAuthLoading ? 'opacity-50' : ''}`}
+                >
+                  <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${bypassAuth ? 'left-6' : 'left-0.5'}`} />
+                </button>
+                <div className="text-right flex items-center gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-800 text-sm">
+                      {bypassAuth ? 'כניסה ללא אימות — פעיל' : 'כניסה ללא אימות — כבוי'}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {bypassAuth ? 'המערכת פתוחה לכולם ללא התחברות' : 'נדרש אימות עם שם משתמש וסיסמה'}
+                    </p>
+                  </div>
+                  {bypassAuth
+                    ? <Unlock size={20} className="text-amber-500 flex-shrink-0" />
+                    : <Lock    size={20} className="text-emerald-500 flex-shrink-0" />
+                  }
+                </div>
+              </div>
+
+              {bypassAuth && (
+                <div className="mt-4 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 text-right">
+                  <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700">
+                    <strong>אזהרה:</strong> כניסה ללא אימות מאפשרת לכל מי שיש לו את קישור האפליקציה לגשת לכל הנתונים. השתמש בזה רק בסביבת פיתוח או רשת פנימית מאובטחת.
+                  </p>
+                </div>
+              )}
+            </Card>
+          </>
+        )}
+
         {/* ── Save Button ── */}
-        {section !== 'data' && section !== 'about' && section !== 'users' && (
+        {section !== 'data' && section !== 'about' && section !== 'users' && section !== 'security' && (
           <div className="flex justify-start">
             <button
               onClick={handleSave}
