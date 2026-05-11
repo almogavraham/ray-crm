@@ -12,6 +12,7 @@ import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
 import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
+import Agents from './pages/Agents';
 import LeadModal from './components/LeadModal';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
@@ -478,7 +479,7 @@ function AppInner() {
         overdueBadge={overdueBadge}
         userInitials={displayInitials}
         userName={displayName}
-        allowedPages={profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals'] : [])}
+        allowedPages={profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents'] : [])}
         isAdmin={bypassAuth ? true : isAdmin}
         onSignOut={signOut}
       >
@@ -557,6 +558,17 @@ function AppInner() {
             onToast={addToast}
             isAdmin={bypassAuth ? true : isAdmin}
             currentUserUid={user?.uid ?? ''}
+          />
+        )}
+        {page === 'agents' && (
+          <Agents
+            leads={leads}
+            team={team}
+            currentUser={displayName}
+            standaloneTask={standaloneTask}
+            onCreateTask={handleStandaloneAdd}
+            onUpdateLead={handleLeadUpdate}
+            onToast={addToast}
           />
         )}
         {page === 'content' && (

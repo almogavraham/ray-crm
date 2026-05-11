@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, UserCheck, Settings,
-  Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut,
+  Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -41,9 +41,10 @@ const NAV_GROUPS = [
   {
     label: 'כלים',
     items: [
-      { page: 'ai'       as Page, label: 'עוזר AI',   icon: Sparkles },
-      { page: 'team'     as Page, label: 'צוות',      icon: UserCheck },
-      { page: 'settings' as Page, label: 'הגדרות',   icon: Settings },
+      { page: 'agents'   as Page, label: 'סוכנים חכמים', icon: Bot },
+      { page: 'ai'       as Page, label: 'עוזר AI',       icon: Sparkles },
+      { page: 'team'     as Page, label: 'צוות',          icon: UserCheck },
+      { page: 'settings' as Page, label: 'הגדרות',        icon: Settings },
     ],
   },
 ];

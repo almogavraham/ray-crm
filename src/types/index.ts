@@ -83,7 +83,7 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals';
+export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents';
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
