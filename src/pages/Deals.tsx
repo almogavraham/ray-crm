@@ -2015,13 +2015,29 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
     setSelected(lead);
   }
 
+  // Deep-strips undefined from any value (Firestore rejects undefined anywhere)
+  function deepClean<T>(val: T): T {
+    if (Array.isArray(val)) return val.map(deepClean) as unknown as T;
+    if (val !== null && typeof val === 'object') {
+      return Object.fromEntries(
+        Object.entries(val as Record<string, unknown>)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, deepClean(v)])
+      ) as T;
+    }
+    return val;
+  }
+
   async function saveAccount(data: AccountData) {
     try {
-      const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)) as AccountData;
+      const clean = deepClean(data);
       await setDoc(doc(db, 'accounts', data.leadId), clean);
       setAccounts(p => p.map(a => a.leadId === data.leadId ? data : a));
       onToast?.('נשמר ✓', 'success');
-    } catch { onToast?.('שגיאה בשמירה', 'error'); }
+    } catch (err) {
+      console.error('saveAccount error:', err);
+      onToast?.('שגיאה בשמירה', 'error');
+    }
   }
 
   async function runDealShield() {
