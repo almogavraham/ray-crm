@@ -11,11 +11,11 @@ import type { UserProfile, WorkspaceProfile } from '../types';
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 const ALL_PAGES = ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents'] as const;
 
-interface Props { onSuccess: () => void; onBack: () => void; }
+interface Props { onSuccess: (slug: string) => void; onBack: () => void; onSignIn?: () => void; }
 
 type Step = 'details' | 'creds' | 'done';
 
-export default function PublicRegister({ onSuccess, onBack }: Props) {
+export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
   const [step, setStep]         = useState<Step>('details');
   /* step 1 */
   const [company,   setCompany]   = useState('');
@@ -55,12 +55,15 @@ export default function PublicRegister({ onSuccess, onBack }: Props) {
 
       /* 2. Create workspace document */
       const wid   = `ws_${uid}`;
+      // Unique 7-char slug for clean URL: ray-crm-app.web.app/{slug}
+      const slug  = Math.random().toString(36).slice(2, 9);
       const trial = new Date();
       trial.setDate(trial.getDate() + 14);
 
       // Firestore rejects undefined values — build object cleanly
       const workspace: Record<string, unknown> = {
         id:                 wid,
+        slug,
         name:               company.trim(),
         businessId:         bizId.trim(),
         phone:              phone.trim(),
@@ -91,12 +94,13 @@ export default function PublicRegister({ onSuccess, onBack }: Props) {
 
       localStorage.setItem('ray-login-at', Date.now().toString());
       setStep('done');
-      setTimeout(onSuccess, 1800);
+      // Pass the clean slug (not wid) so App can redirect to /{slug}
+      setTimeout(() => onSuccess(slug), 600);
     } catch (err: unknown) {
       console.error('Registration error:', err);
       const code    = (err as { code?: string }).code ?? '';
       const message = (err as { message?: string }).message ?? '';
-      if (code === 'auth/email-already-in-use')  setError('אימייל זה כבר רשום במערכת');
+      if (code === 'auth/email-already-in-use')  setError('אימייל זה כבר קיים ב-Firebase Auth — נא למחוק אותו ידנית דרך Firebase Console → Authentication → Users');
       else if (code === 'auth/invalid-email')    setError('כתובת אימייל לא תקינה');
       else if (code === 'auth/weak-password')    setError('הסיסמה חלשה מדי — לפחות 6 תווים');
       else if (code === 'permission-denied')     setError('שגיאת הרשאות Firestore — בדוק כללי אבטחה');
@@ -114,7 +118,7 @@ export default function PublicRegister({ onSuccess, onBack }: Props) {
 
   /* ── Done ─────────────────────────────────────────────────────────────── */
   if (step === 'done') return (
-    <Screen>
+    <Screen onSignIn={onSignIn}>
       <div className="text-center py-8">
         <CheckCircle2 size={56} className="text-emerald-400 mx-auto mb-5" />
         <h2 className="text-white font-black text-2xl mb-2">סביבת העבודה נוצרה! 🎉</h2>
@@ -124,7 +128,7 @@ export default function PublicRegister({ onSuccess, onBack }: Props) {
   );
 
   return (
-    <Screen>
+    <Screen onSignIn={onSignIn}>
       {/* Progress bar */}
       <div className="flex gap-2 mb-8">
         {(['details','creds'] as const).map((s, i) => (
@@ -250,7 +254,7 @@ export default function PublicRegister({ onSuccess, onBack }: Props) {
 /* ─── small shared components ─────────────────────────────────────────────── */
 const INPUT = 'w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500';
 
-function Screen({ children }: { children: React.ReactNode }) {
+function Screen({ children, onSignIn }: { children: React.ReactNode; onSignIn?: () => void }) {
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
       <div className="w-full max-w-md">
@@ -267,6 +271,16 @@ function Screen({ children }: { children: React.ReactNode }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
           {children}
         </div>
+        {/* Sign-in link */}
+        <p className="text-center text-slate-500 text-sm mt-5">
+          כבר יש לך חשבון?{' '}
+          <button
+            onClick={onSignIn ?? (() => window.location.replace('/'))}
+            className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+          >
+            התחבר ←
+          </button>
+        </p>
       </div>
     </div>
   );

@@ -4,7 +4,6 @@ import './index.css';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Overview from './pages/Overview';
-import TeamManagement from './pages/TeamManagement';
 import AiAssistant from './pages/AiAssistant';
 import Kanban from './pages/Kanban';
 import Tasks from './pages/Tasks';
@@ -24,13 +23,15 @@ import PublicRegister from './pages/PublicRegister';
 import WorkspaceOnboarding from './pages/WorkspaceOnboarding';
 import WorkspaceSettings from './pages/WorkspaceSettings';
 import AdminPanel from './pages/AdminPanel';
+import LandingPage from './pages/LandingPage';
+import ForgotPassword from './pages/ForgotPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
 import {
-  collection, doc, getDoc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
+  collection, doc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
 } from 'firebase/firestore';
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -127,10 +128,53 @@ function loadSettings(): AppSettings {
 function AppInner() {
   const { user, profile, workspace, loading, isAdmin, isSuperAdmin, signOut, refreshWorkspace } = useAuth();
 
-  // URL params
-  const urlSearch   = new URLSearchParams(window.location.search);
-  const inviteToken = urlSearch.get('token') ?? '';
-  const isSignup    = urlSearch.get('signup') === '1';
+  // ─── Domain routing ─────────────────────────────────────────────────────────
+  // Supports two modes:
+  //   NEW:    acme.ray-crm.com          → subdomain = workspace slug
+  //   LEGACY: ray-crm-app.web.app/slug  → path segment = workspace slug
+  //   DEV:    localhost/slug            → same as legacy
+  const RAY_DOMAIN  = 'ray-crm.com';
+  const hostname    = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+  const isNewDomain = hostname === RAY_DOMAIN || hostname.endsWith(`.${RAY_DOMAIN}`);
+
+  // Detect admin domain — served by chex-crm Firebase site
+  const isAdminDomain = (
+    hostname === 'admin.ray-crm.com' ||
+    hostname === 'chex-crm.web.app'  ||
+    hostname === 'chex-crm.firebaseapp.com'
+  );
+
+  // Extract subdomain from new domain: acme.ray-crm.com → 'acme'
+  const SKIP_SUBS = new Set(['www', 'app', 'admin', 'api', 'mail', 'signup']);
+  let wsSlugFromHost: string | null = null;
+
+  if (isNewDomain && !isAdminDomain) {
+    const parts = hostname.split('.');
+    if (parts.length >= 3 && !SKIP_SUBS.has(parts[0])) {
+      wsSlugFromHost = parts[0];        // e.g. 'acme' from acme.ray-crm.com
+    }
+  }
+
+  // Path-based routing (legacy ray-crm-app.web.app/slug, or localhost)
+  const urlSearch      = new URLSearchParams(window.location.search);
+  const inviteToken    = urlSearch.get('token') ?? '';
+  const pathSegments   = window.location.pathname.split('/').filter(Boolean);
+  const RESERVED_PATHS = new Set(['signup', 'register', 'login', 'signin', 'admin', 'reset', 'forgot', 'forgot-password']);
+  const isSignupPath   = pathSegments[0] === 'signup' || urlSearch.get('signup') === '1';
+  const isSigninPath   = pathSegments[0] === 'signin' || pathSegments[0] === 'login';
+  const isForgotPath   = pathSegments[0] === 'forgot' || pathSegments[0] === 'forgot-password';
+  // Allow path-based slug on any domain (ray-crm.com/acme OR ray-crm-app.web.app/acme)
+  const wsSlugFromPath = (!isAdminDomain && pathSegments.length === 1 && !RESERVED_PATHS.has(pathSegments[0]))
+    ? pathSegments[0] : null;
+
+  // Final derived values — subdomain wins over path
+  const isSignup  = isSignupPath;
+  const isSignin  = isSigninPath;
+  const isForgot  = isForgotPath;
+  // Landing page: root domain with no path and no slug, NOT on admin domain
+  const isLanding = !isAdminDomain && !wsSlugFromHost && !wsSlugFromPath && !isSignup && !isSignin && !isForgot && pathSegments.length === 0;
+  const wsSlug   = wsSlugFromHost ?? wsSlugFromPath;
 
   // ── Workspace detection ───────────────────────────────────────────────────
   // isWorkspaceUser = a real tenant user (has workspaceId, not super admin)
@@ -138,11 +182,10 @@ function AppInner() {
   const wid             = isWorkspaceUser ? (profile?.workspaceId ?? null) : null;
 
   // bypassAuth — only on localhost (dev mode). On production always require login.
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const bypassAuth  = isLocalhost && !user;
-  void getDoc; // suppress unused import warning
+  const bypassAuth = isLocalhost && !user;
 
-  const [page, setPage]               = useState<Page>('home');
+  // On admin domain → land directly on the admin page
+  const [page, setPage]               = useState<Page>(isAdminDomain ? 'admin' : 'home');
   const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
   const [team, setTeam]               = useState<TeamMember[]>([]);  // populated by effects
   const [settings, setSettings]       = useState<AppSettings>(loadSettings);
@@ -527,6 +570,30 @@ function AppInner() {
     ? `${profile.firstName[0]}${profile.lastName[0]}`
     : settings.userInitials;
 
+  // ── Auto-sync URL → workspace's canonical URL ─────────────────────────────
+  // Always use same-origin path navigation to preserve Firebase Auth session.
+  useEffect(() => {
+    if (!isWorkspaceUser || !wid) return;
+    const slug = workspace?.slug;
+    if (!slug) {
+      const cur = new URLSearchParams(window.location.search).get('ws');
+      if (cur !== wid) window.history.replaceState({}, '', `/?ws=${wid}`);
+      return;
+    }
+    // If slug is already in the subdomain, no path update needed
+    if (wsSlugFromHost === slug) return;
+    // If at root (landing page territory), do a full replace so React re-renders
+    // with the correct path and doesn't flash the landing page
+    if (window.location.pathname === '/') {
+      window.location.replace(`/${slug}`);
+      return;
+    }
+    // Otherwise just update the URL silently
+    if (window.location.pathname !== `/${slug}`) {
+      window.history.replaceState({}, '', `/${slug}`);
+    }
+  }, [isWorkspaceUser, wid, workspace?.slug]); // eslint-disable-line
+
   // ─── Auth gates ──────────────────────────────────────────────────────────
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -550,18 +617,76 @@ function AppInner() {
     );
   }
 
-  // Public self-service registration
-  if (isSignup && !user) {
+  // admin domain, not logged in → show Login (no landing page, no signup link)
+  if (isAdminDomain && !user && !bypassAuth) {
+    return <Login />;
+  }
+
+  // admin domain, logged in but NOT super admin → redirect away (wrong person)
+  if (isAdminDomain && user && !isSuperAdmin && !bypassAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-4 text-center p-6" dir="rtl">
+        <div className="text-4xl">🚫</div>
+        <h2 className="text-white font-black text-xl">אין גישה</h2>
+        <p className="text-slate-400 text-sm">עמוד זה מיועד לאדמין בלבד.</p>
+        <a href="https://ray-crm.com" className="text-indigo-400 hover:text-indigo-300 text-sm underline">חזרה לאתר</a>
+      </div>
+    );
+  }
+
+  // / (root, no slug) → Landing page for everyone except workspace users
+  // Super admin uses admin.ray-crm.com; workspace users fall through to get
+  // redirected to /{slug} by the URL-sync effect below.
+  if (isLanding && !isWorkspaceUser && !bypassAuth) {
+    return (
+      <LandingPage
+        onSignIn={() => window.location.replace('/signin')}
+        onSignUp={() => window.location.replace('/signup')}
+        isLoggedIn={!!user}
+        isSuperAdmin={isSuperAdmin}
+      />
+    );
+  }
+
+  // Helper spinner
+  const Spinner = () => (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  // /forgot-password — always show, regardless of login state
+  if (isForgot) {
+    return <ForgotPassword onBack={() => window.location.replace('/signin')} />;
+  }
+
+  // /signin — login page.
+  // Redirect workspace users who are already fully logged-in to their workspace.
+  // Super admins can always view this page (for testing / convenience).
+  if (isSignin) {
+    if (user && isWorkspaceUser && workspace?.slug) {
+      window.location.replace(`/${workspace.slug}`);
+      return <Spinner />;
+    }
+    return <Login wsSlug={wsSlug ?? undefined} onSignUp={() => window.location.replace('/signup')} />;
+  }
+
+  // /signup — registration form.
+  // Redirect workspace users who already have a workspace to their workspace.
+  // Super admins can always view this page (for testing / convenience).
+  if (isSignup) {
+    if (user && isWorkspaceUser && workspace?.slug) {
+      window.location.replace(`/${workspace.slug}`);
+      return <Spinner />;
+    }
     return (
       <PublicRegister
-        onSuccess={() => {
-          window.history.replaceState({}, '', '/');
-          window.location.reload();
+        onSuccess={(slug) => {
+          // Same-origin path redirect — keeps Firebase Auth session alive
+          window.location.replace(`/${slug}`);
         }}
-        onBack={() => {
-          window.history.replaceState({}, '', '/');
-          window.location.reload();
-        }}
+        onBack={() => window.location.replace('/')}
+        onSignIn={() => window.location.replace('/signin')}
       />
     );
   }
@@ -579,7 +704,8 @@ function AppInner() {
     );
   }
 
-  if (!user && !bypassAuth) return <Login />;
+  // Not logged in (direct slug URL or firebase.web.app) → Login page
+  if (!user && !bypassAuth) return <Login wsSlug={wsSlug ?? undefined} onSignUp={() => window.location.replace('/signup')} />;
 
   // Workspace onboarding — show when workspace exists but onboarding not complete
   if (user && workspace && !workspace.onboardingComplete) {
@@ -588,6 +714,9 @@ function AppInner() {
         workspace={workspace}
         onComplete={async () => {
           await refreshWorkspace();
+          // After onboarding → update to the workspace's clean URL
+          const slug = workspace.slug;
+          window.history.replaceState({}, '', slug ? `/${slug}` : `/?ws=${workspace.id}`);
         }}
       />
     );
@@ -648,9 +777,6 @@ function AppInner() {
         {page === 'overview' && (
           <Overview leads={leads} onLeadClick={setSelectedLead} />
         )}
-        {page === 'team' && (
-          <TeamManagement team={team} leads={leads} onUpdateRole={handleUpdateRole} onInvite={handleInvite} onRemoveMember={handleRemoveMember} />
-        )}
         {page === 'ai' && (
           <AiAssistant
             leads={leads}
@@ -660,6 +786,7 @@ function AppInner() {
             onCreateTask={handleStandaloneAdd}
             onUpdateLead={handleLeadUpdate}
             onAddNote={handleAddNote}
+            workspace={workspace}
           />
         )}
         {page === 'kanban' && (
@@ -701,6 +828,10 @@ function AppInner() {
             onToast={addToast}
             isAdmin={isAdmin || bypassAuth}
             currentUserUid={user?.uid ?? ''}
+            team={team}
+            onUpdateRole={handleUpdateRole}
+            onInvite={handleInvite}
+            onRemoveMember={handleRemoveMember}
           />
         )}
         {page === 'agents' && (
@@ -747,7 +878,13 @@ function AppInner() {
       )}
 
       {showNewLead && (
-        <NewLeadModal onClose={() => setShowNewLead(false)} onAdd={handleAddLead} />
+        <NewLeadModal
+          onClose={() => setShowNewLead(false)}
+          onAdd={handleAddLead}
+          workspaceSolutions={workspace?.businessSolutions ?? []}
+          currentUser={displayName}
+          existingLeads={leads}
+        />
       )}
 
       <Toast toasts={toasts} onRemove={removeToast} />

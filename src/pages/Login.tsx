@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Zap, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import ForgotPassword from './ForgotPassword';
@@ -10,7 +10,7 @@ interface WorkspaceBranding {
   logoUrl?: string;
 }
 
-export default function Login() {
+export default function Login({ wsSlug, onSignUp }: { wsSlug?: string; onSignUp?: () => void }) {
   const { signIn } = useAuth();
   const [email,      setEmail]      = useState('');
   const [password,   setPassword]   = useState('');
@@ -20,8 +20,21 @@ export default function Login() {
   const [showForgot, setShowForgot] = useState(false);
   const [branding,   setBranding]   = useState<WorkspaceBranding | null>(null);
 
-  // ── Load workspace branding from ?ws=WORKSPACE_ID ──────────────────────
+  // ── Load workspace branding (from slug path OR legacy ?ws=id param) ────
   useEffect(() => {
+    // 1. New clean-URL: slug passed from pathname routing (e.g. /x7k2m9p)
+    if (wsSlug) {
+      getDocs(query(collection(db, 'workspaces'), where('slug', '==', wsSlug)))
+        .then(snap => {
+          if (!snap.empty) {
+            const d = snap.docs[0].data();
+            setBranding({ name: d.name, logoUrl: d.logoUrl });
+          }
+        })
+        .catch(() => {});
+      return;
+    }
+    // 2. Legacy: ?ws=WORKSPACE_ID param (backward compat)
     const wsId = new URLSearchParams(window.location.search).get('ws');
     if (!wsId) return;
     getDoc(doc(db, 'workspaces', wsId))
@@ -31,8 +44,8 @@ export default function Login() {
           setBranding({ name: d.name, logoUrl: d.logoUrl });
         }
       })
-      .catch(() => {}); // silently fail — show default branding
-  }, []);
+      .catch(() => {});
+  }, [wsSlug]);
 
   if (showForgot) {
     return <ForgotPassword onBack={() => setShowForgot(false)} />;
@@ -157,7 +170,20 @@ export default function Login() {
           </form>
         </div>
 
-        <p className="text-center text-slate-600 text-xs mt-6">
+        {/* Sign-up link */}
+        {onSignUp && !branding && (
+          <p className="text-center text-slate-500 text-sm mt-5">
+            אין לך חשבון עדיין?{' '}
+            <button
+              onClick={onSignUp}
+              className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+            >
+              התחל ניסיון חינם ←
+            </button>
+          </p>
+        )}
+
+        <p className="text-center text-slate-700 text-xs mt-4">
           {branding ? `${branding.name} · מופעל על ידי RAY CRM` : `RAY CRM · ${new Date().getFullYear()}`}
         </p>
       </div>
