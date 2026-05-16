@@ -309,7 +309,7 @@ ${styleSection}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 2 — REVENUE FORECAST
 ══════════════════════════════════════════════════════════════════════════════ */
-function RevenueForecast({ leads }: { leads: Lead[] }) {
+export function RevenueForecast({ leads }: { leads: Lead[] }) {
   const [scenario, setScenario] = useState<'base' | 'optimistic' | 'pessimistic'>('base');
   const mod = { base: 1, optimistic: 1.4, pessimistic: 0.6 }[scenario];
 
@@ -604,7 +604,7 @@ interface SmartAlert {
   title: string; body: string;
 }
 
-function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standaloneTask: StandaloneTask[] }) {
+export function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standaloneTask: StandaloneTask[] }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const alerts: SmartAlert[] = [];
 
@@ -732,7 +732,7 @@ function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standaloneTask:
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 5 — SOURCE ROI
 ══════════════════════════════════════════════════════════════════════════════ */
-function SourceROI({ leads }: { leads: Lead[] }) {
+export function SourceROI({ leads }: { leads: Lead[] }) {
   const SOURCES = ['אורגני','פרסום ממומן','הפניה','אינסטגרם','פייסבוק','גוגל'] as const;
   const EMOJI: Record<string, string>  = { 'אורגני':'🌱','פרסום ממומן':'💰','הפניה':'🤝','אינסטגרם':'📸','פייסבוק':'👤','גוגל':'🔍' };
   const COLOR: Record<string, string>  = { 'אורגני':'bg-emerald-500','פרסום ממומן':'bg-blue-500','הפניה':'bg-violet-500','אינסטגרם':'bg-pink-500','פייסבוק':'bg-indigo-500','גוגל':'bg-amber-500' };
@@ -1331,7 +1331,7 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 9 — AGENT PERFORMANCE
 ══════════════════════════════════════════════════════════════════════════════ */
-function AgentPerformance({ leads, team, standaloneTask }: {
+export function AgentPerformance({ leads, team, standaloneTask }: {
   leads: Lead[]; team: TeamMember[]; standaloneTask: StandaloneTask[];
 }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1842,7 +1842,7 @@ ${statsText}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 13 — CHURN SHIELD
 ══════════════════════════════════════════════════════════════════════════════ */
-function ChurnShield({ leads, onToast }: {
+export function ChurnShield({ leads, onToast }: {
   leads: Lead[]; onToast?: AgentsProps['onToast'];
 }) {
   const [loadingId, setLoadingId] = useState<string | null>(null);

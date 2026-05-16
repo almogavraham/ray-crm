@@ -3,10 +3,11 @@ import {
   X, MessageCircle, Mail, Phone, Save, Plus, Trash2, Brain,
   Clock, Building2, CheckCircle2, Activity, Star, Zap,
   FileText, ListChecks, Loader2, Globe, ChevronDown, AlertCircle,
-  Mic, MicOff,
+  Mic, MicOff, Sparkles,
 } from 'lucide-react';
+import { AgentsTab } from './LeadAgents';
 import Anthropic from '@anthropic-ai/sdk';
-import type { Lead, LeadStatus, TaskPriority } from '../types';
+import type { Lead, LeadStatus, TaskPriority, WorkspaceProfile } from '../types';
 import { SOLUTIONS } from '../data/mockData';
 import StatusBadge from './StatusBadge';
 import EmailModal from './EmailModal';
@@ -38,7 +39,7 @@ const STATUS_COLORS: Record<LeadStatus, string> = {
   'לא רלוונטי': 'bg-slate-500/20 text-slate-400 border-slate-500/30',
 };
 
-type Tab = 'details' | 'tasks' | 'notes' | 'activity';
+type Tab = 'details' | 'tasks' | 'notes' | 'activity' | 'agents';
 
 interface CompanyInsight {
   summary: string;
@@ -54,9 +55,16 @@ interface LeadModalProps {
   onSave: (updated: Lead) => void;
   onUpdate: (updated: Lead) => void;
   onDelete?: (id: string) => void;
+  workspace?: WorkspaceProfile;
+  currentUser?: string;
+  onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }: LeadModalProps) {
+export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, onToast }: LeadModalProps) {
+  // Solutions list: workspace-specific (from wizard) or fallback to hardcoded
+  const solutionsList = (workspace?.businessSolutions?.length ?? 0) > 0
+    ? (workspace!.businessSolutions!)
+    : SOLUTIONS;
   const [data, setData] = useState<Lead>({ ...lead });
   const [activeTab, setActiveTab] = useState<Tab>('details');
   const [newNote, setNewNote] = useState('');
@@ -175,24 +183,33 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }:
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
+      const bizName     = workspace?.name      ?? 'העסק שלנו';
+      const bizIndustry = workspace?.industry   ?? 'שיווק דיגיטלי';
+      const bizServices = solutionsList.join(', ');
+      const aiProfile   = workspace?.aiProfile;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reqPayload: any = {
         model: 'claude-opus-4-6',
         max_tokens: 800,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: `אתה אנליסט מכירות של RAY Digital — סוכנות שיווק דיגיטלית AI לנדל"ן.
+        system: `אתה אנליסט מכירות של ${bizName} — עסק בתחום ${bizIndustry}.
+השירותים שאנו מציעים: ${bizServices}.
+${aiProfile?.idealClient ? `לקוח אידיאלי: ${aiProfile.idealClient}` : ''}
+${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : ''}
 חפש מידע על החברה הבאה ותן תמצית מכירות שתעזור לצוות.
 ענה בעברית, בצורה קצרה וממוקדת.
 פורמט:
-🏢 **סקירה**: [2-3 משפטים על החברה/פרויקט]
-🏗️ **תחום**: [סוג הנדל"ן / פרויקטים]
-📊 **גודל**: [עובדים/פרויקטים אם ידוע]
-💡 **זווית מכירה**: [למה שיווק דיגיטלי AI של RAY מתאים לחברה זו]`,
+🏢 **סקירה**: [2-3 משפטים על החברה]
+🏭 **תחום**: [תחום הפעילות]
+📊 **גודל**: [עובדים/היקף אם ידוע]
+💡 **זווית מכירה**: [למה הפתרונות של ${bizName} מתאימים לחברה זו]
+🔥 **רמת עניין**: [הערכת התאמה ללקוח האידיאלי]`,
         messages: [{
           role: 'user',
           content: `חפש מידע עדכני על החברה: "${data.company}".
-מידע שיש לי: סטטוס=${data.status}, תקציב שיווק=₪${data.budget}/חודש, שירותים=${data.solutions.map(s => s.name).join(', ') || 'לא ידוע'}.
-תן לי מידע שיעזור לי למכור להם שירותי שיווק דיגיטלי AI של RAY Digital.`,
+מידע שיש לי: סטטוס=${data.status}, תקציב=₪${data.budget}/חודש, שירותים שמעניינים=${data.solutions.map(s => s.name).join(', ') || 'לא ידוע'}.
+תן לי מידע שיעזור לי למכור להם את השירותים של ${bizName}.`,
         }],
       };
 
@@ -292,6 +309,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }:
     { key: 'tasks',    label: 'משימות', icon: <ListChecks size={13} />, badge: data.tasks.filter(t => !t.completed).length },
     { key: 'notes',    label: 'הערות',  icon: <FileText size={13} />,  badge: data.notes.length },
     { key: 'activity', label: 'פעילות', icon: <Activity size={13} /> },
+    { key: 'agents',   label: 'סוכנים ⚡', icon: <Sparkles size={13} /> },
   ];
 
   return (
@@ -480,7 +498,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }:
                       פתרונות <Zap size={11} className="text-orange-400" />
                     </h3>
                     <div className="space-y-2">
-                      {SOLUTIONS.map(sol => {
+                      {solutionsList.map(sol => {
                         const active = data.solutions.find(s => s.name === sol);
                         return (
                           <div key={sol} className="space-y-1">
@@ -783,6 +801,17 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete }:
                   </div>
                 )}
               </div>
+            )}
+
+            {/* AGENTS TAB */}
+            {activeTab === 'agents' && (
+              <AgentsTab
+                lead={data}
+                workspace={workspace}
+                currentUser={currentUser}
+                onUpdateLead={onUpdate}
+                onToast={onToast}
+              />
             )}
 
             {/* ACTIVITY TAB */}

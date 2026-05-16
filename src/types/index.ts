@@ -68,6 +68,7 @@ export type Lead = {
   assignedTo: string;
   source: LeadSource;
   lastUpdate: string;
+  createdAt?: number;   // Unix timestamp — set on creation
   aiScore: number;
   notes: Note[];
   tasks: Task[];
@@ -77,6 +78,7 @@ export type Lead = {
 
 export type TeamMember = {
   id: string;
+  uid?: string;         // Firebase Auth UID — present for workspace users
   name: string;
   email: string;
   role: 'מנהל' | 'סוכן';
@@ -324,6 +326,7 @@ export type WorkspaceStatus = 'pending' | 'trial' | 'active' | 'suspended';
 
 export type WorkspaceProfile = {
   id: string;                    // Firestore doc ID  (= workspaceId)
+  slug?: string;                 // clean URL slug — e.g. "x7k2m9p" → ray-crm-app.web.app/x7k2m9p
   name: string;                  // שם העסק
   businessId: string;            // ח.פ
   phone: string;
@@ -333,10 +336,23 @@ export type WorkspaceProfile = {
   prompt?: string;               // AI context — describe the business
   industry?: string;             // סוג עסק
   teamSize?: string;
+  isBusiness?: boolean;          // האם זה עסק (B2B/B2C מוצרים/שירותים)
+  businessSolutions?: string[];  // רשימת שירותים/מוצרים — מוצגת בלידים
   status: WorkspaceStatus;
   plan: WorkspacePlan;
   trialEndsAt?: string;          // ISO date — end of 14-day trial
   createdAt: string;
   onboardingComplete: boolean;
+  leadsSetupDone?: boolean;      // AI lead-card setup wizard completed
   memberCount?: number;          // denormalized counter
+  // AI Profile — configures the AI assistant for this workspace
+  aiProfile?: {
+    idealClient?: string;        // לקוח אידיאלי — מי הקהל היעד
+    painPoints?: string;         // בעיות שהעסק פותר
+    salesProcess?: string;       // תהליך מכירה טיפוסי
+    avgDealSize?: string;        // ממוצע עסקה
+    commonObjections?: string;   // התנגדויות נפוצות
+    uniqueValue?: string;        // מה מייחד את העסק
+    tone?: string;               // טון תקשורת: פורמלי / ידידותי / מקצועי
+  };
 };

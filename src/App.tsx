@@ -24,6 +24,7 @@ import WorkspaceOnboarding from './pages/WorkspaceOnboarding';
 import WorkspaceSettings from './pages/WorkspaceSettings';
 import AdminPanel from './pages/AdminPanel';
 import LandingPage from './pages/LandingPage';
+import LeadsOnboardingWizard from './pages/LeadsOnboardingWizard';
 import ForgotPassword from './pages/ForgotPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
@@ -35,26 +36,55 @@ import {
 } from 'firebase/firestore';
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
-class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null; componentStack: string }
+> {
   constructor(props: { children: ReactNode }) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, componentStack: '' };
   }
   static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error('App error:', error, info); }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('App error:', error, info);
+    this.setState({ componentStack: info.componentStack ?? '' });
+  }
   render() {
     if (this.state.error) {
+      const msg   = this.state.error.message ?? 'Unknown error';
+      const name  = this.state.error.name    ?? 'Error';
+      const stack = this.state.error.stack   ?? '';
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-8 text-center">
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 p-6 text-center" dir="rtl">
           <div className="text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-bold text-slate-800 mb-2">אירעה שגיאה</h2>
-          <p className="text-slate-500 text-sm mb-6 max-w-sm">{this.state.error.message}</p>
-          <button
-            onClick={() => { this.setState({ error: null }); window.location.reload(); }}
-            className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-indigo-700 transition-colors"
-          >
-            רענן את האפליקציה
-          </button>
+          <h2 className="text-xl font-bold text-white mb-2">אירעה שגיאה</h2>
+          <p className="text-red-400 text-sm font-mono mb-1">{name}: {msg}</p>
+
+          {/* Details panel — critical for debugging */}
+          <details className="mt-4 mb-6 text-right max-w-2xl w-full">
+            <summary className="text-slate-400 text-xs cursor-pointer hover:text-slate-200 transition-colors mb-2">
+              פרטי שגיאה מלאים (לשיתוף עם תמיכה)
+            </summary>
+            <pre className="text-left text-[10px] text-slate-400 bg-slate-900 border border-slate-700 rounded-xl p-4 overflow-x-auto whitespace-pre-wrap mt-2">
+              {stack}
+              {this.state.componentStack ? `\n\nComponent Stack:${this.state.componentStack}` : ''}
+            </pre>
+          </details>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => { this.setState({ error: null, componentStack: '' }); window.location.reload(); }}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-indigo-700 transition-colors text-sm"
+            >
+              רענן
+            </button>
+            <button
+              onClick={() => { localStorage.clear(); window.location.href = '/'; }}
+              className="bg-slate-700 text-white px-6 py-2 rounded-xl font-medium hover:bg-slate-600 transition-colors text-sm"
+            >
+              נקה ואפס
+            </button>
+          </div>
         </div>
       );
     }
@@ -126,7 +156,7 @@ function loadSettings(): AppSettings {
 
 // ─── AppInner: rendered inside AuthProvider ──────────────────────────────────
 function AppInner() {
-  const { user, profile, workspace, loading, isAdmin, isSuperAdmin, signOut, refreshWorkspace } = useAuth();
+  const { user, profile, workspace, loading, isAdmin, isSuperAdmin, signOut, refreshWorkspace, refreshProfile } = useAuth();
 
   // ─── Domain routing ─────────────────────────────────────────────────────────
   // Supports two modes:
@@ -179,7 +209,16 @@ function AppInner() {
   // ── Workspace detection ───────────────────────────────────────────────────
   // isWorkspaceUser = a real tenant user (has workspaceId, not super admin)
   const isWorkspaceUser = !!(user && profile?.workspaceId && !isSuperAdmin);
-  const wid             = isWorkspaceUser ? (profile?.workspaceId ?? null) : null;
+  // isAdminWorkspace = super admin on admin domain → uses workspace-scoped Firestore (staging env)
+  const isAdminWorkspace = !!(isSuperAdmin && isAdminDomain && workspace);
+  // Effective workspace ID for Firestore paths (tenant or admin staging)
+  const wid = isWorkspaceUser
+    ? (profile?.workspaceId ?? null)
+    : isAdminWorkspace
+      ? (workspace?.id ?? null)
+      : null;
+  // Whether to use workspace-scoped Firestore paths (instead of root collections)
+  const useWorkspaceFirestore = isWorkspaceUser || isAdminWorkspace;
 
   // bypassAuth — only on localhost (dev mode). On production always require login.
   const bypassAuth = isLocalhost && !user;
@@ -195,7 +234,9 @@ function AppInner() {
   const [toasts, setToasts]           = useState<ToastMessage[]>([]);
   const [fbReady, setFbReady]             = useState(false);
   const [standaloneTask, setStandaloneTask] = useState<StandaloneTask[]>([]);
+  const [showLeadsWizard, setShowLeadsWizard] = useState(false);
   const initialSyncDone                   = useRef(false);
+  const adminWsCreating                   = useRef(false);
 
   // ─── Overdue badge ────────────────────────────────────────────────────────
   const overdueBadge = useMemo(() => {
@@ -221,11 +262,16 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // ─── ROOT Firestore init (Almog / super admin only) ──────────────────────
+  // ─── ROOT Firestore init (super admin / bypassAuth only) ────────────────
   useEffect(() => {
-    // Workspace users get their own isolated data — skip root collections
+    // Skip: still loading, workspace tenant (or admin staging), or unauthenticated production user
     if (loading) return;
-    if (isWorkspaceUser) return;
+    if (useWorkspaceFirestore) return;
+    // Only run Firestore init when there IS a user (super admin) or dev bypass
+    if (!user && !bypassAuth) {
+      setFbReady(true); // no Firestore needed for the landing page
+      return;
+    }
 
     let unsub: (() => void) | null = null;
     async function init() {
@@ -236,17 +282,21 @@ function AppInner() {
           loadLeadsLocal().forEach(l => batch.set(doc(db, 'leads', l.id), l));
           await batch.commit();
         }
-        unsub = onSnapshot(collection(db, 'leads'), ss => {
-          const fbLeads = ss.docs
-            .map(d => normalizeLead(d.data()))
-            .sort((a, b) => {
-              const aTime = (a as Record<string, unknown>).createdAt ?? 0;
-              const bTime = (b as Record<string, unknown>).createdAt ?? 0;
-              return (bTime as number) - (aTime as number);
-            });
-          setLeads(fbLeads);
-          localStorage.setItem('crm-leads', JSON.stringify(fbLeads));
-        });
+        unsub = onSnapshot(
+          collection(db, 'leads'),
+          ss => {
+            const fbLeads = ss.docs
+              .map(d => normalizeLead(d.data()))
+              .sort((a, b) => {
+                const aTime = (a as Record<string, unknown>).createdAt ?? 0;
+                const bTime = (b as Record<string, unknown>).createdAt ?? 0;
+                return (bTime as number) - (aTime as number);
+              });
+            setLeads(fbLeads);
+            localStorage.setItem('crm-leads', JSON.stringify(fbLeads));
+          },
+          () => { /* permission denied — ignore gracefully */ },
+        );
         const teamSnap = await getDocs(collection(db, 'team'));
         if (teamSnap.empty) {
           const batch2 = writeBatch(db);
@@ -268,33 +318,41 @@ function AppInner() {
     }
     init();
     return () => { if (unsub) unsub(); };
-  }, [loading, isWorkspaceUser]); // eslint-disable-line
+  }, [loading, useWorkspaceFirestore, user, bypassAuth]); // eslint-disable-line
 
-  // ─── WORKSPACE Firestore init (isolated tenant data) ─────────────────────
+  // ─── WORKSPACE Firestore init (tenant OR admin staging) ──────────────────
   useEffect(() => {
-    if (!isWorkspaceUser || !wid) return;
+    if (!useWorkspaceFirestore || !wid) return;
 
     let unsubLeads: (() => void) | null = null;
     let unsubTasks: (() => void) | null = null;
 
     // Listen to workspace leads subcollection
-    unsubLeads = onSnapshot(collection(db, 'workspaces', wid, 'leads'), ss => {
-      const wsLeads = ss.docs
-        .map(d => normalizeLead(d.data()))
-        .sort((a, b) => {
-          const aTime = (a as Record<string, unknown>).createdAt ?? 0;
-          const bTime = (b as Record<string, unknown>).createdAt ?? 0;
-          return (bTime as number) - (aTime as number);
-        });
-      setLeads(wsLeads);
-    });
+    unsubLeads = onSnapshot(
+      collection(db, 'workspaces', wid, 'leads'),
+      ss => {
+        const wsLeads = ss.docs
+          .map(d => normalizeLead(d.data()))
+          .sort((a, b) => {
+            const aTime = (a as Record<string, unknown>).createdAt ?? 0;
+            const bTime = (b as Record<string, unknown>).createdAt ?? 0;
+            return (bTime as number) - (aTime as number);
+          });
+        setLeads(wsLeads);
+      },
+      () => { /* permission error — handled silently */ },
+    );
 
     // Listen to workspace tasks subcollection
-    unsubTasks = onSnapshot(collection(db, 'workspaces', wid, 'tasks'), snap => {
-      const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
-      tasks.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      setStandaloneTask(tasks);
-    });
+    unsubTasks = onSnapshot(
+      collection(db, 'workspaces', wid, 'tasks'),
+      snap => {
+        const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
+        tasks.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''));
+        setStandaloneTask(tasks);
+      },
+      () => { /* permission error — handled silently */ },
+    );
 
     // Load workspace team
     getDocs(collection(db, 'workspaces', wid, 'team')).then(snap => {
@@ -308,29 +366,71 @@ function AppInner() {
       if (unsubLeads) unsubLeads();
       if (unsubTasks) unsubTasks();
     };
-  }, [isWorkspaceUser, wid]); // eslint-disable-line
+  }, [useWorkspaceFirestore, wid]); // eslint-disable-line
 
   // ─── Save team to Firestore (workspace-aware) ─────────────────────────────
   useEffect(() => {
     if (!fbReady || !initialSyncDone.current) return;
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       team.forEach(m => setDoc(doc(db, 'workspaces', wid, 'team', m.id), m).catch(console.error));
     } else {
       localStorage.setItem('crm-team', JSON.stringify(team));
       team.forEach(m => setDoc(doc(db, 'team', m.id), m).catch(console.error));
     }
-  }, [team, fbReady, isWorkspaceUser, wid]); // eslint-disable-line
+  }, [team, fbReady, useWorkspaceFirestore, wid]); // eslint-disable-line
 
-  // ─── Standalone tasks — root collection (non-workspace users only) ────────
+  // ─── Standalone tasks — root collection (only when NOT using workspace Firestore) ──
   useEffect(() => {
-    if (loading || isWorkspaceUser) return; // workspace tasks handled in workspace effect
-    const unsub = onSnapshot(collection(db, 'tasks'), snap => {
-      const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
-      tasks.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      setStandaloneTask(tasks);
-    });
+    if (loading || useWorkspaceFirestore) return;
+    // Only listen when authenticated (super admin) or in dev bypass mode
+    if (!user && !bypassAuth) return;
+    const unsub = onSnapshot(
+      collection(db, 'tasks'),
+      snap => {
+        const tasks: StandaloneTask[] = snap.docs.map(d => d.data() as StandaloneTask);
+        tasks.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''));
+        setStandaloneTask(tasks);
+      },
+      () => { /* permission denied — ignore gracefully */ },
+    );
     return () => unsub();
-  }, [loading, isWorkspaceUser]); // eslint-disable-line
+  }, [loading, useWorkspaceFirestore, user, bypassAuth]); // eslint-disable-line
+
+  // ─── Auto-create admin workspace on first super admin login at admin domain ─
+  // If the super admin has no workspace yet, create one and link their user profile.
+  useEffect(() => {
+    if (!isSuperAdmin || !isAdminDomain || !user || loading || workspace) return;
+    if (adminWsCreating.current) return;
+    adminWsCreating.current = true;
+
+    const adminWid = `admin_${user.uid}`;
+    const now = new Date().toISOString();
+    const adminWorkspaceData = {
+      id: adminWid,
+      name: 'RAY Staging',
+      slug: 'ray-staging',
+      businessId: '',
+      phone: '',
+      email: user.email ?? '',
+      ownerId: user.uid,
+      status: 'active',
+      plan: 'enterprise',
+      onboardingComplete: true,
+      createdAt: now,
+      industry: 'SaaS / CRM',
+      isAdminWorkspace: true,
+    };
+
+    Promise.all([
+      setDoc(doc(db, 'workspaces', adminWid), adminWorkspaceData, { merge: true }),
+      setDoc(doc(db, 'users', user.uid), { workspaceId: adminWid }, { merge: true }),
+    ])
+      .then(() => refreshProfile())   // reloads profile + workspace from Firestore
+      .catch(err => {
+        console.error('Failed to create admin workspace:', err);
+        adminWsCreating.current = false; // allow retry
+      });
+  }, [isSuperAdmin, isAdminDomain, user, loading, workspace]); // eslint-disable-line
 
   // ─── Save settings to localStorage ───────────────────────────────────────
   useEffect(() => {
@@ -349,13 +449,13 @@ function AppInner() {
   // ─── Save single lead (workspace-aware) ─────────────────────────────────
   const saveLead = useCallback(async (lead: Lead) => {
     try {
-      if (isWorkspaceUser && wid) {
+      if (useWorkspaceFirestore && wid) {
         await setDoc(doc(db, 'workspaces', wid, 'leads', lead.id), lead);
       } else {
         await setDoc(doc(db, 'leads', lead.id), lead);
       }
     } catch (err) { console.error('Error saving lead:', err); }
-  }, [isWorkspaceUser, wid]);
+  }, [useWorkspaceFirestore, wid]);
 
   // ─── Lead handlers ────────────────────────────────────────────────────────
   const handleLeadSave = (updated: Lead) => {
@@ -373,7 +473,7 @@ function AppInner() {
   const handleLeadDelete = (id: string) => {
     setLeads(prev => prev.filter(l => l.id !== id));
     setSelectedLead(null);
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
     } else {
       deleteDoc(doc(db, 'leads', id)).catch(console.error);
@@ -430,7 +530,7 @@ function AppInner() {
   const handleBulkDelete = (leadIds: string[]) => {
     setLeads(prev => prev.filter(l => !leadIds.includes(l.id)));
     leadIds.forEach(id => {
-      if (isWorkspaceUser && wid) {
+      if (useWorkspaceFirestore && wid) {
         deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
       } else {
         deleteDoc(doc(db, 'leads', id)).catch(console.error);
@@ -484,7 +584,7 @@ function AppInner() {
     const firestoreTask = Object.fromEntries(
       Object.entries(task).filter(([, v]) => v !== undefined)
     ) as StandaloneTask;
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       await setDoc(doc(db, 'workspaces', wid, 'tasks', task.id), firestoreTask).catch(console.error);
     } else {
       await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
@@ -496,7 +596,7 @@ function AppInner() {
     if (!task) return;
     const updated = { ...task, completed: true, completedAt: new Date().toISOString() };
     setStandaloneTask(prev => prev.map(t => t.id === taskId ? updated : t));
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       await setDoc(doc(db, 'workspaces', wid, 'tasks', taskId), updated).catch(console.error);
     } else {
       await setDoc(doc(db, 'tasks', taskId), updated).catch(console.error);
@@ -504,7 +604,7 @@ function AppInner() {
   };
   const handleStandaloneDelete = async (taskId: string) => {
     setStandaloneTask(prev => prev.filter(t => t.id !== taskId));
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       await deleteDoc(doc(db, 'workspaces', wid, 'tasks', taskId)).catch(console.error);
     } else {
       await deleteDoc(doc(db, 'tasks', taskId)).catch(console.error);
@@ -516,7 +616,7 @@ function AppInner() {
     const firestoreTask = Object.fromEntries(
       Object.entries(task).filter(([, v]) => v !== undefined)
     ) as StandaloneTask;
-    if (isWorkspaceUser && wid) {
+    if (useWorkspaceFirestore && wid) {
       await setDoc(doc(db, 'workspaces', wid, 'tasks', task.id), firestoreTask).catch(console.error);
     } else {
       await setDoc(doc(db, 'tasks', task.id), firestoreTask).catch(console.error);
@@ -571,24 +671,18 @@ function AppInner() {
     : settings.userInitials;
 
   // ── Auto-sync URL → workspace's canonical URL ─────────────────────────────
-  // Always use same-origin path navigation to preserve Firebase Auth session.
+  // Only sync the URL when the user is ALREADY inside the app (not on landing/root).
+  // We NEVER redirect from "/" — that always stays as the public landing page.
+  // Admin domain URLs are not path-slug based, so skip them too.
   useEffect(() => {
-    if (!isWorkspaceUser || !wid) return;
+    if (!isWorkspaceUser || !wid || isAdminDomain) return;
     const slug = workspace?.slug;
-    if (!slug) {
-      const cur = new URLSearchParams(window.location.search).get('ws');
-      if (cur !== wid) window.history.replaceState({}, '', `/?ws=${wid}`);
-      return;
-    }
-    // If slug is already in the subdomain, no path update needed
+    // Skip if at root — root is always the landing page, never redirect away from it
+    if (window.location.pathname === '/' || window.location.pathname === '') return;
+    if (!slug) return; // no slug yet — don't modify URL
+    // Already on the right subdomain
     if (wsSlugFromHost === slug) return;
-    // If at root (landing page territory), do a full replace so React re-renders
-    // with the correct path and doesn't flash the landing page
-    if (window.location.pathname === '/') {
-      window.location.replace(`/${slug}`);
-      return;
-    }
-    // Otherwise just update the URL silently
+    // Silently sync the URL to the workspace slug path
     if (window.location.pathname !== `/${slug}`) {
       window.history.replaceState({}, '', `/${slug}`);
     }
@@ -634,16 +728,17 @@ function AppInner() {
     );
   }
 
-  // / (root, no slug) → Landing page for everyone except workspace users
-  // Super admin uses admin.ray-crm.com; workspace users fall through to get
-  // redirected to /{slug} by the URL-sync effect below.
-  if (isLanding && !isWorkspaceUser && !bypassAuth) {
+  // / (root) → Landing page for EVERYONE, always.
+  // We never redirect from "/" — it's the public face of the product.
+  // Logged-in workspace users can click "כניסה לסביבת העבודה" from the landing page.
+  if (isLanding) {
     return (
       <LandingPage
         onSignIn={() => window.location.replace('/signin')}
         onSignUp={() => window.location.replace('/signup')}
         isLoggedIn={!!user}
         isSuperAdmin={isSuperAdmin}
+        workspaceSlug={isWorkspaceUser ? workspace?.slug : undefined}
       />
     );
   }
@@ -661,14 +756,13 @@ function AppInner() {
   }
 
   // /signin — login page.
-  // Redirect workspace users who are already fully logged-in to their workspace.
-  // Super admins can always view this page (for testing / convenience).
+  // If workspace user already fully logged in, send them straight to their workspace.
   if (isSignin) {
     if (user && isWorkspaceUser && workspace?.slug) {
       window.location.replace(`/${workspace.slug}`);
       return <Spinner />;
     }
-    return <Login wsSlug={wsSlug ?? undefined} onSignUp={() => window.location.replace('/signup')} />;
+    return <Login wsSlug={wsSlug ?? undefined} onSignUp={() => window.location.replace('/signup')} onBack={() => window.location.replace('/')} />;
   }
 
   // /signup — registration form.
@@ -708,7 +802,8 @@ function AppInner() {
   if (!user && !bypassAuth) return <Login wsSlug={wsSlug ?? undefined} onSignUp={() => window.location.replace('/signup')} />;
 
   // Workspace onboarding — show when workspace exists but onboarding not complete
-  if (user && workspace && !workspace.onboardingComplete) {
+  // Skip for admin workspace (always created with onboardingComplete: true)
+  if (user && workspace && !workspace.onboardingComplete && !isAdminWorkspace) {
     return (
       <WorkspaceOnboarding
         workspace={workspace}
@@ -742,8 +837,8 @@ function AppInner() {
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
         onSignOut={signOut}
-        logoUrl={isWorkspaceUser ? workspace?.logoUrl : undefined}
-        workspaceName={isWorkspaceUser ? workspace?.name : undefined}
+        logoUrl={(isWorkspaceUser || isAdminWorkspace) ? workspace?.logoUrl : undefined}
+        workspaceName={(isWorkspaceUser || isAdminWorkspace) ? workspace?.name : undefined}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -772,6 +867,8 @@ function AppInner() {
             onBulkStatusChange={handleBulkStatusChange}
             onBulkDelete={handleBulkDelete}
             compact={settings.compactMode}
+            workspace={workspace ?? undefined}
+            onOpenLeadsWizard={workspace ? () => setShowLeadsWizard(true) : undefined}
           />
         )}
         {page === 'overview' && (
@@ -790,7 +887,7 @@ function AppInner() {
           />
         )}
         {page === 'kanban' && (
-          <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} />
+          <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} onPageChange={setPage} />
         )}
         {page === 'tasks' && (
           <Tasks
@@ -806,6 +903,7 @@ function AppInner() {
             onStandaloneComplete={handleStandaloneComplete}
             onStandaloneDelete={handleStandaloneDelete}
             onStandaloneEdit={handleStandaloneEdit}
+            onPageChange={setPage}
           />
         )}
         {page === 'settings' && isWorkspaceUser && workspace && (
@@ -874,6 +972,9 @@ function AppInner() {
           onSave={handleLeadSave}
           onUpdate={handleLeadUpdate}
           onDelete={handleLeadDelete}
+          workspace={workspace ?? undefined}
+          currentUser={displayName}
+          onToast={addToast}
         />
       )}
 
@@ -884,6 +985,18 @@ function AppInner() {
           workspaceSolutions={workspace?.businessSolutions ?? []}
           currentUser={displayName}
           existingLeads={leads}
+        />
+      )}
+
+      {/* Leads onboarding / redesign wizard */}
+      {showLeadsWizard && workspace && (
+        <LeadsOnboardingWizard
+          workspace={workspace}
+          onComplete={async () => {
+            await refreshWorkspace();
+            setShowLeadsWizard(false);
+          }}
+          onClose={() => setShowLeadsWizard(false)}
         />
       )}
 

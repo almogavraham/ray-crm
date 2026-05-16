@@ -8,6 +8,7 @@ import {
   Calendar, Brain, Activity, Award,
 } from 'lucide-react';
 import type { Lead, LeadStatus } from '../types';
+import { RevenueForecast, SourceROI } from './Agents';
 
 const STATUS_COLORS: Record<LeadStatus, string> = {
   'חדש': '#3b82f6',
@@ -530,6 +531,16 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
             })}
           </div>
         )}
+      </div>
+
+      {/* ── Revenue Forecast & Source ROI (AI agents embedded) ────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-slate-900 rounded-2xl overflow-hidden">
+          <RevenueForecast leads={leads} />
+        </div>
+        <div className="bg-slate-900 rounded-2xl overflow-hidden">
+          <SourceROI leads={leads} />
+        </div>
       </div>
 
       {/* Hot Leads */}

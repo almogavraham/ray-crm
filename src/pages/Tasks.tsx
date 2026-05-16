@@ -5,7 +5,7 @@ import {
   AlertTriangle, CalendarClock, CalendarCheck, Plus, X,
   Clock, Flag, ChevronDown, Target, Users, LayoutList,
   Kanban, ChevronRight, User, StickyNote, ArrowRight,
-  Pencil, CalendarPlus, Check,
+  Pencil, CalendarPlus, Check, Sparkles,
 } from 'lucide-react';
 import type { Lead, StandaloneTask, Task, TaskPriority, TeamMember } from '../types';
 
@@ -104,6 +104,7 @@ interface TasksProps {
   onStandaloneComplete: (taskId: string) => void;
   onStandaloneDelete: (taskId: string) => void;
   onStandaloneEdit: (task: StandaloneTask) => void;
+  onPageChange?: (page: string) => void;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -112,7 +113,7 @@ interface TasksProps {
 export default function Tasks({
   leads, team, currentUser, standaloneTask,
   onLeadClick, onLeadTaskComplete, onLeadTaskDelete, onLeadAddTask,
-  onStandaloneAdd, onStandaloneComplete, onStandaloneDelete, onStandaloneEdit,
+  onStandaloneAdd, onStandaloneComplete, onStandaloneDelete, onStandaloneEdit, onPageChange,
 }: TasksProps) {
 
   const [viewMode,     setViewMode]     = useState<ViewMode>('list');
@@ -308,6 +309,14 @@ export default function Tasks({
             >
               <Plus size={15} /> משימה חדשה
             </button>
+            {onPageChange && (
+              <button
+                onClick={() => onPageChange('agents')}
+                className="flex items-center gap-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl font-semibold hover:bg-indigo-100 transition-colors"
+              >
+                <Sparkles size={12} /> Workflow AI ⚡
+              </button>
+            )}
           </div>
           <div className="text-right">
             <h1 className="text-xl font-bold text-slate-800">משימות</h1>

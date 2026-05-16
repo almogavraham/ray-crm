@@ -8,7 +8,10 @@
     "build": "vite build",
     "type-check": "tsc -b",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:admin": "vite build && firebase deploy --only hosting:admin",
+    "deploy:client": "firebase deploy --only hosting:client",
+    "deploy:all": "vite build && firebase deploy --only hosting"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

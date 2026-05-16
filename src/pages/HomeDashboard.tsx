@@ -4,6 +4,7 @@ import {
   ArrowUpRight, ArrowDownRight, Clock, Star,
   Activity, Target, Zap, AlertTriangle,
 } from 'lucide-react';
+import { SmartAlerts } from './Agents';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -409,6 +410,24 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
             </button>
           )}
         </div>
+      </div>
+
+      {/* ── Smart Alerts widget ──────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <button
+            onClick={() => onPageChange('agents')}
+            className="text-[11px] font-semibold transition-colors"
+            style={{ color: '#4f46e5' }}
+          >
+            כל הסוכנים →
+          </button>
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle size={13} style={{ color: '#94a3b8' }} />
+            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>התראות חכמות</h3>
+          </div>
+        </div>
+        <SmartAlerts leads={leads} standaloneTask={standaloneTask} />
       </div>
 
       {/* ── Activity row ─────────────────────────────────────────────── */}
