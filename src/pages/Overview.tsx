@@ -1,585 +1,722 @@
 import { useState, useMemo } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend,
 } from 'recharts';
 import {
-  Flame, CheckCircle2, Rocket, Users, TrendingUp, DollarSign,
-  Calendar, Brain, Activity, Award,
+  Download, FileText, TrendingUp, TrendingDown, Users, DollarSign,
+  Target, Award, Activity, Brain, Flame, Calendar,
+  ChevronDown, ArrowUpRight, ArrowDownRight, Star, Zap,
+  BarChart2, PieChartIcon, TableIcon, Sparkles,
 } from 'lucide-react';
 import type { Lead, LeadStatus } from '../types';
-import { RevenueForecast, SourceROI } from './Agents';
 
+/* ─── constants ───────────────────────────────────────────────────────────── */
 const STATUS_COLORS: Record<LeadStatus, string> = {
-  'חדש': '#3b82f6',
-  'בתהליך': '#f97316',
-  'לקוח פעיל': '#22c55e',
-  'רימרקטינג': '#f59e0b',
+  'חדש':         '#6366f1',
+  'בתהליך':     '#f97316',
+  'לקוח פעיל':  '#22c55e',
+  'רימרקטינג':  '#f59e0b',
   'לא רלוונטי': '#94a3b8',
 };
+const ALL_SOURCES = ['אורגני','פרסום ממומן','הפניה','אינסטגרם','פייסבוק','גוגל'];
+const HEB_MONTHS  = ['ינו','פבר','מרץ','אפר','מאי','יונ','יול','אוג','ספט','אוק','נוב','דצמ'];
 
-const PIPELINE_ORDER: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל'];
+type TimeRange = '7'|'30'|'90'|'all';
+type ReportTab = 'overview'|'leads'|'revenue'|'team';
 
-const ALL_SOURCES = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
-
-type TimeRange = '7' | '30' | '90' | 'all';
-
-function parseDDMMYYYY(s: string): Date {
-  const p = (s || '').split('/');
+/* ─── helpers ─────────────────────────────────────────────────────────────── */
+function parseDateStr(s: string): Date {
+  if (!s) return new Date(0);
+  const p = s.split('/');
   if (p.length === 3) return new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`);
-  return new Date(0);
+  const d = new Date(s); return isNaN(d.getTime()) ? new Date(0) : d;
 }
 
-interface OverviewProps {
-  leads: Lead[];
-  onLeadClick: (lead: Lead) => void;
+function daysSince(s: string): number {
+  const diff = Date.now() - parseDateStr(s).getTime();
+  return Math.floor(diff / 86400000);
 }
+
+function fmtMoney(n: number): string {
+  if (n >= 1000000) return `₪${(n/1000000).toFixed(1)}M`;
+  if (n >= 1000)    return `₪${(n/1000).toFixed(0)}K`;
+  return `₪${n}`;
+}
+
+/* ─── CSV export ──────────────────────────────────────────────────────────── */
+function exportCSV(filename: string, rows: string[][], headers: string[]) {
+  const BOM   = '﻿';
+  const lines = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(','));
+  const blob  = new Blob([BOM + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url   = URL.createObjectURL(blob);
+  const a     = Object.assign(document.createElement('a'), { href: url, download: filename });
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function exportLeads(leads: Lead[]) {
+  exportCSV('leads_report.csv', leads.map(l => [
+    l.company, l.contactName, l.email, l.phone, l.status, l.source,
+    String(l.budget ?? 0), String(l.aiScore), String(l.solutions.length),
+    String(l.tasks.filter(t=>!t.completed).length), l.assignedTo, l.lastUpdate,
+    l.waitingContent ? 'כן' : 'לא',
+  ]), ['חברה','איש קשר','אימייל','טלפון','סטטוס','מקור','תקציב','ציון AI','שירותים','משימות פתוחות','אחראי','עדכון אחרון','ממתין לתוכן']);
+}
+
+function exportRevenue(leads: Lead[]) {
+  const byStatus = Object.entries(STATUS_COLORS).map(([s]) => {
+    const g = leads.filter(l=>l.status===s);
+    return [s, String(g.length), fmtMoney(g.reduce((a,l)=>a+(l.budget??0),0))];
+  });
+  exportCSV('revenue_report.csv', byStatus, ['סטטוס','מספר לידים','סה"כ תקציב']);
+}
+
+function exportTeam(leads: Lead[]) {
+  const map = new Map<string,{total:number;active:number;rev:number}>();
+  leads.forEach(l=>{
+    if(!l.assignedTo) return;
+    const e = map.get(l.assignedTo)??{total:0,active:0,rev:0};
+    e.total++; if(l.status==='לקוח פעיל'){e.active++;e.rev+=(l.budget??0);}
+    map.set(l.assignedTo,e);
+  });
+  exportCSV('team_report.csv',
+    [...map.entries()].map(([n,d])=>[n,String(d.total),String(d.active),
+      d.total>0?`${Math.round((d.active/d.total)*100)}%`:'0%', fmtMoney(d.rev)]),
+    ['שם','סה"כ לידים','לקוחות פעילים','המרה','הכנסה חודשית']);
+}
+
+/* ─── sub-components ──────────────────────────────────────────────────────── */
+function KpiCard({ label, value, sub, trend, color, icon: Icon }: {
+  label: string; value: string|number; sub?: string;
+  trend?: { value: number; label: string }; color: string; icon: React.ElementType;
+}) {
+  const up = (trend?.value ?? 0) >= 0;
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-all">
+      <div className="flex items-start justify-between mb-3">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: color+'15' }}>
+          <Icon size={18} style={{ color }} />
+        </div>
+        {trend && (
+          <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg ${
+            up ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+          }`}>
+            {up ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
+            {Math.abs(trend.value)}%
+          </div>
+        )}
+      </div>
+      <p className="text-2xl font-black text-slate-900 mb-0.5">{value}</p>
+      <p className="text-sm font-medium text-slate-500">{label}</p>
+      {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+      {trend && <p className="text-xs text-slate-400 mt-1">{trend.label}</p>}
+    </div>
+  );
+}
+
+const tooltipStyle = {
+  contentStyle: { background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, fontSize:12, boxShadow:'0 8px 24px rgba(0,0,0,0.08)' },
+  cursor: { fill: 'rgba(99,102,241,0.04)' },
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+interface OverviewProps { leads: Lead[]; onLeadClick: (lead: Lead) => void; }
 
 export default function Overview({ leads, onLeadClick }: OverviewProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
+  const [tab,       setTab]       = useState<ReportTab>('overview');
+  const [sortCol,   setSortCol]   = useState<'company'|'budget'|'aiScore'|'status'|'lastUpdate'>('aiScore');
+  const [sortDir,   setSortDir]   = useState<'asc'|'desc'>('desc');
+  const [statusFilter, setStatusFilter] = useState<string>('הכל');
 
-  const filteredLeads = useMemo(() => {
-    if (timeRange === 'all') return leads;
-    const days = parseInt(timeRange, 10);
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    return leads.filter(l => parseDDMMYYYY(l.lastUpdate) >= cutoff);
+  /* filtered leads */
+  const filtered = useMemo(() => {
+    let arr = leads;
+    if (timeRange !== 'all') {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - parseInt(timeRange));
+      arr = arr.filter(l => parseDateStr(l.lastUpdate) >= cutoff);
+    }
+    return arr;
   }, [leads, timeRange]);
 
-  const hotLeads = filteredLeads.filter(l => (l.budget ?? 0) >= 15000);
-  const activeClients = filteredLeads.filter(l => l.status === 'לקוח פעיל');
-  const onboarding = filteredLeads.filter(l => l.status === 'בתהליך');
-  const totalBudget = filteredLeads.reduce((sum, l) => sum + (l.budget ?? 0), 0);
+  /* KPI metrics */
+  const kpi = useMemo(() => {
+    const active    = filtered.filter(l=>l.status==='לקוח פעיל');
+    const pipeline  = filtered.filter(l=>['חדש','בתהליך','רימרקטינג'].includes(l.status));
+    const revenue   = active.reduce((s,l)=>s+(l.budget??0),0);
+    const pipeVal   = pipeline.reduce((s,l)=>s+(l.budget??0),0);
+    const avgScore  = filtered.length ? Math.round(filtered.reduce((s,l)=>s+l.aiScore,0)/filtered.length) : 0;
+    const conv      = filtered.length ? Math.round((active.length/filtered.length)*100) : 0;
+    const avgDeal   = active.length ? Math.round(revenue/active.length) : 0;
+    const stale     = filtered.filter(l=>['חדש','בתהליך'].includes(l.status) && daysSince(l.lastUpdate)>=14).length;
+    return { active, pipeline, revenue, pipeVal, avgScore, conv, avgDeal, stale };
+  }, [filtered]);
 
-  const statusData = (Object.keys(STATUS_COLORS) as LeadStatus[])
-    .map(s => ({
-      name: s,
-      value: filteredLeads.filter(l => l.status === s).length,
-      color: STATUS_COLORS[s],
-    }))
-    .filter(d => d.value > 0);
-
-  const sourceData = ALL_SOURCES.map(source => ({
-    name: source,
-    count: filteredLeads.filter(l => l.source === source).length,
-  }))
-    .filter(d => d.count > 0)
-    .sort((a, b) => b.count - a.count);
-
-  const funnelData = PIPELINE_ORDER.map(s => ({
-    name: s,
-    value: filteredLeads.filter(l => l.status === s).length,
-    fill: STATUS_COLORS[s],
-  }));
-
-  const conversionRate =
-    filteredLeads.length > 0
-      ? Math.round((activeClients.length / filteredLeads.length) * 100)
-      : 0;
-
-  const avgScore =
-    filteredLeads.length > 0
-      ? Math.round(filteredLeads.reduce((s, l) => s + l.aiScore, 0) / filteredLeads.length)
-      : 0;
-
-  // Top 5 leads by AI score
-  const top5Leads = useMemo(
-    () => [...leads].sort((a, b) => b.aiScore - a.aiScore).slice(0, 5),
-    [leads],
-  );
-
-  // Recent activity: last 8 notes across all leads
-  const recentNotes = useMemo(() => {
-    const allNotes: { note: { id: string; text: string; author: string; timestamp: string }; company: string; leadObj: Lead }[] = [];
-    for (const lead of leads) {
-      for (const note of lead.notes) {
-        allNotes.push({ note, company: lead.company, leadObj: lead });
-      }
-    }
-    allNotes.sort((a, b) => b.note.timestamp.localeCompare(a.note.timestamp));
-    return allNotes.slice(0, 8);
+  /* monthly trend (6 months) */
+  const monthlyTrend = useMemo(() => {
+    return Array.from({length:6},(_,i) => {
+      const d = new Date(); d.setMonth(d.getMonth()-5+i);
+      const mon = d.getMonth(), yr = d.getFullYear();
+      const inMon = leads.filter(l=>{
+        const p = parseDateStr(l.lastUpdate);
+        return p.getMonth()===mon && p.getFullYear()===yr;
+      });
+      return {
+        name: HEB_MONTHS[mon],
+        'לידים':   inMon.length,
+        'לקוחות':  inMon.filter(l=>l.status==='לקוח פעיל').length,
+        'הכנסות':  Math.round(inMon.filter(l=>l.status==='לקוח פעיל').reduce((s,l)=>s+(l.budget??0),0)/1000),
+      };
+    });
   }, [leads]);
 
-  // Agent leaderboard
-  const agentLeaderboard = useMemo(() => {
-    const map = new Map<string, { name: string; total: number; active: number }>();
-    for (const lead of leads) {
-      if (!lead.assignedTo) continue;
-      const existing = map.get(lead.assignedTo) ?? { name: lead.assignedTo, total: 0, active: 0 };
-      existing.total++;
-      if (lead.status === 'לקוח פעיל') existing.active++;
-      map.set(lead.assignedTo, existing);
-    }
-    return [...map.values()].sort((a, b) => b.active - a.active).slice(0, 5);
-  }, [leads]);
+  /* source stats */
+  const sourceStats = useMemo(() =>
+    ALL_SOURCES.map(src => {
+      const g = filtered.filter(l=>l.source===src);
+      const active = g.filter(l=>l.status==='לקוח פעיל');
+      const rev = active.reduce((s,l)=>s+(l.budget??0),0);
+      const conv = g.length ? Math.round((active.length/g.length)*100) : 0;
+      return { src, total:g.length, active:active.length, rev, conv };
+    }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
+  , [filtered]);
 
-  const timeRangeLabels: { key: TimeRange; label: string }[] = [
-    { key: '7', label: 'שבוע' },
-    { key: '30', label: 'חודש' },
-    { key: '90', label: 'רבעון' },
-    { key: 'all', label: 'הכל' },
-  ];
+  /* status distribution */
+  const statusData = useMemo(() =>
+    (Object.keys(STATUS_COLORS) as LeadStatus[]).map(s => ({
+      name:s, value:filtered.filter(l=>l.status===s).length, color:STATUS_COLORS[s],
+    })).filter(d=>d.value>0)
+  , [filtered]);
 
+  /* funnel */
+  const funnel = useMemo(() => {
+    const stages: LeadStatus[] = ['חדש','בתהליך','לקוח פעיל'];
+    return stages.map(s => ({ name:s, value:filtered.filter(l=>l.status===s).length, color:STATUS_COLORS[s] }));
+  }, [filtered]);
+
+  /* agent leaderboard */
+  const teamStats = useMemo(() => {
+    const map = new Map<string,{total:number;active:number;rev:number;avgScore:number;scores:number[]}>();
+    filtered.forEach(l => {
+      if (!l.assignedTo) return;
+      const e = map.get(l.assignedTo) ?? {total:0,active:0,rev:0,avgScore:0,scores:[]};
+      e.total++; e.scores.push(l.aiScore);
+      if (l.status==='לקוח פעיל'){e.active++;e.rev+=(l.budget??0);}
+      map.set(l.assignedTo,e);
+    });
+    return [...map.entries()].map(([name,d])=>({
+      name, ...d,
+      conv: d.total ? Math.round((d.active/d.total)*100) : 0,
+      avgScore: d.scores.length ? Math.round(d.scores.reduce((a,b)=>a+b,0)/d.scores.length) : 0,
+    })).sort((a,b)=>b.active-a.active);
+  }, [filtered]);
+
+  /* smart insights */
+  const insights = useMemo(() => {
+    const list: {icon:string; text:string; color:string}[] = [];
+    const bestSrc = sourceStats[0];
+    if (bestSrc) list.push({ icon:'🏆', color:'text-amber-600', text:`המקור הטוב ביותר הוא "${bestSrc.src}" עם ${bestSrc.total} לידים ו-${bestSrc.conv}% המרה` });
+    if (kpi.stale>0) list.push({ icon:'⚠️', color:'text-red-500', text:`${kpi.stale} לידים לא עודכנו ב-14+ ימים — זקוקים לטיפול` });
+    const hot = filtered.filter(l=>l.aiScore>=80 && l.status==='חדש');
+    if (hot.length>0) list.push({ icon:'🔥', color:'text-orange-500', text:`${hot.length} לידים חמים (ציון 80+) ממתינים לטיפול ראשוני` });
+    if (kpi.conv>=30) list.push({ icon:'✅', color:'text-emerald-600', text:`יחס המרה של ${kpi.conv}% — מעל הממוצע בתעשייה (20%)` });
+    else if (kpi.conv>0) list.push({ icon:'📈', color:'text-blue-500', text:`יחס המרה ${kpi.conv}% — יש פוטנציאל לשיפור, הממוצע בתעשייה 20%` });
+    const waiting = filtered.filter(l=>l.waitingContent);
+    if (waiting.length>0) list.push({ icon:'⏳', color:'text-slate-500', text:`${waiting.length} לידים ממתינים לתוכן מהלקוח` });
+    if (kpi.avgDeal>0) list.push({ icon:'💰', color:'text-violet-600', text:`ערך לקוח פעיל ממוצע: ${fmtMoney(kpi.avgDeal)}/חודש` });
+    return list;
+  }, [filtered, sourceStats, kpi]);
+
+  /* sorted leads table */
+  const sortedLeads = useMemo(() => {
+    let arr = statusFilter==='הכל' ? filtered : filtered.filter(l=>l.status===statusFilter);
+    return [...arr].sort((a,b) => {
+      const dir = sortDir==='asc' ? 1 : -1;
+      if (sortCol==='budget')     return dir*((a.budget??0)-(b.budget??0));
+      if (sortCol==='aiScore')    return dir*(a.aiScore-b.aiScore);
+      if (sortCol==='lastUpdate') return dir*parseDateStr(a.lastUpdate).getTime()-parseDateStr(b.lastUpdate).getTime()*dir;
+      return dir*a[sortCol].localeCompare(b[sortCol]);
+    });
+  }, [filtered, sortCol, sortDir, statusFilter]);
+
+  const toggleSort = (col: typeof sortCol) => {
+    if (sortCol===col) setSortDir(d=>d==='asc'?'desc':'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const SortIcon = ({ col }: { col: typeof sortCol }) =>
+    sortCol===col ? <ChevronDown size={12} className={`inline ml-1 ${sortDir==='asc'?'rotate-180':''} transition-transform`}/> : null;
+
+  /* ─── render ─────────────────────────────────────────────────────────────── */
   return (
-    <div className="space-y-5">
-      {/* Time range filter */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-1 bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
-          {timeRangeLabels.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setTimeRange(key)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                timeRange === key
-                  ? 'bg-black text-white'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+    <div className="space-y-5" dir="rtl">
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
+            <BarChart2 size={20} className="text-indigo-500" /> דוחות ואנליטיקה
+          </h1>
+          <p className="text-sm text-slate-400 mt-0.5">{filtered.length} לידים בטווח הנבחר</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Calendar size={16} className="text-slate-400" />
-          <span className="text-slate-500 text-sm">
-            {timeRange === 'all' ? 'כל הזמנים' : `${timeRange} ימים אחרונים`} — {filteredLeads.length} לידים
-          </span>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Time range */}
+          <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            {(['7','30','90','all'] as TimeRange[]).map(k => (
+              <button key={k} onClick={()=>setTimeRange(k)}
+                className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  timeRange===k ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50'
+                }`}>
+                {k==='7'?'שבוע':k==='30'?'חודש':k==='90'?'רבעון':'הכל'}
+              </button>
+            ))}
+          </div>
+
+          {/* Export buttons */}
+          <div className="flex gap-1.5">
+            <button onClick={()=>exportLeads(filtered)}
+              className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              <Download size={12}/> לידים CSV
+            </button>
+            <button onClick={()=>exportRevenue(filtered)}
+              className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              <FileText size={12}/> מכירות CSV
+            </button>
+            <button onClick={()=>exportTeam(filtered)}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              <Download size={12}/> צוות CSV
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Top KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        {[
-          {
-            label: 'לידים VIP',
-            value: hotLeads.length,
-            sub: 'תקציב ₪15K+',
-            icon: <Flame className="text-red-500" size={20} />,
-            color: 'text-red-600',
-            bar: 'bg-red-400',
-            pct: Math.round((hotLeads.length / Math.max(filteredLeads.length, 1)) * 100),
-          },
-          {
-            label: 'בתהליך',
-            value: onboarding.length,
-            sub: 'פרויקטים פעילים',
-            icon: <Rocket className="text-orange-500" size={20} />,
-            color: 'text-orange-600',
-            bar: 'bg-orange-400',
-            pct: Math.round((onboarding.length / Math.max(filteredLeads.length, 1)) * 100),
-          },
-          {
-            label: 'לקוחות פעילים',
-            value: activeClients.length,
-            sub: `${conversionRate}% המרה`,
-            icon: <CheckCircle2 className="text-green-500" size={20} />,
-            color: 'text-green-600',
-            bar: 'bg-green-400',
-            pct: conversionRate,
-          },
-          {
-            label: 'סה"כ לידים',
-            value: filteredLeads.length,
-            sub: `ציון AI ממוצע ${avgScore}%`,
-            icon: <Users className="text-slate-500" size={20} />,
-            color: 'text-slate-700',
-            bar: 'bg-slate-500',
-            pct: 100,
-          },
-        ].map(s => (
-          <div
-            key={s.label}
-            className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div className={`text-3xl font-bold ${s.color}`}>{s.value}</div>
-              <div className="p-2 bg-slate-50 rounded-lg">{s.icon}</div>
-            </div>
-            <div className="text-sm font-medium text-slate-700 text-right">{s.label}</div>
-            <div className="text-xs text-slate-400 text-right mt-0.5">{s.sub}</div>
-            <div className="mt-3 h-1 bg-slate-100 rounded-full">
-              <div
-                className={`h-1 rounded-full ${s.bar}`}
-                style={{ width: `${Math.min(s.pct, 100)}%` }}
-              />
-            </div>
-          </div>
+      {/* ── Tabs ───────────────────────────────────────────────────────────── */}
+      <div className="flex gap-1 bg-slate-100 rounded-2xl p-1 w-fit">
+        {([
+          { key:'overview', label:'סקירה כללית',  icon: PieChartIcon },
+          { key:'leads',    label:'טבלת לידים',   icon: TableIcon },
+          { key:'revenue',  label:'מכירות',        icon: TrendingUp },
+          { key:'team',     label:'ביצועי צוות',  icon: Users },
+        ] as {key:ReportTab;label:string;icon:React.ElementType}[]).map(t => (
+          <button key={t.key} onClick={()=>setTab(t.key)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+              tab===t.key ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}>
+            <t.icon size={13}/>{t.label}
+          </button>
         ))}
       </div>
 
-      {/* Revenue + Funnel row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
-        {/* Total Budget */}
-        <div className="bg-black rounded-xl p-5 shadow-sm text-white">
-          <div className="flex items-center justify-between mb-4">
-            <DollarSign size={20} className="text-neutral-400" />
-            <span className="text-neutral-300 text-sm font-medium">תקציב שיווק כולל</span>
+      {/* ══ TAB: OVERVIEW ══════════════════════════════════════════════════════ */}
+      {tab==='overview' && (
+        <>
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <KpiCard icon={Users}     label="סה״כ לידים"       value={filtered.length}              color="#6366f1" sub={`${kpi.conv}% המרה לפעיל`}/>
+            <KpiCard icon={Target}    label="לקוחות פעילים"    value={kpi.active.length}             color="#22c55e" sub={`ממוצע ${fmtMoney(kpi.avgDeal)}/חודש`}/>
+            <KpiCard icon={DollarSign} label="הכנסה חודשית"   value={fmtMoney(kpi.revenue)}         color="#10b981" sub={`פייפליין: ${fmtMoney(kpi.pipeVal)}`}/>
+            <KpiCard icon={Brain}     label="ציון AI ממוצע"    value={`${kpi.avgScore}%`}            color="#8b5cf6" sub={`${filtered.filter(l=>l.aiScore>=75).length} לידים חמים`}/>
           </div>
-          <div className="text-4xl font-bold mb-1">₪{totalBudget.toLocaleString()}</div>
-          <div className="text-neutral-400 text-sm">סה"כ תקציב חודשי מהלידים</div>
-          <div className="mt-4 pt-4 border-t border-neutral-700 grid grid-cols-2 gap-3">
-            <div>
-              <div className="text-xl font-bold">{hotLeads.length}</div>
-              <div className="text-neutral-400 text-xs">לידי VIP (₪15K+)</div>
+
+          {/* Monthly trend */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-4 text-[11px]">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"/>לידים</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"/>לקוחות</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-violet-400 inline-block"/>הכנסות (K₪)</span>
+              </div>
+              <h3 className="font-bold text-slate-800">מגמה חודשית — 6 חודשים</h3>
             </div>
-            <div>
-              <div className="text-xl font-bold">{avgScore}%</div>
-              <div className="text-neutral-400 text-xs">ציון AI ממוצע</div>
-            </div>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
+                <defs>
+                  <linearGradient id="gLead" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="gAct" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
+                <XAxis dataKey="name" tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={24}/>
+                <Tooltip {...tooltipStyle}/>
+                <Area type="monotone" dataKey="לידים"   stroke="#6366f1" fill="url(#gLead)" strokeWidth={2} dot={false}/>
+                <Area type="monotone" dataKey="לקוחות"  stroke="#22c55e" fill="url(#gAct)"  strokeWidth={2} dot={false}/>
+                <Line  type="monotone" dataKey="הכנסות"  stroke="#8b5cf6" strokeWidth={2} dot={{fill:'#8b5cf6',r:3}} strokeDasharray="5 3"/>
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
-        </div>
 
-        {/* Pipeline Funnel */}
-        <div className="col-span-2 bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <TrendingUp size={16} className="text-slate-500" />
-            <h3 className="font-semibold text-slate-700">פאנל מכירות — קונברזן</h3>
-          </div>
-          <div className="flex items-end gap-3 h-32">
-            {funnelData.map((stage, i) => {
-              const maxVal = Math.max(...funnelData.map(d => d.value), 1);
-              const pct = (stage.value / maxVal) * 100;
-              const conv =
-                i > 0 && funnelData[i - 1].value > 0
-                  ? Math.round((stage.value / funnelData[i - 1].value) * 100)
-                  : null;
-              return (
-                <div key={stage.name} className="flex-1 flex flex-col items-center gap-1">
-                  {conv !== null && (
-                    <div className="text-xs text-slate-400 mb-1">↓ {conv}%</div>
-                  )}
-                  <div className="w-full flex items-end justify-center" style={{ height: '80px' }}>
-                    <div
-                      className="w-full rounded-t-lg transition-all duration-500"
-                      style={{
-                        height: `${Math.max(pct, 8)}%`,
-                        backgroundColor: stage.fill,
-                        opacity: 0.85,
-                      }}
-                    />
-                  </div>
-                  <div className="text-lg font-bold text-slate-800">{stage.value}</div>
-                  <div className="text-xs text-slate-500 text-center leading-tight">{stage.name}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Charts row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
-        {/* Leads by Source */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-700 mb-4 text-right">לידים לפי מקור</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={sourceData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-              <XAxis type="number" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-              <YAxis
-                type="category"
-                dataKey="name"
-                tick={{ fontSize: 11 }}
-                width={80}
-                tickLine={false}
-                axisLine={false}
-              />
-              <Tooltip
-                contentStyle={{
-                  borderRadius: '8px',
-                  border: 'none',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-                }}
-              />
-              <Bar dataKey="count" fill="#171717" radius={[0, 6, 6, 0]} maxBarSize={20} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Status Distribution */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <h3 className="font-semibold text-slate-700 mb-4 text-right">התפלגות לפי סטטוס</h3>
-          <div className="flex items-center gap-4">
-            <div className="space-y-2.5 flex-1">
-              {statusData.map(d => (
-                <div key={d.name} className="space-y-0.5">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-bold" style={{ color: d.color }}>
-                      {d.value}
-                    </span>
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <span className="text-xs">{d.name}</span>
-                      <span
-                        className="w-2 h-2 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: d.color }}
-                      />
+          {/* Status dist + Funnel + Source */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Status donut */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+              <h3 className="font-bold text-slate-800 mb-4 text-right">התפלגות סטטוס</h3>
+              <div className="flex items-center gap-3">
+                <div className="space-y-2 flex-1">
+                  {statusData.map(d=>(
+                    <div key={d.name}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="font-bold" style={{color:d.color}}>{d.value}</span>
+                        <span className="text-slate-500">{d.name}</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-700"
+                          style={{width:`${filtered.length?(d.value/filtered.length)*100:0}%`,backgroundColor:d.color}}/>
+                      </div>
                     </div>
-                  </div>
-                  <div className="h-1 bg-slate-100 rounded-full">
-                    <div
-                      className="h-1 rounded-full"
-                      style={{
-                        backgroundColor: d.color,
-                        width: `${filteredLeads.length > 0 ? (d.value / filteredLeads.length) * 100 : 0}%`,
-                        opacity: 0.7,
-                      }}
-                    />
-                  </div>
+                  ))}
                 </div>
-              ))}
+                <div className="w-24 h-24 flex-shrink-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={statusData} dataKey="value" cx="50%" cy="50%" outerRadius={46} innerRadius={26} paddingAngle={2}>
+                        {statusData.map((d,i)=><Cell key={i} fill={d.color} stroke="none"/>)}
+                      </Pie>
+                      <Tooltip contentStyle={{borderRadius:8,border:'none',fontSize:11,boxShadow:'0 4px 20px rgba(0,0,0,0.1)'}} cursor={false}/>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
-            <div className="w-28 h-28 flex-shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={statusData}
-                    dataKey="value"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={52}
-                    innerRadius={28}
-                    paddingAngle={2}
-                  >
-                    {statusData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} stroke="none" />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: '8px',
-                      border: 'none',
-                      boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-                    }}
-                  />
-                </PieChart>
+
+            {/* Funnel */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+              <h3 className="font-bold text-slate-800 mb-4 text-right">משפך מכירות</h3>
+              <div className="flex items-end gap-2 h-28">
+                {funnel.map((s,i)=>{
+                  const max = Math.max(...funnel.map(f=>f.value),1);
+                  const pct = (s.value/max)*100;
+                  const conv = i>0 && funnel[i-1].value>0 ? Math.round((s.value/funnel[i-1].value)*100) : null;
+                  return (
+                    <div key={s.name} className="flex-1 flex flex-col items-center gap-1">
+                      {conv!==null && <span className="text-[10px] text-slate-400 mb-1">↓{conv}%</span>}
+                      <div className="w-full flex items-end" style={{height:80}}>
+                        <div className="w-full rounded-t-xl transition-all duration-500"
+                          style={{height:`${Math.max(pct,8)}%`,backgroundColor:s.color,opacity:0.85}}/>
+                      </div>
+                      <span className="text-base font-black text-slate-800">{s.value}</span>
+                      <span className="text-[10px] text-slate-500 text-center">{s.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Source bar */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+              <h3 className="font-bold text-slate-800 mb-4 text-right">לידים לפי מקור</h3>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={sourceStats.slice(0,5)} layout="vertical" margin={{right:0,left:0}}>
+                  <XAxis type="number" tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
+                  <YAxis type="category" dataKey="src" tick={{fontSize:10,fill:'#64748b'}} width={70} axisLine={false} tickLine={false}/>
+                  <Tooltip {...tooltipStyle} formatter={(v:number)=>[v,'לידים']}/>
+                  <Bar dataKey="total" fill="#6366f1" radius={[0,6,6,0]} maxBarSize={16}/>
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Top 5 AI Score + Recent Activity + Agent Leaderboard row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
-        {/* Top 5 by AI Score */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-end gap-2 mb-4">
-            <h3 className="font-semibold text-slate-700">טופ 5 לפי ציון AI</h3>
-            <Brain size={16} className="text-slate-500" />
-          </div>
-          <div className="space-y-2">
-            {top5Leads.map((lead, i) => {
-              const scoreColor =
-                lead.aiScore >= 75
-                  ? 'bg-green-500'
-                  : lead.aiScore >= 50
-                  ? 'bg-orange-400'
-                  : 'bg-slate-300';
-              return (
-                <div
-                  key={lead.id}
-                  onClick={() => onLeadClick(lead)}
-                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-slate-800 text-sm">{lead.aiScore}%</span>
-                      <span className="font-medium text-slate-700 text-sm truncate mr-2">
-                        {lead.company}
-                      </span>
-                    </div>
-                    <div className="h-1.5 bg-slate-100 rounded-full">
-                      <div
-                        className={`h-1.5 rounded-full ${scoreColor}`}
-                        style={{ width: `${lead.aiScore}%` }}
-                      />
-                    </div>
+          {/* Smart Insights */}
+          <div className="bg-gradient-to-bl from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100 p-5">
+            <div className="flex items-center gap-2 mb-4 justify-end">
+              <h3 className="font-bold text-slate-800">תובנות חכמות</h3>
+              <Sparkles size={15} className="text-indigo-500"/>
+            </div>
+            {insights.length===0 ? (
+              <p className="text-slate-400 text-sm text-right">אין מספיק נתונים לתובנות</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {insights.map((ins,i)=>(
+                  <div key={i} className="flex items-start gap-2.5 bg-white/70 rounded-xl px-4 py-3 text-right">
+                    <span className="text-lg flex-shrink-0">{ins.icon}</span>
+                    <p className={`text-sm font-medium ${ins.color}`}>{ins.text}</p>
                   </div>
-                  <div
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                    style={{
-                      background: i === 0 ? '#fbbf24' : i === 1 ? '#94a3b8' : i === 2 ? '#f97316' : '#e2e8f0',
-                      color: i < 3 ? 'white' : '#64748b',
-                    }}
-                  >
-                    {i + 1}
-                  </div>
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            )}
           </div>
-        </div>
+        </>
+      )}
 
-        {/* Recent Activity Feed */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-end gap-2 mb-4">
-            <h3 className="font-semibold text-slate-700">פעילות אחרונה</h3>
-            <Activity size={16} className="text-slate-500" />
-          </div>
-          {recentNotes.length === 0 ? (
-            <div className="text-center text-slate-300 text-sm py-8">אין פעילות אחרונה</div>
-          ) : (
-            <div className="space-y-3">
-              {recentNotes.map(({ note, company, leadObj }) => (
-                <div
-                  key={note.id}
-                  onClick={() => onLeadClick(leadObj)}
-                  className="flex gap-2 cursor-pointer hover:bg-slate-50 rounded-lg p-1.5 -mx-1.5 transition-colors"
-                >
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-400 flex-shrink-0 mt-1.5" />
-                  <div className="flex-1 min-w-0 text-right">
-                    <div className="text-xs text-slate-700 leading-snug truncate">
-                      {note.text.length > 60 ? note.text.slice(0, 60) + '...' : note.text}
-                    </div>
-                    <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                      <span className="text-xs text-slate-300">
-                        {note.timestamp.slice(0, 10)}
-                      </span>
-                      <span className="text-xs text-slate-400">{note.author}</span>
-                      <span className="text-xs font-medium text-slate-700">{company}</span>
-                    </div>
-                  </div>
-                </div>
+      {/* ══ TAB: LEADS TABLE ═══════════════════════════════════════════════════ */}
+      {tab==='leads' && (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          {/* Table toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <button onClick={()=>exportLeads(sortedLeads)}
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
+                <Download size={12}/> ייצא CSV ({sortedLeads.length})
+              </button>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <span className="text-xs text-slate-400">{sortedLeads.length} לידים</span>
+              {(['הכל',...Object.keys(STATUS_COLORS)] as string[]).map(s=>(
+                <button key={s} onClick={()=>setStatusFilter(s)}
+                  className={`text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                    statusFilter===s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}>{s}</button>
               ))}
             </div>
-          )}
-        </div>
-
-        {/* Agent Leaderboard */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-end gap-2 mb-4">
-            <h3 className="font-semibold text-slate-700">לידרבורד סוכנים</h3>
-            <Award size={16} className="text-slate-500" />
           </div>
-          {agentLeaderboard.length === 0 ? (
-            <div className="text-center text-slate-300 text-sm py-8">אין נתונים</div>
-          ) : (
-            <div className="space-y-3">
-              {agentLeaderboard.map((agent, i) => {
-                const maxActive = agentLeaderboard[0]?.active || 1;
-                const rankColors = ['text-yellow-500', 'text-slate-400', 'text-orange-500'];
-                return (
-                  <div key={agent.name} className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs text-slate-500">{agent.total} לידים</span>
-                          <span className="text-xs font-bold text-green-600">{agent.active} פעילים</span>
-                        </div>
-                        <span className="font-medium text-slate-800 text-sm truncate mr-1">
-                          {agent.name}
+
+          {/* Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-right">
+                  {([
+                    {col:'company',   label:'חברה'},
+                    {col:'status',    label:'סטטוס'},
+                    {col:'budget',    label:'תקציב'},
+                    {col:'aiScore',   label:'ציון AI'},
+                    {col:'lastUpdate',label:'עדכון אחרון'},
+                  ] as {col:typeof sortCol;label:string}[]).map(h=>(
+                    <th key={h.col}
+                      onClick={()=>toggleSort(h.col)}
+                      className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 select-none whitespace-nowrap">
+                      {h.label}<SortIcon col={h.col}/>
+                    </th>
+                  ))}
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">מקור</th>
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">אחראי</th>
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">ימים ללא מגע</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedLeads.map((lead,i)=>{
+                  const stale = daysSince(lead.lastUpdate);
+                  const scoreColor = lead.aiScore>=75?'text-emerald-600 bg-emerald-50':lead.aiScore>=50?'text-amber-600 bg-amber-50':'text-slate-500 bg-slate-100';
+                  return (
+                    <tr key={lead.id}
+                      onClick={()=>onLeadClick(lead)}
+                      className={`border-b border-slate-50 hover:bg-indigo-50/40 cursor-pointer transition-colors ${i%2===0?'bg-white':'bg-slate-50/30'}`}>
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-slate-800">{lead.company}</div>
+                        <div className="text-xs text-slate-400">{lead.contactName}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                          style={{color:STATUS_COLORS[lead.status as LeadStatus],backgroundColor:STATUS_COLORS[lead.status as LeadStatus]+'18'}}>
+                          {lead.status}
                         </span>
-                      </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full">
-                        <div
-                          className="h-1.5 bg-slate-500 rounded-full"
-                          style={{ width: `${maxActive > 0 ? (agent.active / maxActive) * 100 : 0}%` }}
-                        />
-                      </div>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-slate-800">{fmtMoney(lead.budget??0)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${scoreColor}`}>{lead.aiScore}%</span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{lead.lastUpdate}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{lead.source}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{lead.assignedTo||'—'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-bold ${stale>=14?'text-red-500':stale>=7?'text-amber-500':'text-emerald-500'}`}>
+                          {stale} ימים
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {sortedLeads.length===0 && (
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400 text-sm">אין לידים בסינון זה</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ══ TAB: REVENUE ═══════════════════════════════════════════════════════ */}
+      {tab==='revenue' && (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <KpiCard icon={DollarSign} label="הכנסה חודשית"    value={fmtMoney(kpi.revenue)}     color="#22c55e" sub={`${kpi.active.length} לקוחות פעילים`}/>
+            <KpiCard icon={TrendingUp} label="פייפליין פוטנציאל" value={fmtMoney(kpi.pipeVal)} color="#6366f1" sub={`${kpi.pipeline.length} לידים בפייפליין`}/>
+            <KpiCard icon={Star}       label="ערך לקוח ממוצע"  value={fmtMoney(kpi.avgDeal)}     color="#f59e0b" sub="הכנסה חודשית ממוצעת"/>
+            <KpiCard icon={Zap}        label="שיעור המרה"       value={`${kpi.conv}%`}            color="#8b5cf6" sub="לידים → לקוח פעיל"/>
+          </div>
+
+          {/* Revenue by source */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-5">
+              <button onClick={()=>exportRevenue(filtered)}
+                className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-semibold">
+                <Download size={11}/> CSV
+              </button>
+              <h3 className="font-bold text-slate-800">ביצועי מכירות לפי מקור</h3>
+            </div>
+            <div className="space-y-3">
+              {sourceStats.map(s=>{
+                const maxRev = Math.max(...sourceStats.map(x=>x.rev),1);
+                return (
+                  <div key={s.src} className="flex items-center gap-4">
+                    <div className="text-left w-12">
+                      <span className="text-xs font-bold text-indigo-600">{s.conv}%</span>
                     </div>
-                    <div
-                      className={`w-6 h-6 flex-shrink-0 flex items-center justify-center font-bold text-sm ${
-                        i < 3 ? rankColors[i] : 'text-slate-300'
-                      }`}
-                    >
-                      {i + 1}
+                    <div className="flex-1">
+                      <div className="flex justify-between text-xs mb-1.5">
+                        <span className="text-slate-400">{s.total} לידים · {s.active} פעילים · {fmtMoney(s.rev)}/חודש</span>
+                        <span className="font-semibold text-slate-700">{s.src}</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-l from-indigo-500 to-violet-500 rounded-full transition-all duration-700"
+                          style={{width:`${(s.rev/maxRev)*100}%`}}/>
+                      </div>
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* In-Progress Clients */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <span className="bg-orange-100 text-orange-700 text-sm font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
-            <TrendingUp size={14} />
-            {onboarding.length}
-          </span>
-          <h3 className="font-semibold text-slate-700">לקוחות בתהליך</h3>
-        </div>
-        {onboarding.length === 0 ? (
-          <div className="text-center text-slate-300 text-sm py-6">אין לקוחות בתהליך בטווח זמן זה</div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-            {onboarding.map(lead => {
-              const completedSols = lead.solutions.filter(s => s.delivered).length;
-              const totalSols = lead.solutions.length;
-              const progress = totalSols > 0 ? Math.round((completedSols / totalSols) * 100) : 0;
-              return (
-                <div
-                  key={lead.id}
-                  onClick={() => onLeadClick(lead)}
-                  className="border border-orange-100 bg-orange-50 rounded-xl p-3 cursor-pointer hover:bg-orange-100 hover:shadow-sm transition-all"
-                >
-                  <div className="flex items-center gap-1 mb-1.5">
-                    <span className="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0" />
-                    <span className="font-semibold text-slate-800 text-xs truncate">{lead.company}</span>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">{lead.contactName}</p>
-                  <div className="h-1 bg-orange-100 rounded-full mb-1">
-                    <div
-                      className="h-1 bg-orange-500 rounded-full"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-orange-600 font-medium">{progress}% הושלם</p>
-                </div>
-              );
-            })}
           </div>
-        )}
-      </div>
 
-      {/* ── Revenue Forecast & Source ROI (AI agents embedded) ────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-slate-900 rounded-2xl overflow-hidden">
-          <RevenueForecast leads={leads} />
-        </div>
-        <div className="bg-slate-900 rounded-2xl overflow-hidden">
-          <SourceROI leads={leads} />
-        </div>
-      </div>
-
-      {/* Hot Leads */}
-      {hotLeads.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <span className="bg-red-100 text-red-700 text-sm font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
-              <Flame size={14} />
-              {hotLeads.length}
-            </span>
-            <h3 className="font-semibold text-slate-700">לידים VIP (תקציב ₪15K+)</h3>
+          {/* Monthly revenue chart */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+            <h3 className="font-bold text-slate-800 mb-5 text-right">מגמת הכנסות חודשית (K₪)</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
+                <XAxis dataKey="name" tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={30}/>
+                <Tooltip {...tooltipStyle} formatter={(v:number)=>[`₪${v}K`,'הכנסות']}/>
+                <Bar dataKey="הכנסות" radius={[6,6,0,0]} maxBarSize={40}>
+                  {monthlyTrend.map((_,i)=>(
+                    <Cell key={i} fill={i===monthlyTrend.length-1?'#6366f1':'#e0e7ff'}/>
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-            {hotLeads.map(lead => (
-              <div
-                key={lead.id}
-                onClick={() => onLeadClick(lead)}
-                className="border border-red-100 bg-gradient-to-b from-red-50 to-white rounded-xl p-3 cursor-pointer hover:shadow-md transition-all"
-              >
-                <div className="font-semibold text-slate-800 text-sm truncate text-right mb-1">
-                  {lead.company}
-                </div>
-                <div className="text-xs text-slate-500 text-right mb-2">{lead.contactName}</div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">{lead.source}</span>
-                  <span className="text-sm font-bold text-emerald-600">₪{(lead.budget ?? 0).toLocaleString()} 🌟</span>
-                </div>
-                {lead.aiScore > 0 && (
-                  <div className="mt-2 h-1 bg-slate-100 rounded-full">
-                    <div
-                      className="h-1 bg-gradient-to-r from-slate-500 to-orange-400 rounded-full"
-                      style={{ width: `${lead.aiScore}%` }}
-                    />
+
+          {/* Top revenue leads */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+            <h3 className="font-bold text-slate-800 mb-4 text-right">לקוחות פעילים — לפי ערך</h3>
+            <div className="space-y-2">
+              {[...kpi.active].sort((a,b)=>(b.budget??0)-(a.budget??0)).slice(0,10).map((lead,i)=>{
+                const max = kpi.active[0]?.budget ?? 1;
+                return (
+                  <div key={lead.id} onClick={()=>onLeadClick(lead)}
+                    className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors">
+                    <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black flex-shrink-0"
+                      style={{background:i<3?['#fbbf24','#94a3b8','#f97316'][i]:'#e2e8f0',color:i<3?'white':'#94a3b8'}}>
+                      {i+1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-black text-emerald-600">{fmtMoney(lead.budget??0)}/חודש</span>
+                        <span className="font-semibold text-slate-800 truncate mr-2">{lead.company}</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-l from-emerald-500 to-teal-400 rounded-full"
+                          style={{width:`${((lead.budget??0)/max)*100}%`}}/>
+                      </div>
+                    </div>
                   </div>
-                )}
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ══ TAB: TEAM ══════════════════════════════════════════════════════════ */}
+      {tab==='team' && (
+        <>
+          <div className="flex justify-end">
+            <button onClick={()=>exportTeam(filtered)}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
+              <Download size={12}/> ייצא דוח צוות CSV
+            </button>
+          </div>
+
+          {teamStats.length===0 ? (
+            <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 shadow-sm">
+              <Users size={32} className="mx-auto mb-3 opacity-30"/>
+              <p>אין נתוני צוות — וודא שלידים משויכים לאחראי</p>
+            </div>
+          ) : (
+            <>
+              {/* Team KPIs */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <KpiCard icon={Users}   label="חברי צוות פעילים" value={teamStats.length}                                    color="#6366f1"/>
+                <KpiCard icon={Target}  label="סה״כ לקוחות"       value={teamStats.reduce((s,t)=>s+t.active,0)}              color="#22c55e"/>
+                <KpiCard icon={Award}   label="המרה ממוצעת"        value={`${teamStats.length?Math.round(teamStats.reduce((s,t)=>s+t.conv,0)/teamStats.length):0}%`} color="#f59e0b"/>
+                <KpiCard icon={DollarSign} label="הכנסה כוללת"    value={fmtMoney(teamStats.reduce((s,t)=>s+t.rev,0))}       color="#8b5cf6"/>
               </div>
-            ))}
-          </div>
-        </div>
+
+              {/* Leaderboard */}
+              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+                <h3 className="font-bold text-slate-800 mb-5 text-right flex items-center gap-2 justify-end">
+                  <Award size={16} className="text-amber-500"/>לידרבורד ביצועים
+                </h3>
+                <div className="space-y-3">
+                  {teamStats.map((agent,i)=>{
+                    const maxRev = teamStats[0]?.rev||1;
+                    const medals = ['🥇','🥈','🥉'];
+                    return (
+                      <div key={agent.name} className={`rounded-xl p-4 border transition-all ${
+                        i===0?'border-amber-200 bg-amber-50/40':i===1?'border-slate-200 bg-slate-50/40':'border-slate-100 bg-white'
+                      }`}>
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className="text-xl">{medals[i]||`#${i+1}`}</span>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-center">
+                              <div className="flex gap-4 text-xs">
+                                <span className="text-emerald-600 font-bold">{fmtMoney(agent.rev)}/חודש</span>
+                                <span className="text-indigo-600 font-bold">{agent.conv}% המרה</span>
+                                <span className="text-slate-400">ציון AI: {agent.avgScore}%</span>
+                              </div>
+                              <p className="font-bold text-slate-800">{agent.name}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
+                          <div className="bg-white rounded-lg p-2 border border-slate-100">
+                            <div className="font-black text-slate-800 text-lg">{agent.total}</div>
+                            <div className="text-slate-400">סה"כ לידים</div>
+                          </div>
+                          <div className="bg-white rounded-lg p-2 border border-slate-100">
+                            <div className="font-black text-emerald-600 text-lg">{agent.active}</div>
+                            <div className="text-slate-400">לקוחות פעילים</div>
+                          </div>
+                          <div className="bg-white rounded-lg p-2 border border-slate-100">
+                            <div className="font-black text-indigo-600 text-lg">{agent.conv}%</div>
+                            <div className="text-slate-400">שיעור המרה</div>
+                          </div>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-gradient-to-l from-indigo-500 to-violet-500 rounded-full"
+                            style={{width:`${(agent.rev/maxRev)*100}%`}}/>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Team performance chart */}
+              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+                <h3 className="font-bold text-slate-800 mb-5 text-right">לידים לפי חבר צוות</h3>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={teamStats} margin={{top:0,right:0,left:-20,bottom:0}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
+                    <XAxis dataKey="name" tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={24}/>
+                    <Tooltip {...tooltipStyle}/>
+                    <Legend iconType="circle" iconSize={7}
+                      formatter={v=><span style={{fontSize:11,color:'#64748b'}}>{v}</span>}/>
+                    <Bar dataKey="total"  name="סה״כ לידים"    fill="#e0e7ff" radius={[4,4,0,0]} maxBarSize={32}/>
+                    <Bar dataKey="active" name="לקוחות פעילים" fill="#6366f1" radius={[4,4,0,0]} maxBarSize={32}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          )}
+        </>
       )}
     </div>
   );
