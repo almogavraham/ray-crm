@@ -1,44 +1,24 @@
-name: Deploy Client Site
+name: Deploy Client (ray-crm.com)
 
-# Triggered manually via admin panel "פרסם" button (GitHub Actions API)
-# or manually from GitHub Actions UI
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version being deployed (e.g. 1.2.0)'
-        required: false
-        default: 'latest'
-      release_notes:
-        description: 'Release notes'
-        required: false
-        default: ''
+  push:
+    branches:
+      - main
 
 jobs:
   deploy:
-    name: Build & Deploy to ray-crm-app.web.app
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Deploy client site to Firebase Hosting
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_CHEX_CRM }}
-          projectId: chex-crm
-          target: client
-          channelId: live
+      - run: npm ci
+      - run: npx vite build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          VITE_ANTHROPIC_API_KEY: ${{ secrets.VITE_ANTHROPIC_API_KEY }}
+          VITE_OPENAI_API_KEY: ${{ secrets.VITE_OPENAI_API_KEY }}
+      - run: npx firebase-tools deploy --only hosting:client --token "${{ secrets.FIREBASE_TOKEN }}"
