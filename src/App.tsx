@@ -24,10 +24,11 @@ import WorkspaceOnboarding from './pages/WorkspaceOnboarding';
 import WorkspaceSettings from './pages/WorkspaceSettings';
 import AdminPanel from './pages/AdminPanel';
 import LandingPage from './pages/LandingPage';
+import BillingPage from './pages/BillingPage';
 import LeadsOnboardingWizard from './pages/LeadsOnboardingWizard';
 import ForgotPassword from './pages/ForgotPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask } from './types';
+import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask, WorkspacePlan } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
@@ -643,6 +644,13 @@ function AppInner() {
     addToast('הערה נוספה ✓', 'success');
   };
 
+  // ─── Billing / plan update ────────────────────────────────────────────────
+  const handlePlanUpdate = useCallback((plan: WorkspacePlan) => {
+    // Refresh workspace so the rest of the app sees the new plan
+    refreshWorkspace();
+    addToast(`התוכנית עודכנה ל-${plan} ✓`, 'success');
+  }, [refreshWorkspace, addToast]); // eslint-disable-line
+
   // ─── Settings handlers ────────────────────────────────────────────────────
   const handleSettingsChange = (s: AppSettings) => {
     setSettings(s);
@@ -832,7 +840,7 @@ function AppInner() {
             // Workspace users: use their stored allowedPages, never include 'admin'
             ? (profile?.allowedPages ?? []).filter(p => p !== 'admin')
             // Super admin / dev bypass: full access
-            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin'] : []))
+            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin','billing'] : []))
         }
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
@@ -869,6 +877,8 @@ function AppInner() {
             compact={settings.compactMode}
             workspace={workspace ?? undefined}
             onOpenLeadsWizard={workspace ? () => setShowLeadsWizard(true) : undefined}
+            onImportLeads={handleImportLeads}
+            currentUser={displayName}
           />
         )}
         {page === 'overview' && (
@@ -951,6 +961,9 @@ function AppInner() {
         )}
         {page === 'admin' && !isWorkspaceUser && (bypassAuth || isSuperAdmin) && (
           <AdminPanel onToast={addToast} />
+        )}
+        {page === 'billing' && workspace && (
+          <BillingPage workspace={workspace} onPlanUpdate={handlePlanUpdate} />
         )}
       </Layout>
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
-  Layers, BarChart3, Sparkles, Settings,
+  Layers, BarChart3, Sparkles, Settings, CreditCard,
   Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot, Shield,
   Clock, AlertTriangle, Search,
 } from 'lucide-react';
@@ -45,9 +45,10 @@ const NAV_GROUPS = [
   {
     label: 'כלים חכמים',
     items: [
-      { page: 'agents'   as Page, label: 'סוכנים AI',  icon: Bot      },
-      { page: 'ai'       as Page, label: 'עוזר AI',    icon: Sparkles },
-      { page: 'settings' as Page, label: 'הגדרות',     icon: Settings },
+      { page: 'agents'   as Page, label: 'סוכנים AI',     icon: Bot        },
+      { page: 'ai'       as Page, label: 'עוזר AI',       icon: Sparkles   },
+      { page: 'settings' as Page, label: 'הגדרות',        icon: Settings   },
+      { page: 'billing'  as Page, label: 'מנוי ותשלום',   icon: CreditCard },
     ],
   },
 ];
@@ -389,6 +390,36 @@ export default function Layout({
         </div>
       </div>
 
+      {/* ── Mobile Bottom Navigation ────────────────────────────────────── */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 flex items-center justify-around px-1 py-1"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        {[
+          { page: 'home'      as Page, label: 'בקרה',    icon: LayoutDashboard },
+          { page: 'dashboard' as Page, label: 'לידים',   icon: Users           },
+          { page: 'kanban'    as Page, label: 'פייפליין', icon: GitBranch       },
+          { page: 'tasks'     as Page, label: 'משימות',  icon: CheckSquare, badge: true },
+          { page: 'settings'  as Page, label: 'הגדרות',  icon: Settings        },
+        ].map(item => {
+          const active = currentPage === item.page;
+          return (
+            <button key={item.page} onClick={() => go(item.page)}
+              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${
+                active ? 'text-indigo-600' : 'text-slate-400'
+              }`}>
+              <div className="relative">
+                <item.icon size={20} />
+                {item.badge && overdueBadge > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-bold min-w-[14px] h-3.5 rounded-full flex items-center justify-center px-0.5">
+                    {overdueBadge > 9 ? '9+' : overdueBadge}
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] font-medium">{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* ── Main Content ────────────────────────────────────────────────── */}
       <main className="flex-1 md:mr-[220px] min-h-screen relative z-10">
         <div className="pt-12 md:pt-0">
@@ -435,7 +466,7 @@ export default function Layout({
           </div>
 
           {/* Page content */}
-          <div className="p-4 md:p-6">
+          <div className="p-4 md:p-6 pb-24 md:pb-6">
             {children}
           </div>
         </div>

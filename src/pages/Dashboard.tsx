@@ -2,11 +2,12 @@ import { useState, useMemo } from 'react';
 import {
   Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
   MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
-  Sparkles,
+  Sparkles, MessageCircle, FileSpreadsheet,
 } from 'lucide-react';
 import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import EmailModal from '../components/EmailModal';
+import ExcelImportModal from '../components/ExcelImportModal';
 
 const ALL_STATUSES: LeadStatus[] = [
   'חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי',
@@ -28,6 +29,8 @@ interface DashboardProps {
   compact?: boolean;
   workspace?: WorkspaceProfile;
   onOpenLeadsWizard?: () => void;
+  onImportLeads?: (leads: Lead[]) => void;
+  currentUser?: string;
 }
 
 // ─── safe helpers ──────────────────────────────────────────────────────────────
@@ -46,7 +49,7 @@ function parseDate(d: string | undefined): number {
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
-  compact = false, workspace, onOpenLeadsWizard,
+  compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser,
 }: DashboardProps) {
   const [search,       setSearch]       = useState('');
   const [activeStatus, setActiveStatus] = useState<LeadStatus | 'הכל'>('הכל');
@@ -60,6 +63,7 @@ export default function Dashboard({
   const [bulkStatus,        setBulkStatus]        = useState<LeadStatus | ''>('');
   const [deleteConfirm,     setDeleteConfirm]     = useState(false);
   const [bannerDismissed,   setBannerDismissed]   = useState(false);
+  const [showExcelImport,   setShowExcelImport]   = useState(false);
 
   // ── KPI counts ──────────────────────────────────────────────────────────────
   const hotLeads     = leads.filter(l => safeNum(l.budget) >= 15000).length;
@@ -148,7 +152,7 @@ export default function Dashboard({
 
   return (
     <div className="space-y-4">
-      {emailLead && <EmailModal lead={emailLead} onClose={() => setEmailLead(null)} />}
+      {emailLead && <EmailModal lead={emailLead} workspace={workspace} onClose={() => setEmailLead(null)} />}
 
       {/* ── Lead card setup banner (shows until wizard is completed) ── */}
       {needsSetup && !bannerDismissed && (
@@ -295,6 +299,19 @@ export default function Dashboard({
             <Download size={12} />CSV
           </button>
 
+          {/* ── Excel Import button ── */}
+          {onImportLeads && (
+            <button
+              type="button"
+              onClick={() => setShowExcelImport(true)}
+              title="ייבוא לידים מקובץ Excel"
+              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-medium transition-all flex-shrink-0"
+            >
+              <FileSpreadsheet size={12} />
+              <span className="hidden sm:inline">ייבוא Excel</span>
+            </button>
+          )}
+
           {/* ── Redesign lead card — always visible ── */}
           {onOpenLeadsWizard && (
             <button
@@ -339,7 +356,7 @@ export default function Dashboard({
 
       {/* Bulk Action Bar */}
       {selected.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 border border-slate-700">
+        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-30 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 border border-slate-700">
           <button type="button" onClick={clearSelection} className="text-slate-400 hover:text-white text-xs transition-colors">✕ ביטול</button>
           <div className="w-px h-5 bg-slate-700" />
           <span className="text-sm font-bold text-white">{selected.size} נבחרו</span>
@@ -388,12 +405,23 @@ export default function Dashboard({
           <div key={lead.id} onClick={() => onLeadClick(lead)}
             className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 active:bg-slate-50 transition-colors cursor-pointer">
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {lead.phone && (
+                  <a
+                    href={`https://wa.me/${lead.phone.replace(/\D/g,'').replace(/^0/,'972')}` }
+                    target="_blank" rel="noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    title="WhatsApp"
+                    className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
+                  >
+                    <MessageCircle size={13} />
+                  </a>
+                )}
                 <button type="button" onClick={e => { e.stopPropagation(); setEmailLead(lead); }}
-                  className="p-1.5 rounded-lg bg-neutral-100 text-neutral-700">
-                  <Mail size={13} />
+                  title="מייל חכם"
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors text-xs font-semibold">
+                  <Sparkles size={11} />מייל
                 </button>
-                <AiScoreBadge score={safeNum(lead.aiScore)} />
               </div>
               <div className="flex-1 text-right">
                 <div className="font-semibold text-slate-800 text-sm leading-tight">{safeStr(lead.company)}</div>
@@ -404,7 +432,7 @@ export default function Dashboard({
               <div className="flex items-center gap-2">
                 {safeNum(lead.budget) > 0 && (
                   <span className={`text-xs font-bold ${safeNum(lead.budget) >= 15000 ? 'text-emerald-600' : 'text-slate-600'}`}>
-                    ₪{safeNum(lead.budget).toLocaleString()}{safeNum(lead.budget) >= 15000 ? ' 🌟' : ''}
+                    {workspace?.cardLeftField?.prefix ?? '₪'}{safeNum(lead.budget).toLocaleString()}{safeNum(lead.budget) >= 15000 ? ' 🌟' : ''}
                   </span>
                 )}
                 <span className="text-xs text-slate-400">{safeStr(lead.lastUpdate)}</span>
@@ -429,7 +457,7 @@ export default function Dashboard({
               <SortTh label="חברה"        field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
               <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">שם איש קשר</th>
               <SortTh label="סטטוס"       field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label="תקציב"       field="budget"     current={sortField} dir={sortDir} onSort={handleSort} />
+              <SortTh label={workspace?.cardLeftField?.label ?? 'תקציב'} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
               <SortTh label="עדכון אחרון" field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
               <SortTh label="ציון AI"     field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
               <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">פעולות</th>
@@ -474,16 +502,32 @@ export default function Dashboard({
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}><StatusBadge status={lead.status} /></td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm`}>
                     {budget > 0
-                      ? <span className={`font-medium ${budget >= 15000 ? 'text-emerald-600' : 'text-slate-700'}`}>₪{budget.toLocaleString()}{budget >= 15000 && ' 🌟'}</span>
+                      ? <span className={`font-medium ${budget >= 15000 ? 'text-emerald-600' : 'text-slate-700'}`}>{workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}{budget >= 15000 && ' 🌟'}</span>
                       : <span className="text-slate-300">—</span>}
                   </td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm text-slate-500`}>{safeStr(lead.lastUpdate)}</td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}><AiScoreBadge score={safeNum(lead.aiScore)} /></td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`} onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => onNoteClick(lead)}  title="שימור"  className="text-xs text-slate-600 hover:text-black px-2 py-1 rounded hover:bg-neutral-100 transition-colors"><Star        size={12} /></button>
-                      <button type="button" onClick={() => onLeadClick(lead)}  title="פרטים"  className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors"><MessageSquare size={12} /></button>
-                      <button type="button" onClick={() => setEmailLead(lead)} title="מייל"   className="text-xs text-slate-500 hover:text-black px-2 py-1 rounded hover:bg-neutral-100 transition-colors"><Mail         size={12} /></button>
+                      <button type="button" onClick={() => onNoteClick(lead)} title="שימור"
+                        className="text-xs text-slate-500 hover:text-black px-2 py-1 rounded hover:bg-neutral-100 transition-colors">
+                        <Star size={12} />
+                      </button>
+                      {lead.phone && (
+                        <a href={`https://wa.me/${lead.phone.replace(/\D/g,'').replace(/^0/,'972')}`}
+                          target="_blank" rel="noreferrer" title="WhatsApp"
+                          className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 px-2 py-1 rounded hover:bg-emerald-50 transition-colors font-medium">
+                          <MessageCircle size={12} /> WA
+                        </a>
+                      )}
+                      <button type="button" onClick={() => setEmailLead(lead)} title="מייל חכם ✨"
+                        className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 transition-colors font-medium">
+                        <Sparkles size={12} /> מייל
+                      </button>
+                      <button type="button" onClick={() => onLeadClick(lead)} title="פרטים"
+                        className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
+                        <MessageSquare size={12} />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -492,6 +536,15 @@ export default function Dashboard({
           </tbody>
         </table>
       </div>
+
+      {/* Excel Import Modal */}
+      {showExcelImport && onImportLeads && (
+        <ExcelImportModal
+          onImport={leads => { onImportLeads(leads); }}
+          onClose={() => setShowExcelImport(false)}
+          currentUser={currentUser}
+        />
+      )}
     </div>
   );
 }

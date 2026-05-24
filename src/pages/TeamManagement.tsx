@@ -180,7 +180,7 @@ export default function TeamManagement({
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-white rounded-xl border border-slate-200 p-1 w-fit shadow-sm">
+      <div className="flex gap-1 bg-white rounded-xl border border-slate-200 p-1 w-full overflow-x-auto shadow-sm">
         {tabs.map(tab => (
           <button
             key={tab.key}

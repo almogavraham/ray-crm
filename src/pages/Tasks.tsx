@@ -290,8 +290,8 @@ export default function Tasks({
       <div className="space-y-4">
 
         {/* ── Header ───────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             {/* View toggle */}
             <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <button onClick={() => setViewMode('list')}
@@ -312,7 +312,7 @@ export default function Tasks({
             {onPageChange && (
               <button
                 onClick={() => onPageChange('agents')}
-                className="flex items-center gap-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl font-semibold hover:bg-indigo-100 transition-colors"
+                className="hidden sm:flex items-center gap-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl font-semibold hover:bg-indigo-100 transition-colors"
               >
                 <Sparkles size={12} /> Workflow AI ⚡
               </button>
@@ -362,9 +362,9 @@ export default function Tasks({
             {search && <button onClick={() => setSearch('')} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={13}/></button>}
           </div>
 
-          <div className="flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2 items-start sm:items-center justify-between">
             {/* Owner filter */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
               {([
                 { k:'all',       l:'הכל',            icon:<LayoutList size={12}/> },
                 { k:'mine',      l:'שלי',             icon:<User size={12}/> },
@@ -550,8 +550,8 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-slate-200 overflow-hidden" dir="rtl">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg border border-slate-200 overflow-hidden max-h-[95vh] overflow-y-auto" dir="rtl">
 
         {/* Header */}
         <div className="bg-gradient-to-l from-slate-900 to-slate-800 px-6 py-5 flex items-center justify-between">
@@ -1025,8 +1025,8 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
   const previewUrl = buildGCalUrl({ description: desc, date, time, notes: notes || undefined, lead: task.lead ?? leads.find(l => l.id === task.lead?.id) });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-slate-200 overflow-hidden" dir="rtl">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg border border-slate-200 overflow-hidden max-h-[95vh] overflow-y-auto" dir="rtl">
 
         {/* Header */}
         <div className="bg-gradient-to-l from-indigo-900 to-slate-900 px-6 py-5 flex items-center justify-between">

@@ -10,7 +10,7 @@ interface WorkspaceBranding {
   logoUrl?: string;
 }
 
-export default function Login({ wsSlug, onSignUp }: { wsSlug?: string; onSignUp?: () => void }) {
+export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; onSignUp?: () => void; onBack?: () => void }) {
   const { signIn } = useAuth();
   const [email,      setEmail]      = useState('');
   const [password,   setPassword]   = useState('');
@@ -179,6 +179,18 @@ export default function Login({ wsSlug, onSignUp }: { wsSlug?: string; onSignUp?
               className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
             >
               התחל ניסיון חינם ←
+            </button>
+          </p>
+        )}
+
+        {/* Back to landing page */}
+        {onBack && !branding && (
+          <p className="text-center mt-3">
+            <button
+              onClick={onBack}
+              className="text-slate-600 hover:text-slate-400 text-xs transition-colors"
+            >
+              ← חזרה לדף הבית
             </button>
           </p>
         )}

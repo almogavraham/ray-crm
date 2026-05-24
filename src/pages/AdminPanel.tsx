@@ -10,16 +10,19 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
+  KeyRound, AtSign, Unlink,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
-  query, orderBy, setDoc, getDoc, onSnapshot,
+  query, orderBy, where, setDoc, getDoc, onSnapshot,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth, functions } from '../lib/firebase';
+import { sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import type { WorkspaceProfile, WorkspaceStatus, UserProfile } from '../types';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
-type AdminTab = 'overview' | 'workspaces' | 'users' | 'features' | 'announcements' | 'releases';
+type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'features' | 'announcements' | 'releases' | 'system';
 
 interface Announcement {
   id: string;
@@ -74,6 +77,34 @@ const DEFAULT_FLAGS: FeatureFlags = {
   tasks:    { trial: true,  basic: true,  pro: true,  enterprise: true },
   team:     { trial: true,  basic: true,  pro: true,  enterprise: true },
 };
+
+/* ─── Revenue / health helpers ─────────────────────────────────────────────── */
+const PLAN_MRR: Record<string, number> = { trial: 0, basic: 149, pro: 299, enterprise: 799 };
+
+function mrr(workspaces: WorkspaceProfile[]) {
+  return workspaces.filter(w => w.status === 'active').reduce((sum, w) => sum + (PLAN_MRR[w.plan] ?? 0), 0);
+}
+
+function healthScore(w: WorkspaceProfile): number {
+  let score = 50;
+  if (w.status === 'active')    score += 20;
+  if (w.status === 'trial')     score += 10;
+  if (w.status === 'suspended') score -= 30;
+  if (w.onboardingComplete)     score += 15;
+  if (w.logoUrl)                score += 5;
+  if (w.prompt)                 score += 5;
+  if (w.plan === 'pro')         score += 10;
+  if (w.plan === 'enterprise')  score += 15;
+  const d = daysLeft(w.trialEndsAt);
+  if (w.status === 'trial' && d !== null && d <= 3) score -= 10;
+  return Math.min(100, Math.max(0, score));
+}
+
+function healthColor(score: number) {
+  if (score >= 75) return { bar: 'bg-emerald-500', text: 'text-emerald-600', label: 'בריא' };
+  if (score >= 50) return { bar: 'bg-amber-400',   text: 'text-amber-600',   label: 'בינוני' };
+  return              { bar: 'bg-red-500',          text: 'text-red-600',     label: 'בסיכון' };
+}
 
 function daysLeft(iso?: string) {
   if (!iso) return null;
@@ -142,11 +173,67 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     toast('תוכנית עודכנה', 'success');
   };
   const deleteWorkspace = async (wid: string) => {
-    if (!window.confirm('למחוק את סביבת העבודה לצמיתות?')) return;
-    await deleteDoc(doc(db, 'workspaces', wid));
-    setWorkspaces(p => p.filter(w => w.id !== wid));
-    setSelected(null);
-    toast('סביבת העבודה נמחקה', 'info');
+    const wsData = workspaces.find(w => w.id === wid);
+    const wsName = wsData?.name ?? wid;
+
+    if (!window.confirm(
+      `למחוק את "${wsName}" לצמיתות?\n\n` +
+      'פעולה זו תמחק:\n' +
+      '• את כל הלידים, המשימות והצוות\n' +
+      '• את כל המשתמשים בסביבה זו מ-Firestore\n' +
+      '• את כל חשבונות ה-Auth (האימיילים ישוחררו לרישום חוזר)\n\n' +
+      'פעולה זו אינה הפיכה!'
+    )) return;
+
+    try {
+      // 1. Delete all Firestore subcollections (leads, tasks, team)
+      const subcollections = ['leads', 'tasks', 'team'];
+      for (const sub of subcollections) {
+        const snap = await getDocs(collection(db, 'workspaces', wid, sub));
+        const chunks: Promise<void>[][] = [[]];
+        snap.docs.forEach(d => {
+          if (chunks[chunks.length - 1].length >= 400) chunks.push([]);
+          chunks[chunks.length - 1].push(deleteDoc(d.ref));
+        });
+        for (const chunk of chunks) await Promise.all(chunk);
+      }
+
+      // 2. Delete workspace document
+      await deleteDoc(doc(db, 'workspaces', wid));
+
+      // 3. Find ALL users belonging to this workspace (not just the owner)
+      const wsUsersSnap = await getDocs(query(collection(db, 'users'), where('workspaceId', '==', wid)));
+      const wsUserIds: string[] = wsUsersSnap.docs.map(d => d.id);
+
+      // 4. Delete every user's Firestore doc
+      await Promise.all(wsUsersSnap.docs.map(d => deleteDoc(d.ref)));
+
+      // 5. Delete every user from Firebase Auth via Cloud Function
+      const deleteFn = httpsCallable<{ uid: string }, { success: boolean }>(functions, 'deleteAuthUser');
+      const authErrors: string[] = [];
+      for (const uid of wsUserIds) {
+        try {
+          await deleteFn({ uid });
+        } catch (e) {
+          authErrors.push(uid);
+          console.warn(`Could not delete Auth user ${uid}:`, e);
+        }
+      }
+
+      if (authErrors.length > 0) {
+        setTimeout(() => {
+          toast(`${authErrors.length} משתמשים לא שוחררו מ-Auth אוטומטית — מחק ידנית ב-Firebase Console`, 'info');
+        }, 1500);
+      }
+
+      setWorkspaces(p => p.filter(w => w.id !== wid));
+      setUsers(p => p.filter(u => u.workspaceId !== wid));
+      setSelected(null);
+      toast(`סביבת העבודה "${wsName}" ו-${wsUserIds.length} משתמשים נמחקו ✓`, 'info');
+    } catch (err) {
+      console.error('Error deleting workspace:', err);
+      toast('שגיאה במחיקת סביבת העבודה', 'error');
+    }
   };
 
   /* ── Feature flags ──────────────────────────────────────────────────────── */
@@ -195,25 +282,33 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
 
         <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
           {([
-            { key: 'overview',      label: 'סקירה כללית',   icon: Activity   },
-            { key: 'workspaces',    label: 'סביבות עבודה',  icon: Building2  },
-            { key: 'users',         label: 'משתמשים',        icon: Users      },
-            { key: 'features',      label: 'תכונות ותוכניות', icon: Settings2  },
-            { key: 'announcements', label: 'הודעות',          icon: Megaphone  },
-            { key: 'releases',      label: 'פרסום גרסאות',   icon: Rocket     },
-          ] as { key: AdminTab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
-            <button key={key} onClick={() => setTab(key)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                tab === key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-              }`}>
-              <Icon size={15} />
-              <span>{label}</span>
-              {key === 'workspaces' && trialExpiringSoon > 0 && (
-                <span className="mr-auto bg-amber-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                  {trialExpiringSoon}
-                </span>
+            { key: 'overview',      label: 'סקירה כללית',    icon: Activity,   group: 'main' },
+            { key: 'workspaces',    label: 'סביבות עבודה',   icon: Building2,  group: 'main' },
+            { key: 'analytics',     label: 'אנליטיקס',        icon: BarChart3,  group: 'main' },
+            { key: 'users',         label: 'משתמשים',         icon: Users,      group: 'main' },
+            { key: 'features',      label: 'תכונות',           icon: Settings2,  group: 'ops'  },
+            { key: 'announcements', label: 'הודעות',           icon: Megaphone,  group: 'ops'  },
+            { key: 'releases',      label: 'פרסום גרסאות',    icon: Rocket,     group: 'ops'  },
+            { key: 'system',        label: 'מערכת',            icon: Globe,      group: 'ops'  },
+          ] as { key: AdminTab; label: string; icon: React.ElementType; group: string }[]).map(({ key, label, icon: Icon }, idx, arr) => (
+            <div key={key}>
+              {/* Divider between groups */}
+              {idx > 0 && arr[idx].group !== arr[idx-1].group && (
+                <div className="border-t border-slate-800 my-2 mx-1" />
               )}
-            </button>
+              <button onClick={() => setTab(key)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  tab === key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}>
+                <Icon size={15} />
+                <span>{label}</span>
+                {key === 'workspaces' && trialExpiringSoon > 0 && (
+                  <span className="mr-auto bg-amber-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                    {trialExpiringSoon}
+                  </span>
+                )}
+              </button>
+            </div>
           ))}
         </nav>
 
@@ -241,10 +336,12 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
           <>
             {tab === 'overview'      && <OverviewTab workspaces={workspaces} users={users} total={total} active={active} trial={trial} suspended={suspended} newMonth={newMonth} />}
             {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} />}
+            {tab === 'analytics'     && <AnalyticsTab workspaces={workspaces} />}
             {tab === 'users'         && <UsersTab users={users} workspaces={workspaces} />}
             {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} />}
             {tab === 'announcements' && <AnnouncementsTab announcements={announcements} onRefresh={loadAll} onToast={toast} />}
             {tab === 'releases'      && <ReleasesTab releases={releases} workspaces={workspaces} onRefresh={loadAll} onToast={toast} />}
+            {tab === 'system'        && <SystemTab workspaces={workspaces} onToast={toast} />}
           </>
         )}
       </main>
@@ -258,7 +355,7 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
 function OverviewTab({ workspaces, users, total, active, trial, suspended, newMonth }:
   { workspaces: WorkspaceProfile[]; users: UserProfile[]; total: number; active: number; trial: number; suspended: number; newMonth: number }) {
 
-  // Simple 30-day bar chart data
+  // 30-day signup bars
   const bars = Array.from({ length: 30 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (29 - i));
@@ -268,6 +365,19 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
   const maxBar = Math.max(...bars, 1);
 
   const recent = workspaces.slice(0, 8);
+
+  // Revenue metrics
+  const monthlyRevenue  = mrr(workspaces);
+  const annualRevenue   = monthlyRevenue * 12;
+
+  // Expiring trials
+  const expiring = workspaces.filter(w => {
+    const d = daysLeft(w.trialEndsAt);
+    return w.status === 'trial' && d !== null && d <= 3 && d >= 0;
+  });
+
+  // Workspace health alerts
+  const atRisk = workspaces.filter(w => healthScore(w) < 50);
 
   return (
     <div className="p-6 space-y-6">
@@ -279,15 +389,69 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
         <SignupLinkButton />
       </div>
 
-      {/* KPI cards */}
+      {/* Alerts row */}
+      {(expiring.length > 0 || atRisk.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {expiring.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex items-center gap-3">
+              <AlertTriangle size={16} className="text-amber-600 flex-shrink-0" />
+              <div>
+                <p className="text-amber-800 font-bold text-sm">{expiring.length} ניסיונות יפוגו בקרוב</p>
+                <p className="text-amber-600 text-xs">{expiring.map(w => w.name).join(', ')}</p>
+              </div>
+            </div>
+          )}
+          {atRisk.length > 0 && (
+            <div className="bg-red-50 border border-red-300 rounded-2xl px-4 py-3 flex items-center gap-3">
+              <XCircle size={16} className="text-red-500 flex-shrink-0" />
+              <div>
+                <p className="text-red-800 font-bold text-sm">{atRisk.length} סביבות בסיכון</p>
+                <p className="text-red-600 text-xs">ציון בריאות נמוך מ-50</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* KPI cards — row 1: volume */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPI label="סה״כ סביבות"   value={total}    sub={`+${newMonth} החודש`}    trend="up"      icon={<Building2 size={18} />} color="indigo" />
-        <KPI label="פעילות"         value={active}   sub={`${total ? Math.round(active/total*100) : 0}% מהסה״כ`} trend="up" icon={<CheckCircle2 size={18} />} color="emerald" />
-        <KPI label="בניסיון"        value={trial}    sub="יפוגו בקרוב"            trend="neutral" icon={<Clock size={18} />}        color="blue"    />
-        <KPI label="משתמשים"        value={users.length} sub="רשומים במערכת"     trend="up"      icon={<Users size={18} />}       color="violet"  />
+        <KPI label="סה״כ סביבות"   value={total}        sub={`+${newMonth} החודש`}                            trend="up"      icon={<Building2 size={18} />}    color="indigo"  />
+        <KPI label="פעילות"         value={active}       sub={`${total ? Math.round(active/total*100) : 0}% מהסה״כ`} trend="up" icon={<CheckCircle2 size={18} />} color="emerald" />
+        <KPI label="בניסיון"        value={trial}        sub={`${expiring.length} יפוגו השבוע`}                trend="neutral" icon={<Clock size={18} />}         color="blue"    />
+        <KPI label="משתמשים"        value={users.length} sub="רשומים במערכת"                                   trend="up"      icon={<Users size={18} />}        color="violet"  />
       </div>
 
-      {/* Chart + Recent */}
+      {/* Revenue cards — row 2 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-2xl p-5 text-white shadow-lg shadow-indigo-200">
+          <p className="text-indigo-200 text-xs font-semibold mb-1">MRR (הכנסה חודשית)</p>
+          <p className="text-3xl font-black">₪{monthlyRevenue.toLocaleString()}</p>
+          <p className="text-indigo-300 text-xs mt-1">מ-{active} לקוחות פעילים</p>
+        </div>
+        <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-2xl p-5 text-white shadow-lg shadow-emerald-200">
+          <p className="text-emerald-200 text-xs font-semibold mb-1">ARR (הכנסה שנתית)</p>
+          <p className="text-3xl font-black">₪{annualRevenue.toLocaleString()}</p>
+          <p className="text-emerald-300 text-xs mt-1">תחזית שנתית</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <p className="text-slate-500 text-xs font-semibold mb-2">הכנסה לפי תוכנית</p>
+          <div className="space-y-2">
+            {['enterprise','pro','basic','trial'].map(p => {
+              const count = workspaces.filter(w => w.plan === p && w.status === 'active').length;
+              const rev   = count * (PLAN_MRR[p] ?? 0);
+              return (
+                <div key={p} className="flex items-center justify-between text-xs">
+                  <span className={`px-2 py-0.5 rounded-full font-bold ${PLAN_COLORS[p] ?? 'bg-slate-100 text-slate-600'}`}>{p}</span>
+                  <span className="text-slate-500">{count} לקוחות</span>
+                  <span className="font-bold text-slate-800">₪{rev.toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart + Status breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* 30-day signups chart */}
         <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
@@ -336,45 +500,56 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
             })}
           </div>
 
-          {/* Alert: expiring trials */}
-          {workspaces.filter(w => { const d = daysLeft(w.trialEndsAt); return w.status==='trial' && d!==null && d<=3 && d>=0; }).length > 0 && (
+          {expiring.length > 0 && (
             <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
               <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold">
                 <AlertTriangle size={12} />
-                {workspaces.filter(w => { const d = daysLeft(w.trialEndsAt); return w.status==='trial' && d!==null && d<=3 && d>=0; }).length} ניסיונות יפוגו בקרוב
+                {expiring.length} ניסיונות יפוגו בקרוב
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Recent workspaces */}
+      {/* Recent workspaces with health score */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-bold text-slate-800 text-sm">הצטרפויות אחרונות</h2>
           <span className="text-xs text-slate-500">{workspaces.length} סביבות סה״כ</span>
         </div>
         <div className="divide-y divide-slate-50">
-          {recent.map(w => (
-            <div key={w.id} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                {w.name?.[0]?.toUpperCase() ?? '?'}
+          {recent.map(w => {
+            const hs  = healthScore(w);
+            const hc  = healthColor(hs);
+            return (
+              <div key={w.id} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                  {w.name?.[0]?.toUpperCase() ?? '?'}
+                </div>
+                <div className="mr-3 flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-800 truncate">{w.name}</p>
+                  <p className="text-xs text-slate-500 truncate">{w.email}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {/* Health score mini bar */}
+                  <div className="flex items-center gap-1.5 w-20">
+                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full">
+                      <div className={`h-full rounded-full ${hc.bar}`} style={{ width: `${hs}%` }} />
+                    </div>
+                    <span className={`text-[10px] font-bold ${hc.text}`}>{hs}</span>
+                  </div>
+                  <StatusBadge status={w.status} />
+                  <span className="text-xs text-slate-400 hidden md:block">{fmtDate(w.createdAt)}</span>
+                </div>
               </div>
-              <div className="mr-3 flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-800 truncate">{w.name}</p>
-                <p className="text-xs text-slate-500 truncate">{w.email}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <StatusBadge status={w.status} />
-                <span className="text-xs text-slate-400">{fmtDate(w.createdAt)}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
+
 
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Workspaces
@@ -494,11 +669,58 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
     onPlan:(p:string)=>void; onDelete:()=>void; loading:string|null; onToast:(m:string,t?:'success'|'error'|'info')=>void }) {
 
   const d = daysLeft(ws.trialEndsAt);
-  const CLIENT_ORIGIN  = 'https://ray-crm-app.web.app';
-  // Unique branded login link — shows workspace logo/name on login screen
-  const workspaceLink  = `${CLIENT_ORIGIN}/?ws=${ws.id}`;
-  // Invite link for new team members of this workspace
-  const inviteLink     = `${CLIENT_ORIGIN}/?workspace=${ws.id}&invite=1`;
+  const RAY_DOMAIN     = 'ray-crm.com';
+  // Subdomain per workspace: acme.ray-crm.com — fallback to ?ws= for legacy
+  const workspaceLink  = ws.slug
+    ? `https://${ws.slug}.${RAY_DOMAIN}`
+    : `https://${RAY_DOMAIN}/?ws=${ws.id}`;
+  const inviteLink     = `https://${RAY_DOMAIN}/?workspace=${ws.id}&invite=1`;
+
+  // Team members loaded from subcollection
+  const [members,     setMembers]     = useState<{ id:string; name:string; email:string; role:string }[]>([]);
+  const [membersLoad, setMembersLoad] = useState(false);
+
+  // Support action states
+  const [resetLoad,  setResetLoad]  = useState(false);
+  const [authLoad,   setAuthLoad]   = useState(false);
+
+  useEffect(() => {
+    setMembersLoad(true);
+    getDocs(collection(db, 'workspaces', ws.id, 'team'))
+      .then(snap => setMembers(snap.docs.map(d => d.data() as { id:string; name:string; email:string; role:string })))
+      .catch(() => {})
+      .finally(() => setMembersLoad(false));
+  }, [ws.id]);
+
+  // Send password-reset email to workspace owner via Firebase client Auth SDK
+  const handlePasswordReset = async () => {
+    if (!ws.email) return;
+    setResetLoad(true);
+    try {
+      await sendPasswordResetEmail(auth, ws.email);
+      onToast(`קישור איפוס נשלח ל-${ws.email} ✓`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(`שגיאה: ${msg}`, 'error');
+    } finally { setResetLoad(false); }
+  };
+
+  // Delete only the Firebase Auth account (without deleting the workspace)
+  const handleDeleteAuthOnly = async () => {
+    if (!ws.ownerId) { onToast('UID בעלים לא ידוע', 'error'); return; }
+    if (!window.confirm(`למחוק את חשבון ה-Auth של ${ws.email}?\nהסביבה תישאר אך לא ניתן יהיה להיכנס אליה.`)) return;
+    setAuthLoad(true);
+    try {
+      const deleteFn = httpsCallable<{ uid: string }, { success: boolean }>(functions, 'deleteAuthUser');
+      await deleteFn({ uid: ws.ownerId });
+      // Also remove user profile doc
+      await deleteDoc(doc(db, 'users', ws.ownerId));
+      onToast('חשבון Auth נמחק — האימייל שוחרר ✓', 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onToast(`שגיאה: ${msg}`, 'error');
+    } finally { setAuthLoad(false); }
+  };
 
   return (
     <aside className="w-80 bg-white border-r border-slate-200 flex flex-col overflow-hidden">
@@ -519,13 +741,43 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
       <div className="flex-1 overflow-y-auto">
         {/* Info */}
         <div className="px-5 py-4 space-y-2.5 border-b border-slate-100">
-          <InfoRow icon={<Mail size={12} />}     label="אימייל"    value={ws.email} />
-          <InfoRow icon={<Phone size={12} />}    label="טלפון"     value={ws.phone || '—'} />
-          <InfoRow icon={<Hash size={12} />}     label="ח.פ"       value={ws.businessId || '—'} />
-          <InfoRow icon={<Building2 size={12} />} label="תחום"     value={ws.industry || '—'} />
-          <InfoRow icon={<Clock size={12} />}    label="הצטרף"     value={fmtDate(ws.createdAt)} />
+          {ws.slug && (
+            <div className="flex items-start gap-2">
+              <span className="text-slate-400 mt-0.5 flex-shrink-0"><Globe size={12} /></span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-slate-400 font-medium">URL ייחודי</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-xs text-indigo-600 font-mono font-semibold truncate">/{ws.slug}</p>
+                  <button onClick={() => { copyText(`https://${ws.slug}.ray-crm.com`); onToast('URL הועתק ✓', 'success'); }}
+                    className="text-slate-300 hover:text-slate-600 flex-shrink-0 transition-colors">
+                    <Copy size={10} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          <InfoRow icon={<Mail size={12} />}      label="אימייל"    value={ws.email} />
+          <InfoRow icon={<Phone size={12} />}     label="טלפון"     value={ws.phone || '—'} />
+          <InfoRow icon={<Hash size={12} />}      label="ח.פ"       value={ws.businessId || '—'} />
+          <InfoRow icon={<Building2 size={12} />} label="תחום"      value={ws.industry || '—'} />
+          <InfoRow icon={<Clock size={12} />}     label="הצטרף"     value={fmtDate(ws.createdAt)} />
+          {ws.ownerId && (
+            <div className="flex items-start gap-2">
+              <span className="text-slate-400 mt-0.5 flex-shrink-0"><Shield size={12} /></span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-slate-400 font-medium">UID בעלים</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-[10px] text-slate-600 font-mono truncate">{ws.ownerId}</p>
+                  <button onClick={() => { copyText(ws.ownerId!); onToast('UID הועתק ✓', 'success'); }}
+                    className="text-slate-300 hover:text-slate-600 flex-shrink-0 transition-colors">
+                    <Copy size={10} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {ws.trialEndsAt && (
-            <InfoRow icon={<Clock size={12} />}  label="ניסיון עד" value={`${fmtDate(ws.trialEndsAt)} (${d !== null ? `${d} ימים` : ''})`} />
+            <InfoRow icon={<Clock size={12} />}   label="ניסיון עד" value={`${fmtDate(ws.trialEndsAt)} (${d !== null ? `${d} ימים` : ''})`} />
           )}
         </div>
 
@@ -563,11 +815,11 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
           </div>
         )}
 
-        {/* Unique workspace login link */}
+        {/* Workspace links */}
         <div className="px-5 py-4 border-b border-slate-100 space-y-3">
           <div>
             <p className="text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1">
-              <Globe size={11} /> קישור כניסה ייחודי לסביבה
+              <Globe size={11} /> קישור כניסה ייחודי
             </p>
             <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
               <p className="flex-1 text-xs text-indigo-700 truncate font-medium">{workspaceLink}</p>
@@ -580,7 +832,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
                 <ExternalLink size={12} />
               </a>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">הלקוח יראה את שם החברה והלוגו שלהם בדף הכניסה</p>
+            <p className="text-[10px] text-slate-400 mt-1">הלקוח יראה שם חברה ולוגו בדף הכניסה</p>
           </div>
           <div>
             <p className="text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1">
@@ -595,13 +847,99 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
             </div>
           </div>
         </div>
+
+        {/* Team members */}
+        <div className="px-5 py-4 border-b border-slate-100">
+          <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1.5">
+            <Users size={11} /> חברי צוות ({members.length})
+          </p>
+          {membersLoad ? (
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <RefreshCw size={11} className="animate-spin" /> טוען...
+            </div>
+          ) : members.length === 0 ? (
+            <p className="text-xs text-slate-400">אין חברי צוות רשומים</p>
+          ) : (
+            <div className="space-y-1.5 max-h-28 overflow-y-auto">
+              {members.map(m => (
+                <div key={m.id} className="flex items-center gap-2 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                    {(m.name?.[0] ?? '?').toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-700 truncate">{m.name}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{m.email}</p>
+                  </div>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${m.role === 'מנהל' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                    {m.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Technical support tools */}
+        <div className="px-5 py-4 border-b border-slate-100">
+          <p className="text-xs font-semibold text-slate-500 mb-2.5 flex items-center gap-1.5">
+            <Settings2 size={11} /> כלי תמיכה טכנית
+          </p>
+          <div className="space-y-2">
+            {/* Password reset */}
+            <button
+              onClick={handlePasswordReset}
+              disabled={resetLoad}
+              className="w-full flex items-center gap-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
+            >
+              {resetLoad ? <RefreshCw size={12} className="animate-spin" /> : <Mail size={12} />}
+              שלח איפוס סיסמה לבעלים
+            </button>
+
+            {/* Copy UID */}
+            {ws.ownerId && (
+              <button
+                onClick={() => { copyText(ws.ownerId!); onToast('UID הועתק ✓', 'success'); }}
+                className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
+              >
+                <Copy size={12} />
+                העתק UID (לקונסול Firebase)
+              </button>
+            )}
+
+            {/* Delete only Auth account */}
+            {ws.ownerId && (
+              <button
+                onClick={handleDeleteAuthOnly}
+                disabled={authLoad}
+                className="w-full flex items-center gap-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
+              >
+                {authLoad ? <RefreshCw size={12} className="animate-spin" /> : <UserCheck size={12} />}
+                שחרר אימייל מ-Auth בלבד
+              </button>
+            )}
+
+            {/* Direct Firebase Console link for manual deletion */}
+            <a
+              href="https://console.firebase.google.com/project/chex-crm/authentication/users"
+              target="_blank"
+              rel="noreferrer"
+              className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
+            >
+              <ExternalLink size={12} />
+              מחק ידנית ב-Firebase Console
+            </a>
+          </div>
+          <p className="text-[10px] text-slate-400 mt-2">
+            "שחרר אימייל" דורש Firebase Blaze plan. לחלופין — השתמש בקישור ה-Firebase Console למחיקה ידנית
+          </p>
+        </div>
       </div>
 
-      {/* Delete */}
+      {/* Delete workspace */}
       <div className="px-5 py-4 border-t border-slate-100">
         <button onClick={onDelete}
           className="w-full flex items-center justify-center gap-2 text-red-500 hover:bg-red-50 border border-red-200 py-2 rounded-xl text-xs font-semibold transition-colors">
-          <Trash2 size={12} /> מחק סביבת עבודה
+          <Trash2 size={12} /> מחק סביבת עבודה לצמיתות
         </button>
       </div>
     </aside>
@@ -610,64 +948,229 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
 
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Users
+   Source of truth for OWNERS = workspaces collection (always populated).
+   users collection = optional enrichment for firstName / lastName only.
+   This way, even if a user profile document is missing / was deleted,
+   the workspace owner still appears in this tab.
 ══════════════════════════════════════════════════════════════════════════ */
 function UsersTab({ users, workspaces }:
   { users: UserProfile[]; workspaces: WorkspaceProfile[] }) {
   const [search, setSearch] = useState('');
 
-  const wsMap = Object.fromEntries(workspaces.map(w => [w.id, w]));
+  // uid → user-profile (for name enrichment only)
+  const profileMap = Object.fromEntries(users.map(u => [u.uid, u]));
 
-  const filtered = users.filter(u =>
+  // team members = users whose workspaceId is set AND they are NOT a workspace owner
+  const ownerUids = new Set(workspaces.map(w => w.ownerId).filter(Boolean));
+  const members   = users.filter(u => u.workspaceId && !ownerUids.has(u.uid));
+
+  const PLAN_BADGE: Record<string, string> = {
+    trial:      'bg-amber-100 text-amber-700',
+    basic:      'bg-blue-100 text-blue-700',
+    pro:        'bg-indigo-100 text-indigo-700',
+    enterprise: 'bg-violet-100 text-violet-700',
+  };
+  const STATUS_DOT: Record<WorkspaceStatus, string> = {
+    active:    'bg-emerald-500',
+    trial:     'bg-amber-400',
+    suspended: 'bg-red-500',
+    pending:   'bg-slate-400',
+  };
+
+  // Filter workspaces (owners) by search
+  const filteredWorkspaces = workspaces.filter(ws => {
+    if (!search) return true;
+    const profile = ws.ownerId ? profileMap[ws.ownerId] : null;
+    const name    = profile ? `${profile.firstName} ${profile.lastName}` : '';
+    return (
+      ws.name.toLowerCase().includes(search.toLowerCase()) ||
+      ws.email.toLowerCase().includes(search.toLowerCase()) ||
+      name.toLowerCase().includes(search.toLowerCase())
+    );
+  });
+
+  // Filter members by search
+  const filteredMembers = members.filter(u =>
     !search ||
     `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="p-6 space-y-5">
+
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-black text-slate-800">משתמשים</h1>
-          <p className="text-slate-500 text-sm mt-0.5">{users.length} משתמשים רשומים</p>
+          <p className="text-slate-500 text-sm mt-0.5">
+            {workspaces.length} בעלי סביבה · {members.length} חברי צוות
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold px-3 py-1.5 rounded-xl">
+            <Building2 size={12} /> {workspaces.length} בעלי סביבה
+          </span>
+          <span className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 text-slate-600 text-xs font-semibold px-3 py-1.5 rounded-xl">
+            <Users size={12} /> {members.length} חברי צוות
+          </span>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100">
-          <div className="relative">
-            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="חיפוש לפי שם או אימייל..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+      {/* Search */}
+      <div className="relative">
+        <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="חיפוש לפי שם עסק, שם, אימייל..."
+          className="w-full bg-white border border-slate-200 rounded-xl pr-9 pl-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-sm" />
+      </div>
+
+      {/* ── Workspace Owners ─────────────────────────────────────────────── */}
+      {/* Always derived from workspaces collection — never misses an owner  */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Crown size={15} className="text-indigo-500" />
+          <h2 className="font-bold text-slate-700 text-sm">בעלי סביבות עבודה</h2>
+          <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredWorkspaces.length}</span>
+        </div>
+
+        {filteredWorkspaces.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200 py-10 text-center text-slate-400 text-sm">
+            לא נמצאו תוצאות
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {filteredWorkspaces.map(ws => {
+              // Try to enrich with user profile (might be null if doc missing)
+              const profile   = ws.ownerId ? profileMap[ws.ownerId] : null;
+              const initials  = profile
+                ? (profile.firstName?.[0] ?? ws.email[0]).toUpperCase()
+                : ws.email[0].toUpperCase();
+              const displayName = profile
+                ? `${profile.firstName} ${profile.lastName}`.trim()
+                : null;
+              const hs = healthScore(ws);
+              const hc = healthColor(hs);
+
+              return (
+                <div key={ws.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-indigo-300 hover:shadow-md transition-all">
+                  {/* Owner identity */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-black flex-shrink-0 shadow-sm">
+                      {ws.logoUrl
+                        ? <img src={ws.logoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
+                        : initials}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {displayName ? (
+                        <>
+                          <p className="font-bold text-slate-800 text-sm leading-tight truncate">{displayName}</p>
+                          <p className="text-xs text-slate-500 truncate" dir="ltr">{ws.email}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-bold text-slate-800 text-sm leading-tight truncate" dir="ltr">{ws.email}</p>
+                          <p className="text-[10px] text-slate-400">שם לא זמין — פרופיל חסר</p>
+                        </>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-2 py-0.5 rounded-full">בעלים</span>
+                      <span className={`text-[10px] font-bold ${hc.text}`}>{hc.label} {hs}</span>
+                    </div>
+                  </div>
+
+                  {/* Workspace info card */}
+                  <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT[ws.status] ?? 'bg-slate-400'}`} />
+                        <span className="font-semibold text-slate-800 text-sm truncate">{ws.name}</span>
+                      </div>
+                      <StatusBadge status={ws.status} />
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">
+                        {ws.createdAt ? new Date(ws.createdAt).toLocaleDateString('he-IL') : '—'}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {ws.industry && (
+                          <span className="text-[10px] text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded-lg">
+                            {ws.industry}
+                          </span>
+                        )}
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${PLAN_BADGE[ws.plan] ?? 'bg-slate-100 text-slate-600'}`}>
+                          {ws.plan}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Health bar */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1 bg-slate-200 rounded-full">
+                        <div className={`h-full rounded-full ${hc.bar}`} style={{ width: `${hs}%` }} />
+                      </div>
+                      <span className="text-[10px] text-slate-400">בריאות {hs}%</span>
+                    </div>
+
+                    {/* Missing profile warning */}
+                    {!profile && (
+                      <div className="flex items-center gap-1.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+                        <AlertTriangle size={10} />
+                        פרופיל משתמש חסר ב-Firestore — הרישום אולי לא הסתיים
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Team Members (non-owners) ──────────────────────────────────────── */}
+      {members.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 pt-2">
+            <Users size={15} className="text-slate-500" />
+            <h2 className="font-bold text-slate-700 text-sm">חברי צוות</h2>
+            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredMembers.length}</span>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="divide-y divide-slate-50">
+              {filteredMembers.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-sm">לא נמצאו חברי צוות</div>
+              ) : filteredMembers.map(u => {
+                const ws = u.workspaceId ? workspaces.find(w => w.id === u.workspaceId) : null;
+                return (
+                  <div key={u.uid} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                      {(u.firstName?.[0] ?? '?').toUpperCase()}
+                    </div>
+                    <div className="mr-3 flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
+                      <p className="text-xs text-slate-500 truncate" dir="ltr">{u.email}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {ws && (
+                        <div className="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded-lg truncate max-w-[110px]">
+                          {ws.name}
+                        </div>
+                      )}
+                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                        u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {u.role === 'admin' ? 'מנהל' : 'סוכן'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-
-        <div className="divide-y divide-slate-50">
-          {filtered.map(u => {
-            const ws = u.workspaceId ? wsMap[u.workspaceId] : null;
-            return (
-              <div key={u.uid} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                  {(u.firstName?.[0] ?? '?').toUpperCase()}
-                </div>
-                <div className="mr-3 flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
-                  <p className="text-xs text-slate-500 truncate">{u.email}</p>
-                </div>
-                <div className="flex items-center gap-2 text-right">
-                  {ws && (
-                    <div className="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded-lg truncate max-w-[100px]">
-                      {ws.name}
-                    </div>
-                  )}
-                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
-                    {u.role === 'admin' ? 'מנהל' : 'סוכן'}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -923,7 +1426,7 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
     finally { setSaving(false); }
   };
 
-  // Trigger GitHub Actions workflow → auto-deploys to ray-crm-app.web.app
+  // Trigger GitHub Actions workflow → auto-deploys to ray-crm.com
   const triggerGithubDeploy = async (rel: Release) => {
     const url = `https://api.github.com/repos/${ghOwner}/${ghRepo}/actions/workflows/deploy-client.yml/dispatches`;
     const res  = await fetch(url, {
@@ -969,7 +1472,7 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
           <h1 className="text-xl font-black text-slate-800">פרסום גרסאות</h1>
           <p className="text-slate-500 text-sm mt-0.5">
             פרסום עדכן את <strong>{clientCount}</strong> סביבות עבודה בבת-אחת — כולם על {' '}
-            <span className="font-mono text-indigo-600">ray-crm-app.web.app</span>
+            <span className="font-mono text-indigo-600">ray-crm.com</span>
           </p>
         </div>
         <button onClick={() => setShowGhSetup(s => !s)}
@@ -1118,7 +1621,7 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
         {hasGithub ? (
           <>
             <p>✅ GitHub Actions מחובר — לחיצה על "פרסם אוטומטית" תפעיל build ו-deploy ב-GitHub Actions</p>
-            <p>• הגרסה תועלה לאתר <code className="bg-slate-200 px-1 rounded">ray-crm-app.web.app</code> תוך ~2 דקות</p>
+            <p>• הגרסה תועלה לאתר <code className="bg-slate-200 px-1 rounded">ray-crm.com</code> תוך ~2 דקות</p>
             <p>• <strong>כל {clientCount} הלקוחות</strong> יקבלו את העדכון אוטומטית בטעינה הבאה</p>
           </>
         ) : (
@@ -1129,6 +1632,597 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TAB: Analytics
+══════════════════════════════════════════════════════════════════════════ */
+function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
+  // 12-month signups
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - (11 - i));
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const label = d.toLocaleDateString('he-IL', { month: 'short' });
+    const count = workspaces.filter(w => {
+      const c = new Date(w.createdAt);
+      return c.getFullYear() === y && c.getMonth() === m;
+    }).length;
+    return { label, count };
+  });
+  const maxMonth = Math.max(...months.map(m => m.count), 1);
+
+  // Plan distribution
+  const planDist = ['trial','basic','pro','enterprise'].map(p => ({
+    plan: p,
+    count: workspaces.filter(w => w.plan === p).length,
+    pct: workspaces.length ? Math.round(workspaces.filter(w => w.plan === p).length / workspaces.length * 100) : 0,
+  }));
+
+  // Industry breakdown
+  const industryMap: Record<string, number> = {};
+  workspaces.forEach(w => {
+    const ind = w.industry || 'לא מוגדר';
+    industryMap[ind] = (industryMap[ind] ?? 0) + 1;
+  });
+  const industries = Object.entries(industryMap).sort((a,b) => b[1]-a[1]).slice(0, 6);
+  const maxInd = Math.max(...industries.map(([,c]) => c), 1);
+
+  // Conversion funnel: trial → active
+  const totalTrials = workspaces.filter(w => w.status === 'trial' || w.status === 'active').length;
+  const converted   = workspaces.filter(w => w.status === 'active').length;
+  const convRate    = totalTrials ? Math.round(converted / totalTrials * 100) : 0;
+
+  // Revenue trend (per plan)
+  const mrrNow = mrr(workspaces);
+
+  // Health score distribution
+  const excellent = workspaces.filter(w => healthScore(w) >= 75).length;
+  const moderate  = workspaces.filter(w => healthScore(w) >= 50 && healthScore(w) < 75).length;
+  const atRisk    = workspaces.filter(w => healthScore(w) < 50).length;
+
+  const PLAN_COLORS_CHART: Record<string, string> = {
+    trial: 'bg-slate-400', basic: 'bg-sky-500', pro: 'bg-violet-500', enterprise: 'bg-amber-500',
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-xl font-black text-slate-800">אנליטיקס</h1>
+        <p className="text-slate-500 text-sm mt-0.5">ניתוח מעמיק של כל נתוני המערכת</p>
+      </div>
+
+      {/* Top KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+          <p className="text-2xl font-black text-indigo-600">₪{mrrNow.toLocaleString()}</p>
+          <p className="text-xs text-slate-500 mt-1">MRR חודשי</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+          <p className="text-2xl font-black text-emerald-600">{convRate}%</p>
+          <p className="text-xs text-slate-500 mt-1">שיעור המרה (trial→active)</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+          <p className="text-2xl font-black text-slate-800">{workspaces.length > 0 ? Math.round(mrrNow / Math.max(workspaces.filter(w=>w.status==='active').length,1)) : 0}</p>
+          <p className="text-xs text-slate-500 mt-1">₪ ARPU (ממוצע לחשבון)</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+          <p className="text-2xl font-black text-amber-600">{atRisk}</p>
+          <p className="text-xs text-slate-500 mt-1">חשבונות בסיכון</p>
+        </div>
+      </div>
+
+      {/* 12-month chart */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="font-bold text-slate-800 text-sm">צמיחה — 12 חודשים אחרונים</h2>
+            <p className="text-slate-500 text-xs mt-0.5">סביבות עבודה חדשות לחודש</p>
+          </div>
+          <span className="text-xs text-indigo-600 bg-indigo-50 font-bold px-3 py-1 rounded-full">
+            סה״כ {workspaces.length} סביבות
+          </span>
+        </div>
+        <div className="flex items-end gap-1.5 h-32">
+          {months.map(({ label, count }, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-1">
+              <span className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100">
+                {count > 0 ? count : ''}
+              </span>
+              <div className="w-full flex items-end justify-center" style={{ height: '100px' }}>
+                <div
+                  className="w-full rounded-t-md bg-gradient-to-t from-indigo-600 to-indigo-400 hover:from-violet-600 hover:to-violet-400 transition-colors cursor-default"
+                  style={{ height: `${(count / maxMonth) * 100}%`, minHeight: count > 0 ? 6 : 2 }}
+                  title={`${label}: ${count} סביבות`}
+                />
+              </div>
+              <span className="text-[10px] text-slate-400">{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Plan distribution + Industry breakdown */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Plan distribution */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח תוכניות</h2>
+          <div className="space-y-3">
+            {planDist.map(({ plan, count, pct }) => (
+              <div key={plan}>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2.5 h-2.5 rounded-full ${PLAN_COLORS_CHART[plan]}`} />
+                    <span className="font-semibold capitalize text-slate-700">{plan}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <span>{count} סביבות</span>
+                    <span className="font-bold text-slate-800">{pct}%</span>
+                  </div>
+                </div>
+                <div className="h-2 bg-slate-100 rounded-full">
+                  <div className={`h-full rounded-full ${PLAN_COLORS_CHART[plan]}`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Donut-style visual (CSS approximation) */}
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            <p className="text-xs text-slate-500 mb-2">הכנסה לפי תוכנית (MRR)</p>
+            <div className="flex gap-2 flex-wrap">
+              {planDist.map(({ plan, count }) => {
+                const rev = count * (PLAN_MRR[plan] ?? 0);
+                if (rev === 0) return null;
+                return (
+                  <div key={plan} className={`flex-1 min-w-[70px] rounded-xl p-2 text-center ${PLAN_COLORS[plan] ?? 'bg-slate-100 text-slate-600'}`}>
+                    <p className="text-xs font-black">₪{rev.toLocaleString()}</p>
+                    <p className="text-[10px] capitalize">{plan}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Industry breakdown */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח לפי תחום עיסוק</h2>
+          {industries.length === 0 ? (
+            <p className="text-slate-400 text-sm text-center py-6">אין נתוני תחום</p>
+          ) : (
+            <div className="space-y-3">
+              {industries.map(([ind, count]) => {
+                const pct = workspaces.length ? Math.round(count / workspaces.length * 100) : 0;
+                return (
+                  <div key={ind}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-700 font-medium truncate">{ind}</span>
+                      <span className="text-slate-500 flex-shrink-0 mr-2">{count} ({pct}%)</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full">
+                      <div className="h-full bg-violet-400 rounded-full" style={{ width: `${(count/maxInd)*100}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Conversion funnel */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-4">משפך המרה</h2>
+        <div className="flex items-stretch gap-3">
+          {[
+            { label: 'נרשמו', count: workspaces.length,                  color: 'bg-indigo-100 border-indigo-300 text-indigo-800' },
+            { label: 'ניסיון', count: totalTrials,                        color: 'bg-blue-100 border-blue-300 text-blue-800'    },
+            { label: 'המירו',  count: converted,                          color: 'bg-emerald-100 border-emerald-300 text-emerald-800' },
+            { label: 'Pro+',   count: workspaces.filter(w=>w.status==='active'&&(w.plan==='pro'||w.plan==='enterprise')).length, color: 'bg-violet-100 border-violet-300 text-violet-800' },
+          ].map(({ label, count, color }, i, arr) => (
+            <div key={label} className="flex-1 flex flex-col items-center gap-2">
+              <div className={`w-full border-2 rounded-2xl p-4 text-center ${color}`}>
+                <p className="text-2xl font-black">{count}</p>
+                <p className="text-xs font-semibold mt-0.5">{label}</p>
+              </div>
+              {i < arr.length - 1 && (
+                <div className="flex items-center text-slate-400 text-xs">
+                  <ChevronRight size={16} />
+                  <span className="text-[10px]">
+                    {arr[i].count > 0 ? Math.round(arr[i+1].count/arr[i].count*100) : 0}%
+                  </span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Health score distribution */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח בריאות חשבונות</h2>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-emerald-700">{excellent}</p>
+            <p className="text-xs font-semibold text-emerald-600 mt-0.5">בריאים (75+)</p>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-amber-700">{moderate}</p>
+            <p className="text-xs font-semibold text-amber-600 mt-0.5">בינוניים (50-74)</p>
+          </div>
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-red-700">{atRisk}</p>
+            <p className="text-xs font-semibold text-red-600 mt-0.5">בסיכון (&lt;50)</p>
+          </div>
+        </div>
+        {atRisk > 0 && (
+          <div className="mt-4 space-y-2">
+            <p className="text-xs font-semibold text-slate-500">חשבונות בסיכון:</p>
+            {workspaces.filter(w => healthScore(w) < 50).map(w => (
+              <div key={w.id} className="flex items-center justify-between bg-red-50 rounded-xl px-3 py-2">
+                <span className="text-xs font-medium text-slate-700">{w.name}</span>
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={w.status} />
+                  <span className="text-xs font-bold text-red-600">{healthScore(w)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TAB: System
+══════════════════════════════════════════════════════════════════════════ */
+function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; onToast: (m:string,t?:'success'|'error'|'info')=>void }) {
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [cfgLoading, setCfgLoading] = useState(true);
+
+  useEffect(() => {
+    getDoc(doc(db, 'system', 'config'))
+      .then(snap => { if (snap.exists()) setConfig(snap.data()); })
+      .catch(() => {})
+      .finally(() => setCfgLoading(false));
+  }, []);
+
+  const FIREBASE_PROJECT = 'chex-crm';
+  const CLIENT_PROJECT   = 'ray-crm-app';
+
+  const FIREBASE_LINKS = [
+    { label: 'Firebase Console — Admin',    url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/overview`,      icon: '🔧' },
+    { label: 'Authentication — Users',      url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/authentication/users`, icon: '👤' },
+    { label: 'Firestore Database',          url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/firestore/data`,  icon: '🗄️' },
+    { label: 'Storage',                     url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/storage`,         icon: '📦' },
+    { label: 'Cloud Functions',             url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/functions`,       icon: '⚙️' },
+    { label: 'Hosting — Admin Site',        url: `https://console.firebase.google.com/project/${FIREBASE_PROJECT}/hosting`,        icon: '🌐' },
+    { label: 'Firebase Console — Client',   url: `https://console.firebase.google.com/project/${CLIENT_PROJECT}/overview`,        icon: '🔧' },
+    { label: 'Hosting — Client Site',       url: `https://console.firebase.google.com/project/${CLIENT_PROJECT}/hosting`,         icon: '🌐' },
+    { label: 'Client Auth — Users',         url: `https://console.firebase.google.com/project/${CLIENT_PROJECT}/authentication/users`, icon: '👤' },
+    { label: 'Client Firestore',            url: `https://console.firebase.google.com/project/${CLIENT_PROJECT}/firestore/data`,   icon: '🗄️' },
+  ];
+
+  const LIVE_LINKS = [
+    { label: 'Admin Site (live)',  url: 'https://admin.ray-crm.com',   icon: '🔐' },
+    { label: 'Client Site (live)', url: 'https://ray-crm.com',         icon: '🚀' },
+    { label: 'Signup URL',         url: 'https://ray-crm.com/signup',  icon: '📝' },
+  ];
+
+  const latestVersion = config.latestVersion as string | undefined;
+  const lastPublished = config.lastPublished as string | undefined;
+  const hasGithub     = !!(config.github as Record<string, unknown> | undefined)?.owner;
+
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-xl font-black text-slate-800">מערכת</h1>
+        <p className="text-slate-500 text-sm mt-0.5">מידע טכני, קישורים, וסטטוס סביבה</p>
+      </div>
+
+      {/* Deployment architecture — key banner */}
+      <div className="bg-gradient-to-br from-indigo-950 to-slate-900 rounded-2xl p-5 border border-indigo-700 text-white">
+        <div className="flex items-center gap-2 mb-3">
+          <Rocket size={18} className="text-indigo-300" />
+          <p className="font-black text-sm">ארכיטקטורת הפריסה</p>
+        </div>
+        <p className="text-indigo-200 text-sm leading-relaxed">
+          כל הלקוחות משתמשים ב-<span className="font-mono bg-indigo-800 px-1.5 py-0.5 rounded text-white">*.ray-crm.com</span> — כל סביבת עבודה על תת-דומיין ייחודי משלה, מתוך <strong className="text-white">{workspaces.length}</strong> סביבות פעילות.
+          פרסום גרסה חדשה (<code className="bg-indigo-800 px-1 rounded">firebase deploy --only hosting</code>) מעדכן את <strong className="text-white">כולם בבת-אחת</strong> בטעינה הבאה.
+        </p>
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
+          <div className="bg-indigo-800/50 rounded-xl px-3 py-2 text-xs">
+            <p className="text-indigo-300">גרסה נוכחית</p>
+            <p className="font-mono font-bold text-white">{cfgLoading ? '...' : (latestVersion ?? 'לא הוגדר')}</p>
+          </div>
+          <div className="bg-indigo-800/50 rounded-xl px-3 py-2 text-xs">
+            <p className="text-indigo-300">פורסם לאחרונה</p>
+            <p className="font-bold text-white">{cfgLoading ? '...' : (lastPublished ? fmtDate(lastPublished) : 'לא')}</p>
+          </div>
+          <div className={`rounded-xl px-3 py-2 text-xs ${hasGithub ? 'bg-emerald-800/50' : 'bg-amber-800/50'}`}>
+            <p className={hasGithub ? 'text-emerald-300' : 'text-amber-300'}>GitHub Actions</p>
+            <p className="font-bold text-white">{hasGithub ? '✅ מחובר' : '⚠️ לא מוגדר'}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Deploy command quick-copy */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+          <Package size={14} className="text-indigo-600" /> פקודות פריסה מהירה
+        </h2>
+        <div className="space-y-2">
+          {[
+            { label: 'פרסם Client בלבד (מעדכן כל הלקוחות)',     cmd: 'npm run build && firebase deploy --only hosting:client'    },
+            { label: 'פרסם Cloud Functions (Blaze נדרש)',        cmd: 'firebase deploy --only functions'                          },
+            { label: 'פרסם הכל',                                  cmd: 'npm run build && firebase deploy'                           },
+          ].map(({ label, cmd }) => (
+            <div key={cmd} className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
+              <code className="flex-1 text-xs text-slate-800 font-mono" dir="ltr">{cmd}</code>
+              <button
+                onClick={() => { copyText(cmd); onToast('פקודה הועתקה ✓', 'success'); }}
+                className="text-slate-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
+              >
+                <Copy size={13} />
+              </button>
+            </div>
+          ))}
+          <p className="text-[11px] text-slate-400 mt-1">💡 הרץ מתיקיית הפרויקט <code className="bg-slate-100 px-1 rounded">crm-app/</code></p>
+        </div>
+      </div>
+
+      {/* Live links */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+          <Globe size={14} className="text-emerald-600" /> קישורים לאתרים
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {LIVE_LINKS.map(({ label, url, icon }) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer"
+              className="flex items-center gap-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl px-3 py-2.5 transition-colors">
+              <span className="text-lg">{icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-800 truncate">{label}</p>
+                <p className="text-[10px] text-slate-500 truncate" dir="ltr">{url}</p>
+              </div>
+              <ExternalLink size={11} className="text-slate-400 flex-shrink-0" />
+            </a>
+          ))}
+        </div>
+      </div>
+
+      {/* Firebase Console links */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+          <Zap size={14} className="text-amber-500" /> Firebase Console
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {FIREBASE_LINKS.map(({ label, url, icon }) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer"
+              className="flex items-center gap-2.5 bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-200 rounded-xl px-3 py-2.5 transition-colors">
+              <span>{icon}</span>
+              <p className="text-xs font-medium text-slate-700 flex-1 truncate">{label}</p>
+              <ExternalLink size={11} className="text-slate-400 flex-shrink-0" />
+            </a>
+          ))}
+        </div>
+      </div>
+
+      {/* Stuck Email Release Tool */}
+      <StuckEmailTool onToast={onToast} workspaces={workspaces} />
+
+      {/* Environment info */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+          <Info size={14} className="text-slate-500" /> מידע סביבה
+        </h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {[
+            { label: 'Admin Firebase Project',  value: FIREBASE_PROJECT,       mono: true  },
+            { label: 'Client Firebase Project', value: CLIENT_PROJECT,         mono: true  },
+            { label: 'Admin URL',               value: 'admin.ray-crm.com',    mono: true  },
+            { label: 'Client URL',              value: 'ray-crm.com',          mono: true  },
+            { label: 'סה״כ סביבות',              value: String(workspaces.length), mono: false },
+            { label: 'Super Admin',             value: 'almogavraham30@gmail.com', mono: false },
+          ].map(({ label, value, mono }) => (
+            <div key={label} className="bg-slate-50 rounded-xl px-3 py-2.5">
+              <p className="text-[10px] text-slate-400 font-medium">{label}</p>
+              <p className={`text-xs text-slate-800 font-bold mt-0.5 ${mono ? 'font-mono' : ''}`} dir="ltr">{value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Stuck Email Release Tool
+   Appears inside SystemTab. Lets super-admin find & delete an orphaned
+   Firebase Auth account whose workspace / user-profile docs were already
+   removed from Firestore (so it no longer appears anywhere in the UI).
+══════════════════════════════════════════════════════════════════════════ */
+function StuckEmailTool({ onToast, workspaces }:
+  { onToast: (m: string, t?: 'success'|'error'|'info') => void; workspaces: WorkspaceProfile[] }) {
+
+  const [email,    setEmail]    = useState('');
+  const [checking, setChecking] = useState(false);
+  const [status,   setStatus]   = useState<'idle'|'exists'|'not-found'|'unknown'>('idle');
+  const [deleting, setDeleting] = useState(false);
+
+  // Check whether the email is registered in Firebase Auth (client-side probe)
+  const checkEmail = async () => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) return;
+    setChecking(true);
+    setStatus('idle');
+    try {
+      const methods = await fetchSignInMethodsForEmail(auth, trimmed);
+      setStatus(methods.length > 0 ? 'exists' : 'not-found');
+    } catch {
+      // fetchSignInMethodsForEmail may throw on malformed email / network
+      setStatus('unknown');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  // Try to call Cloud Function (only works if Blaze plan + function deployed)
+  const tryCloudDelete = async () => {
+    setDeleting(true);
+    try {
+      // We don't know the UID from email alone client-side, so look it up from workspace or users
+      // If the workspace was deleted, we won't find the UID here — function must be called with UID
+      onToast('פונקציית deleteAuthUser דורשת UID. השתמש בקונסול Firebase למחיקה ידנית.', 'info');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Is the email associated with any known workspace?
+  const matchingWorkspace = workspaces.find(w =>
+    w.email?.toLowerCase() === email.trim().toLowerCase()
+  );
+
+  const consoleUrl = `https://console.firebase.google.com/project/chex-crm/authentication/users`;
+
+  return (
+    <div className="bg-white rounded-2xl border-2 border-orange-200 p-5 shadow-sm">
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-8 h-8 rounded-xl bg-orange-100 flex items-center justify-center flex-shrink-0">
+          <Unlink size={15} className="text-orange-600" />
+        </div>
+        <div>
+          <h2 className="font-bold text-slate-800 text-sm">שחרור אימייל תקוע</h2>
+          <p className="text-xs text-slate-500">מחק משתמש Auth שאין לו סביבת עבודה במערכת</p>
+        </div>
+      </div>
+
+      {/* Explanation */}
+      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-4 text-xs text-orange-800 space-y-1">
+        <p className="font-bold">מתי זה קורה?</p>
+        <p>כאשר מוחקים סביבת עבודה, הרשומות ב-Firestore נמחקות אך חשבון Firebase Auth נשאר.
+        כתוצאה מכך, הרישום מחדש עם אותו אימייל נכשל עם "אימייל כבר קיים".</p>
+      </div>
+
+      {/* Email input row */}
+      <div className="flex gap-2 mb-3">
+        <div className="relative flex-1">
+          <AtSign size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="email"
+            value={email}
+            onChange={e => { setEmail(e.target.value); setStatus('idle'); }}
+            onKeyDown={e => e.key === 'Enter' && checkEmail()}
+            placeholder="הכנס אימייל לבדיקה..."
+            dir="ltr"
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-300"
+          />
+        </div>
+        <button
+          onClick={checkEmail}
+          disabled={checking || !email.trim()}
+          className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-colors flex-shrink-0"
+        >
+          {checking ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
+          בדוק
+        </button>
+      </div>
+
+      {/* Result */}
+      {status === 'not-found' && (
+        <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-xs text-emerald-700 font-semibold">
+          <CheckCircle2 size={14} />
+          האימייל אינו רשום ב-Firebase Auth — ניתן להשתמש בו לרישום חדש
+        </div>
+      )}
+
+      {status === 'unknown' && (
+        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-600">
+          <AlertTriangle size={14} className="text-amber-500" />
+          לא ניתן לבדוק — בדוק ידנית ב-Firebase Console
+        </div>
+      )}
+
+      {status === 'exists' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700 font-semibold">
+            <XCircle size={14} />
+            האימייל <span dir="ltr" className="font-mono mx-1">{email.trim()}</span> רשום ב-Firebase Auth אך אינו מופיע במערכת
+            {matchingWorkspace && (
+              <span className="text-red-600 mr-1">(נמצא בסביבה: {matchingWorkspace.name})</span>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div className="space-y-2">
+            {/* Primary: open Firebase Console */}
+            <a
+              href={consoleUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white py-2.5 px-4 rounded-xl text-xs font-bold transition-colors"
+            >
+              <ExternalLink size={13} />
+              פתח Firebase Console Authentication ←
+            </a>
+
+            {/* Copy email for easy search in console */}
+            <button
+              onClick={() => { copyText(email.trim()); onToast('אימייל הועתק — הדבק בשדה החיפוש בקונסול ✓', 'success'); }}
+              className="w-full flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors"
+            >
+              <Copy size={13} />
+              העתק אימייל (לחיפוש בקונסול)
+            </button>
+
+            {/* Try Cloud Function (might fail if not deployed) */}
+            {matchingWorkspace?.ownerId && (
+              <button
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    const deleteFn = httpsCallable<{ uid: string }, { success: boolean }>(functions, 'deleteAuthUser');
+                    await deleteFn({ uid: matchingWorkspace.ownerId! });
+                    setStatus('not-found');
+                    onToast(`חשבון Auth של ${email} נמחק ✓ — האימייל פנוי לרישום חדש`, 'success');
+                  } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (msg.includes('not-found') || msg.includes('NOT_FOUND')) {
+                      setStatus('not-found');
+                      onToast('המשתמש לא נמצא ב-Auth — ייתכן שכבר נמחק', 'info');
+                    } else {
+                      onToast(`Cloud Function לא זמינה — מחק ידנית ב-Firebase Console (${msg})`, 'error');
+                    }
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
+              >
+                {deleting ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                מחק Auth אוטומטית (דורש Firebase Blaze)
+              </button>
+            )}
+          </div>
+
+          {/* Step-by-step guide */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 space-y-1.5">
+            <p className="font-bold text-slate-700">מחיקה ידנית — שלב אחר שלב:</p>
+            <p>1. לחץ "פתח Firebase Console Authentication" ↗</p>
+            <p>2. לחץ "העתק אימייל" ← הדבק בשדה החיפוש בקונסול</p>
+            <p>3. סמן את המשתמש → לחץ תפריט ⋮ → Delete account</p>
+            <p>4. לאחר המחיקה, הרישום מחדש יעבוד תקין</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1182,9 +2276,8 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 /* ─── Signup Link Button ──────────────────────────────────────────────────── */
 function SignupLinkButton({ onToast }: { onToast?: (m: string, t?: 'success'|'error'|'info') => void }) {
   const [copied, setCopied] = useState(false);
-  // Client environment lives on a separate hosting site — isolated from admin
-  const CLIENT_ORIGIN = 'https://ray-crm-app.web.app';
-  const signupUrl = `${CLIENT_ORIGIN}/?signup=1`;
+  // Client environment lives on the custom domain
+  const signupUrl = 'https://ray-crm.com/signup';
 
   const handleCopy = () => {
     copyText(signupUrl);

@@ -85,7 +85,7 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'admin';
+export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'admin' | 'billing';
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
@@ -254,6 +254,8 @@ export type ProjectTask = {
   completed: boolean;
   assignedTo?: string;
   dueDate?: string;
+  priority?: 'high' | 'medium' | 'low';
+  notes?: string;
 };
 
 export type Project = {
@@ -344,6 +346,12 @@ export type WorkspaceProfile = {
   createdAt: string;
   onboardingComplete: boolean;
   leadsSetupDone?: boolean;      // AI lead-card setup wizard completed
+  cardLeftField?: {              // AI-chosen left-panel field for the lead card
+    key: string;
+    label: string;
+    prefix?: string;
+    quickOptions?: number[];
+  };
   memberCount?: number;          // denormalized counter
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {

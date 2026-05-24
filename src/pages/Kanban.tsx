@@ -116,10 +116,10 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
 
   /* ── render ────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex flex-col h-[calc(100vh-60px)] -mx-4 md:-mx-6 -mb-4 md:-mb-6 px-0" dir="rtl">
+    <div className="flex flex-col h-[calc(100vh-128px)] md:h-[calc(100vh-60px)] -mx-4 md:-mx-6 -mb-4 md:-mb-6 px-0" dir="rtl">
 
       {/* ── Toolbar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-4 sm:px-6 py-3 bg-white border-b border-slate-200 flex-wrap">
+      <div className="flex items-center gap-2 px-3 sm:px-6 py-3 bg-white border-b border-slate-200 flex-wrap">
 
         {/* Title + stats */}
         <div className="flex items-center gap-3">
@@ -150,7 +150,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           <input
             value={search} onChange={e=>setSearch(e.target.value)}
             placeholder="חיפוש לידים..."
-            className="bg-slate-50 border border-slate-200 rounded-xl pr-8 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 w-44 transition-all"
+            className="bg-slate-50 border border-slate-200 rounded-xl pr-8 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 w-28 sm:w-44 transition-all"
           />
           {search && (
             <button onClick={()=>setSearch('')} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -213,7 +213,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
 
       {/* ── Board ────────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden">
-        <div className="flex gap-0 h-full min-w-max">
+        <div className="flex gap-0 h-full" style={{ minWidth: 'max-content' }}>
           {COLUMNS.map((status, colIdx) => {
             const col     = getCol(status);
             const theme   = COL_THEME[status];

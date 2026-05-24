@@ -518,46 +518,56 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     </div>
                   </div>
 
-                  {/* Budget */}
-                  <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-                    <h3 className="text-xs font-bold text-slate-400 mb-3 text-right uppercase tracking-wider flex items-center gap-1.5 justify-end">
-                      תקציב שיווק <Star size={11} className="text-amber-400" />
-                    </h3>
-                    <div className="space-y-2">
-                      <input
-                        type="number"
-                        placeholder="תקציב חודשי (₪)"
-                        value={data.budget || ''}
-                        onChange={e => setData(d => ({ ...d, budget: parseInt(e.target.value) || 0 }))}
-                        className="w-full bg-slate-700/80 text-white placeholder-slate-500 px-3 py-2 rounded-lg text-xs text-right focus:outline-none focus:ring-2 focus:ring-orange-500 border border-slate-600/50"
-                      />
-                      {(data.budget ?? 0) > 0 && (
-                        <div className={`text-center py-2 rounded-lg text-sm font-bold ${
-                          (data.budget ?? 0) >= 15000
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'bg-slate-700/60 text-slate-300'
-                        }`}>
-                          ₪{(data.budget ?? 0).toLocaleString()}/חודש
-                          {(data.budget ?? 0) >= 15000 && ' 🌟 VIP'}
+                  {/* Budget / custom left field */}
+                  {(() => {
+                    const clf      = workspace?.cardLeftField;
+                    const label    = clf?.label    ?? 'תקציב שיווק';
+                    const prefix   = clf?.prefix   ?? '₪';
+                    const quickOpts = clf?.quickOptions?.length
+                      ? clf.quickOptions
+                      : [5000, 10000, 20000];
+                    return (
+                      <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                        <h3 className="text-xs font-bold text-slate-400 mb-3 text-right uppercase tracking-wider flex items-center gap-1.5 justify-end">
+                          {label} <Star size={11} className="text-amber-400" />
+                        </h3>
+                        <div className="space-y-2">
+                          <input
+                            type="number"
+                            placeholder={`${label} (${prefix})`}
+                            value={data.budget || ''}
+                            onChange={e => setData(d => ({ ...d, budget: parseInt(e.target.value) || 0 }))}
+                            className="w-full bg-slate-700/80 text-white placeholder-slate-500 px-3 py-2 rounded-lg text-xs text-right focus:outline-none focus:ring-2 focus:ring-orange-500 border border-slate-600/50"
+                          />
+                          {(data.budget ?? 0) > 0 && (
+                            <div className={`text-center py-2 rounded-lg text-sm font-bold ${
+                              (data.budget ?? 0) >= 15000
+                                ? 'bg-emerald-500/20 text-emerald-400'
+                                : 'bg-slate-700/60 text-slate-300'
+                            }`}>
+                              {prefix}{(data.budget ?? 0).toLocaleString()}
+                              {(data.budget ?? 0) >= 15000 && ' 🌟 VIP'}
+                            </div>
+                          )}
+                          <div className="grid grid-cols-3 gap-1 mt-1">
+                            {quickOpts.slice(0, 3).map(val => (
+                              <button
+                                key={val}
+                                onClick={() => setData(d => ({ ...d, budget: val }))}
+                                className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                  data.budget === val
+                                    ? 'bg-orange-500 text-white'
+                                    : 'bg-slate-700/80 text-slate-400 hover:bg-slate-700'
+                                }`}
+                              >
+                                {prefix}{val >= 1000 ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}K` : val}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      )}
-                      <div className="grid grid-cols-3 gap-1 mt-1">
-                        {[5000, 10000, 20000].map(val => (
-                          <button
-                            key={val}
-                            onClick={() => setData(d => ({ ...d, budget: val }))}
-                            className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                              data.budget === val
-                                ? 'bg-orange-500 text-white'
-                                : 'bg-slate-700/80 text-slate-400 hover:bg-slate-700'
-                            }`}
-                          >
-                            ₪{(val / 1000)}K
-                          </button>
-                        ))}
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Status selector */}
@@ -604,9 +614,11 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
                     <div className="text-lg font-bold text-white">
-                      {data.budget > 0 ? `₪${(data.budget / 1000).toFixed(0)}K` : '—'}
+                      {data.budget > 0
+                        ? `${workspace?.cardLeftField?.prefix ?? '₪'}${(data.budget / 1000).toFixed(0)}K`
+                        : '—'}
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">תקציב/חודש</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{workspace?.cardLeftField?.label ?? 'תקציב'}</div>
                   </div>
                   <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
                     <div className="text-xl font-bold text-white">{data.solutions.length}</div>
@@ -875,7 +887,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
 
       {/* Smart Email Modal */}
       {showEmail && (
-        <EmailModal lead={data} onClose={() => setShowEmail(false)} />
+        <EmailModal lead={data} workspace={workspace} onClose={() => setShowEmail(false)} />
       )}
     </>
   );

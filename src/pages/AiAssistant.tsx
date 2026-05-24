@@ -884,7 +884,7 @@ function HistoryPanel({
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function AiAssistant({
   leads, team, currentUser, standaloneTask: _standaloneTask,
-  onCreateTask, onUpdateLead, onAddNote,
+  onCreateTask, onUpdateLead, onAddNote, workspace,
 }: AiAssistantProps) {
 
   const [messages,          setMessages]          = useState<Message[]>(loadLocalHistory);
@@ -1322,25 +1322,71 @@ export default function AiAssistant({
     setShowHistory(false);
   };
 
-  /* ── Suggestion chips ─────────────────────────────────────────────────── */
-  const hotLeads = leads.filter(l => l.status === 'חדש' || l.status === 'בתהליך').length;
+  /* ── Suggestion chips — fully dynamic, workspace-aware ─────────────────── */
+  const hotLeads  = leads.filter(l => l.status === 'חדש' || l.status === 'בתהליך').length;
   const openTasks = leads.flatMap(l => l.tasks.filter(t => !t.completed)).length;
 
+  // Derive workspace context for personalised chips
+  const bizName    = workspace?.name     ?? 'העסק שלנו';
+  const industry   = workspace?.industry ?? 'שיווק דיגיטלי';
+  const services   = workspace?.businessSolutions ?? [];
+  const service1   = services[0] ?? 'שירות ראשי';
+  const service2   = services[1] ?? 'שירות שני';
+
+  // Pick a real "in-progress" lead name for action chips (fallback to generic)
+  const inProgressLead = leads.find(l => l.status === 'בתהליך');
+  const newLead        = leads.find(l => l.status === 'חדש');
+  const activeLead     = leads.find(l => l.status === 'לקוח פעיל');
+  const leadForTask    = inProgressLead ?? newLead ?? leads[0];
+  const leadName       = leadForTask?.company ?? 'הליד הראשון';
+
   const suggestions = [
-    { icon: <TrendingUp size={12} />,    text: 'אילו לידים הם הכי חמים כרגע?',                       cat: 'crm' },
-    { icon: <ListTodo size={12} />,      text: `צור לי משימת מעקב לליד הראשון שבתהליך`,              cat: 'action' },
-    { icon: <Tag size={12} />,           text: 'עדכן את הלידים הישנים שלא נסגרו ל"רימרקטינג"',       cat: 'action' },
-    { icon: <Globe size={12} />,         text: 'מה החדשות האחרונות בשוק הנדל"ן הישראלי?',            cat: 'web' },
-    { icon: <FileText size={12} />,      text: 'נסח מייל שיווקי ללקוח קבלן שמחפש דמיות ויזואליות',   cat: 'crm' },
-    { icon: <MessageSquare size={12} />, text: 'תן 5 רעיונות לרילס אינסטגרם לפרויקט נדל"ן',          cat: 'web' },
-    { icon: <StickyNote size={12} />,    text: 'הוסף הערה לליד הראשון שבתהליך',                       cat: 'action' },
-    { icon: <Building2 size={12} />,     text: 'מה הסטטוס של כל הלקוחות הפעילים?',                   cat: 'crm' },
+    {
+      icon: <TrendingUp size={12} />,
+      text: `אילו לידים הם הכי חמים עכשיו מתוך ${leads.length} הלידים?`,
+      cat: 'crm',
+    },
+    {
+      icon: <ListTodo size={12} />,
+      text: `צור משימת מעקב ל${leadName} להיום`,
+      cat: 'action',
+    },
+    {
+      icon: <FileText size={12} />,
+      text: `נסח הצעת מחיר ל${service1} ל${activeLead?.company ?? 'לקוח פעיל'}`,
+      cat: 'crm',
+    },
+    {
+      icon: <Globe size={12} />,
+      text: `מה המגמות האחרונות בתחום ${industry} שכדאי לדעת?`,
+      cat: 'web',
+    },
+    {
+      icon: <Tag size={12} />,
+      text: `עדכן לידים ישנים שלא נסגרו ל"רימרקטינג"`,
+      cat: 'action',
+    },
+    {
+      icon: <MessageSquare size={12} />,
+      text: `תן לי 5 רעיונות לתוכן שיווקי עבור ${bizName} בתחום ${service2}`,
+      cat: 'web',
+    },
+    {
+      icon: <StickyNote size={12} />,
+      text: `הוסף הערה ל${leadName} שדיברתי איתם היום`,
+      cat: 'action',
+    },
+    {
+      icon: <Building2 size={12} />,
+      text: `מה הסטטוס של כל הלקוחות הפעילים ב${bizName}?`,
+      cat: 'crm',
+    },
   ];
 
   const isIdle = messages.length === 0 && !loading;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-116px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-180px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 md:px-5 py-2.5 md:py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0 gap-2">
@@ -1456,7 +1502,9 @@ export default function AiAssistant({
             <div>
               <p className="text-white font-bold text-xl">שלום {currentUser.split(' ')[0]}! אני העוזר ה-AI שלך 👋</p>
               <p className="text-slate-400 text-sm mt-1.5">
-                אני יכול לנתח לידים, ליצור משימות, לעדכן סטטוסים ולחפש מידע באינטרנט
+                {workspace?.name
+                  ? `אני מכיר את ${workspace.name}${workspace.industry ? ` — ${workspace.industry}` : ''}. מה עושים היום?`
+                  : 'אני יכול לנתח לידים, ליצור משימות, לעדכן סטטוסים ולחפש מידע באינטרנט'}
               </p>
             </div>
 

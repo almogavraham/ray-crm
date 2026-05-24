@@ -13,6 +13,7 @@ interface LandingPageProps {
   onSignUp: () => void;
   isLoggedIn?: boolean;
   isSuperAdmin?: boolean;
+  workspaceSlug?: string;   // set when a workspace user is logged in
 }
 
 /* ─── Animated counter ───────────────────────────────────────────────────────── */
@@ -44,7 +45,7 @@ function Counter({ target, suffix = '' }: { target: number; suffix?: string }) {
 }
 
 /* ─── Navbar ─────────────────────────────────────────────────────────────────── */
-function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin }: LandingPageProps) {
+function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }: LandingPageProps) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -101,6 +102,13 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin }: LandingPagePro
               פאנל אדמין
               <ArrowLeft size={13} />
             </a>
+          ) : isLoggedIn && workspaceSlug ? (
+            /* Workspace user is logged in — show "enter workspace" button */
+            <a href={`/${workspaceSlug}`}
+              className="flex items-center gap-1.5 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition-colors shadow-[0_0_20px_rgba(79,70,229,0.35)]">
+              כניסה לסביבת העבודה
+              <ArrowLeft size={13} />
+            </a>
           ) : (
             <>
               <button onClick={onSignIn}
@@ -132,8 +140,20 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin }: LandingPagePro
             </a>
           ))}
           <div className="pt-3 flex flex-col gap-2 border-t border-[#1a2540] mt-3">
-            <button onClick={onSignIn} className="w-full border border-[#1a2540] text-[#8899bb] text-sm font-medium py-2.5 rounded-lg">כניסה</button>
-            <button onClick={onSignUp} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">התחל חינם</button>
+            {isLoggedIn && isSuperAdmin ? (
+              <a href="https://admin.ray-crm.com" className="w-full text-center bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">
+                פאנל אדמין
+              </a>
+            ) : isLoggedIn && workspaceSlug ? (
+              <a href={`/${workspaceSlug}`} className="w-full text-center bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">
+                כניסה לסביבת העבודה
+              </a>
+            ) : (
+              <>
+                <button onClick={onSignIn} className="w-full border border-[#1a2540] text-[#8899bb] text-sm font-medium py-2.5 rounded-lg">כניסה</button>
+                <button onClick={onSignUp} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">התחל חינם</button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -169,27 +189,25 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
           {/* Badge */}
           <div className="inline-flex items-center gap-2 mb-8 px-3 py-1.5 rounded-full border border-indigo-500/25 bg-indigo-500/[0.07] text-indigo-400 text-xs font-semibold tracking-wide">
             <Sparkles size={11} />
-            מערכת CRM חכמה מבוססת AI לסוכנויות שיווק
+            מערכת לידים חכמה לעסקים — מבוססת AI
           </div>
 
           {/* Headline */}
           <h1 className="text-[clamp(2.8rem,7vw,5.2rem)] font-black text-white leading-[1.08] tracking-[-0.03em] mb-6">
-            נהל לידים.
+            הפסק לאבד לידים.
             <br />
             <span
               className="text-transparent"
               style={{ backgroundImage: 'linear-gradient(90deg, #818cf8 0%, #a5b4fc 40%, #6366f1 100%)', WebkitBackgroundClip: 'text', backgroundClip: 'text' }}
             >
-              סגור עסקאות.
+              התחל לסגור עסקאות.
             </span>
-            <br />
-            <span className="text-[#3d5080]">צור גדול.</span>
           </h1>
 
           {/* Subheadline */}
           <p className="text-[#6b7fa3] text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
-            RAY CRM — פלטפורמת ניהול לידים עם בינה מלאכותית שמותאמת לעסק שלך.
-            מפייפליין ועד אנליטיקה, הכל במקום אחד.
+            RAY CRM עוקב אחרי כל ליד, מתעדף בשבילך ויודע מתי ואיך לפנות —
+            כדי שאף עסקה לא תיפול בין הכסאות.
           </p>
 
           {/* CTA buttons */}
@@ -197,7 +215,7 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
             <button onClick={onSignUp}
               className="group w-full sm:w-auto flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
               <Rocket size={15} />
-              התחל 14 יום חינם
+              נסה 14 יום בחינם
               <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
             </button>
             <button onClick={onSignIn}
@@ -210,8 +228,8 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
           <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-[#3d5080] text-xs font-medium">
             {[
               { icon: Shield, label: 'ללא כרטיס אשראי' },
-              { icon: Lock, label: 'אבטחה ברמה ארגונית' },
-              { icon: Cpu, label: 'AI מותאם לעסק שלך' },
+              { icon: Cpu,    label: 'AI שמכיר את העסק שלך' },
+              { icon: Lock,   label: 'אבטחה ברמה ארגונית' },
             ].map(({ icon: Icon, label }) => (
               <div key={label} className="flex items-center gap-1.5">
                 <Icon size={12} className="text-indigo-500/60" />
@@ -318,10 +336,10 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
 /* ─── Logos / Social Proof ───────────────────────────────────────────────────── */
 function SocialProof() {
   const stats = [
-    { value: 500, suffix: '+', label: 'לידים מנוהלים' },
-    { value: 98,  suffix: '%', label: 'שביעות רצון לקוחות' },
-    { value: 3,   suffix: '×', label: 'שיפור בהמרות' },
-    { value: 14,  suffix: '',  label: 'יום ניסיון חינם' },
+    { value: 3,   suffix: '×', label: 'יותר עסקאות סגורות' },
+    { value: 80,  suffix: '%', label: 'פחות זמן על ניירת' },
+    { value: 98,  suffix: '%', label: 'שביעות רצון משתמשים' },
+    { value: 14,  suffix: '',  label: 'יום ניסיון בחינם' },
   ];
 
   return (
@@ -348,44 +366,44 @@ function Features() {
     {
       icon: GitBranch,
       accent: '#6366f1',
-      title: 'פייפליין Kanban',
-      desc: 'ניהול ויזואלי של תהליך המכירה. גרור לידים בין שלבים, ראה ציון AI ועקוב אחר פוטנציאל הכנסה.',
+      title: 'פייפליין חכם ודינמי',
+      desc: 'ראה בשנייה אחת איפה כל ליד עומד. גרור בין שלבים, עקוב אחר שווי הפייפליין ופעל לפי סדר עדיפויות.',
       tag: 'Pipeline',
     },
     {
       icon: Brain,
       accent: '#8b5cf6',
-      title: 'עוזר AI מותאם אישית',
-      desc: 'ה-AI לומד את העסק שלך — תחום, לקוחות, תהליך מכירה — ונותן המלצות מדויקות לכל ליד.',
+      title: 'AI שמכיר את העסק שלך',
+      desc: 'הבינה המלאכותית לומדת את הלקוחות שלך, מדרגת כל ליד לפי פוטנציאל ומציעה את הפעולה הנכונה בזמן הנכון.',
       tag: 'AI',
     },
     {
-      icon: BarChart3,
+      icon: Mail,
       accent: '#10b981',
-      title: 'אנליטיקה בזמן אמת',
-      desc: 'דוחות חיים על ביצועי הצוות, מקורות לידים, שיעורי המרה ופוטנציאל הכנסה.',
-      tag: 'Analytics',
+      title: 'מיילים ו-WhatsApp חכמים',
+      desc: 'כתוב הודעה מותאמת אישית לכל ליד בלחיצה אחת — ה-AI קורא את ההיסטוריה ויודע בדיוק מה לכתוב.',
+      tag: 'Outreach',
     },
     {
       icon: CheckSquare,
       accent: '#3b82f6',
-      title: 'ניהול משימות חכם',
-      desc: 'צור ועקוב אחר משימות מקושרות לכל ליד. קבל התראות ותעדף עבודה בצורה אוטומטית.',
+      title: 'אף פולו-אפ לא נשכח',
+      desc: 'משימות אוטומטיות, תזכורות חכמות ואזהרות כשליד לא קיבל מענה — כדי שאף עסקה לא תיפול בין הכסאות.',
       tag: 'Tasks',
     },
     {
-      icon: Users,
+      icon: BarChart3,
       accent: '#ec4899',
-      title: 'ניהול צוות',
-      desc: 'הקצה לידים, עקוב אחר ביצועים אישיים וניהל הרשאות גישה בגמישות מלאה.',
-      tag: 'Team',
+      title: 'דוחות שמניעים החלטות',
+      desc: 'מאיפה מגיעים הלידים הכי טובים? מה שיעור ההמרה שלך? ראה את האמת בנתונים ושפר את מה שעובד.',
+      tag: 'Analytics',
     },
     {
-      icon: Megaphone,
+      icon: Users,
       accent: '#f59e0b',
-      title: 'ניהול קריאייטיב',
-      desc: 'עקוב אחר תוכן, קמפיינים ומסירות לכל לקוח. ראה מה ממתין ומה נמסר.',
-      tag: 'Content',
+      title: 'הצוות כולו מסונכרן',
+      desc: 'הקצה לידים, עקוב אחר ביצועי כל נציג ונהל הרשאות — כולם יודעים מה לעשות ולמה.',
+      tag: 'Team',
     },
   ];
 
@@ -400,11 +418,11 @@ function Features() {
             הפלטפורמה
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
-            כלים ארגוניים.<br />
-            <span className="text-[#3d5080]">פשטות של רגע.</span>
+            כל מה שצריך לסגור.<br />
+            <span className="text-[#3d5080]">בלי להסתבך.</span>
           </h2>
           <p className="text-[#6b7fa3] text-base leading-relaxed">
-            מלידים ועד עסקאות סגורות — כל הכלים שסוכנות שיווק צריכה, במקום אחד.
+            מהליד הראשון ועד החתימה — כל הכלים שהעסק שלך צריך, עם AI שעושה את העבודה הכבדה.
           </p>
         </div>
 
@@ -455,22 +473,22 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
     {
       num: '01',
       icon: Building2,
-      title: 'צור סביבת עבודה',
-      desc: 'הרשם תוך 2 דקות, הגדר את סביבת העבודה שלך ועדכן את ה-AI כדי שיכיר את העסק שלך.',
+      title: 'הרשם תוך 2 דקות',
+      desc: 'אין צורך בידע טכני. ספר ל-AI על העסק שלך — תחום, קהל יעד, תהליך מכירה — והמערכת מתכווננת אוטומטית.',
       accent: '#6366f1',
     },
     {
       num: '02',
       icon: Target,
-      title: 'הוסף לידים ונהל אותם',
-      desc: 'ייבא לידים קיימים או הוסף חדשים. ה-AI מנתח ומדרג כל ליד לפי פוטנציאל המרה.',
+      title: 'הכנס את הלידים שלך',
+      desc: 'ייבא לידים קיימים או הוסף חדשים. ה-AI מיד מנתח כל ליד, נותן ציון עדיפות ומציע את הצעד הבא.',
       accent: '#8b5cf6',
     },
     {
       num: '03',
       icon: TrendingUp,
-      title: 'צמח ותסגור יותר עסקאות',
-      desc: 'עקוב אחר כל שלב בפייפליין, קבל המלצות AI ועדכן סטטוסים עד לסגירת העסקה.',
+      title: 'סגור יותר, תהליך פחות',
+      desc: 'קבל התראות חכמות, מיילים ו-WhatsApp מוכנים, ומשימות אוטומטיות — ואתה פשוט מתמקד בלדבר עם הלקוחות.',
       accent: '#10b981',
     },
   ];
@@ -492,10 +510,10 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
             מתחילים
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
-            שלושה שלבים פשוטים
+            מתחילים בפחות מ-5 דקות
           </h2>
           <p className="text-[#6b7fa3] text-base max-w-xl mx-auto">
-            הגדרה מהירה. ללא ידע טכני. ללא כרטיס אשראי.
+            ללא ידע טכני · ללא הגדרות מורכבות · ללא כרטיס אשראי
           </p>
         </div>
 
@@ -542,59 +560,59 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
 function Pricing({ onSignUp }: { onSignUp: () => void }) {
   const plans = [
     {
-      name: 'Starter',
+      name: 'ניסיון חינם',
       price: '0',
       period: '14 יום',
       desc: 'כל התכונות, ללא הגבלה',
       highlight: false,
       features: [
         'עד 50 לידים',
-        'פייפליין Kanban',
-        'עוזר AI',
+        'פייפליין חכם',
+        'עוזר AI בסיסי',
         'ניהול משימות',
         '2 משתמשים',
-        'דוחות בסיסיים',
+        'דוחות ביצועים',
       ],
-      cta: 'התחל ניסיון חינם',
+      cta: 'התחל בחינם — ללא כרטיס',
       ctaClass: 'border border-[#1e2d4a] bg-white/[0.03] hover:bg-white/[0.06] text-white',
     },
     {
       name: 'Pro',
-      price: '299',
+      price: '89',
       period: 'חודש',
-      desc: 'לסוכנויות שרוצות לגדול',
+      desc: 'לעסקים שרוצים לצמוח',
       highlight: true,
       features: [
         'לידים ללא הגבלה',
-        'פייפליין Kanban מלא',
-        'עוזר AI מתקדם + אישיות',
-        'ניהול משימות מלא',
-        '10 משתמשים',
-        'דוחות מתקדמים',
-        'ניהול קריאייטיב',
+        'פייפליין מלא + Kanban',
+        'AI מתקדם + מיילים חכמים',
+        'WhatsApp ומעקב פולו-אפ',
+        'עד 10 משתמשים',
+        'דוחות ואנליטיקה מלאה',
+        'ניהול לקוחות פעילים',
         'אינטגרציות',
-        'תמיכה עדיפה',
+        'תמיכה מועדפת',
       ],
-      cta: 'התחל ב-Pro',
+      cta: 'התחל עם Pro',
       ctaClass: 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_24px_rgba(79,70,229,0.4)]',
     },
     {
       name: 'Enterprise',
-      price: 'בהתאמה',
-      period: '',
-      desc: 'לסוכנויות גדולות',
+      price: '199',
+      period: 'חודש',
+      desc: 'לחברות וצוותים גדולים',
       highlight: false,
       features: [
         'הכל ב-Pro',
         'משתמשים ללא הגבלה',
         'White-label מלא',
         'API גישה מלאה',
-        'Dedicated support',
+        'מנהל חשבון ייעודי',
         'SLA מובטח',
-        'הגדרה מותאמת',
+        'התאמה מלאה לתהליך שלך',
       ],
-      cta: 'צור קשר',
-      ctaClass: 'border border-[#1e2d4a] bg-white/[0.03] hover:bg-white/[0.06] text-white',
+      cta: 'התחל Enterprise',
+      ctaClass: 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_24px_rgba(79,70,229,0.4)]',
     },
   ];
 
@@ -608,10 +626,10 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
             תמחור
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
-            שקוף. פשוט. הוגן.
+            מחיר שמתאים לעסק שלך.
           </h2>
           <p className="text-[#6b7fa3] text-base">
-            ללא הפתעות, ללא חוזים, ניתן לבטל בכל עת
+            ללא הפתעות · ללא חוזים · ניתן לבטל בכל עת
           </p>
         </div>
 
@@ -634,14 +652,14 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                 <h3 className="text-white font-bold text-base mb-1">{plan.name}</h3>
                 <p className="text-[#3d5080] text-xs mb-5">{plan.desc}</p>
                 <div className="flex items-baseline gap-1">
-                  {plan.price !== 'בהתאמה' && <span className="text-[#3d5080] text-sm">₪</span>}
+                  {plan.name !== 'ניסיון חינם' && plan.price !== 'בהתאמה' && <span className="text-[#3d5080] text-sm">₪</span>}
                   <span className="text-4xl font-black text-white tracking-tight">{plan.price}</span>
                   {plan.period && <span className="text-[#3d5080] text-sm">/{plan.period}</span>}
                 </div>
               </div>
 
               <button
-                onClick={plan.name !== 'Enterprise' ? onSignUp : undefined}
+                onClick={onSignUp}
                 className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all mb-6 ${plan.ctaClass}`}>
                 {plan.cta}
               </button>
@@ -690,20 +708,20 @@ function CTABanner({ onSignUp }: { onSignUp: () => void }) {
             </div>
 
             <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.1] tracking-[-0.025em] mb-4">
-              מוכן להתחיל?
+              הפסק לאבד לידים היום.
             </h2>
             <p className="text-[#6b7fa3] text-base mb-8 max-w-lg mx-auto">
-              הצטרף לסוכנויות שמנהלות לידים עם RAY. 14 יום חינם, ללא כרטיס אשראי.
+              הצטרף לעסקים שכבר עובדים עם RAY — ומסגרים יותר עסקאות עם פחות מאמץ.
             </p>
 
             <button onClick={onSignUp}
               className="group inline-flex items-center gap-2.5 px-8 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
               <Rocket size={15} />
-              התחל 14 יום חינם
+              נסה 14 יום בחינם — ללא כרטיס
               <ArrowLeft size={13} className="group-hover:-translate-x-0.5 transition-transform" />
             </button>
 
-            <p className="mt-4 text-[#2a3a55] text-xs">ללא התחייבות · ביטול בכל עת · אין כרטיס אשראי</p>
+            <p className="mt-4 text-[#2a3a55] text-xs">ללא התחייבות · ביטול בכל עת · מתחילים תוך 2 דקות</p>
           </div>
         </div>
       </div>
@@ -726,7 +744,7 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
               <span className="text-white font-bold text-base tracking-tight">RAY CRM</span>
             </div>
             <p className="text-[#3d5080] text-sm leading-relaxed">
-              פלטפורמת CRM חכמה לסוכנויות שיווק. ניהול לידים, AI מותאם, אנליטיקה בזמן אמת.
+              מערכת לידים חכמה לעסקים — מבוססת AI. ניהול לידים, פולו-אפ אוטומטי, סגירת עסקאות מהירה יותר.
             </p>
           </div>
 
@@ -785,10 +803,10 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
 }
 
 /* ─── Page ───────────────────────────────────────────────────────────────────── */
-export default function LandingPage({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin }: LandingPageProps) {
+export default function LandingPage({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }: LandingPageProps) {
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#05070f', color: '#e2e8f0' }}>
-      <Navbar onSignIn={onSignIn} onSignUp={onSignUp} isLoggedIn={isLoggedIn} isSuperAdmin={isSuperAdmin} />
+      <Navbar onSignIn={onSignIn} onSignUp={onSignUp} isLoggedIn={isLoggedIn} isSuperAdmin={isSuperAdmin} workspaceSlug={workspaceSlug} />
       <Hero onSignUp={onSignUp} onSignIn={onSignIn} />
       <SocialProof />
       <Features />

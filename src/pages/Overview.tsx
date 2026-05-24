@@ -252,9 +252,9 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
     <div className="space-y-5" dir="rtl">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
+          <h1 className="text-lg md:text-xl font-black text-slate-900 flex items-center gap-2">
             <BarChart2 size={20} className="text-indigo-500" /> דוחות ואנליטיקה
           </h1>
           <p className="text-sm text-slate-400 mt-0.5">{filtered.length} לידים בטווח הנבחר</p>
@@ -274,7 +274,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           </div>
 
           {/* Export buttons */}
-          <div className="flex gap-1.5">
+          <div className="flex gap-1.5 flex-wrap">
             <button onClick={()=>exportLeads(filtered)}
               className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
               <Download size={12}/> לידים CSV
@@ -292,6 +292,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
       </div>
 
       {/* ── Tabs ───────────────────────────────────────────────────────────── */}
+      <div className="overflow-x-auto pb-1">
       <div className="flex gap-1 bg-slate-100 rounded-2xl p-1 w-fit">
         {([
           { key:'overview', label:'סקירה כללית',  icon: PieChartIcon },
@@ -306,6 +307,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
             <t.icon size={13}/>{t.label}
           </button>
         ))}
+      </div>
       </div>
 
       {/* ══ TAB: OVERVIEW ══════════════════════════════════════════════════════ */}

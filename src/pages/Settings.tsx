@@ -3,9 +3,9 @@ import {
   User, Palette, Database, Info, Save, RefreshCw, Download,
   Upload, CheckCircle2, AlertTriangle, Shield, Zap, Bell,
   ChevronLeft, Monitor, Moon, Globe, Users2, Copy, Link,
-  Mail, KeyRound, Lock, Unlock, Eye, EyeOff,
+  Mail, KeyRound, Lock, Eye, EyeOff, Users, Send, Trash2,
 } from 'lucide-react';
-import { collection, getDocs, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import {
   sendPasswordResetEmail,
   updatePassword,
@@ -13,7 +13,8 @@ import {
   EmailAuthProvider,
 } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
-import type { Lead, AppSettings, Page, UserProfile } from '../types';
+import type { Lead, AppSettings, Page, UserProfile, TeamMember } from '../types';
+import TeamManagement from './TeamManagement';
 
 interface SettingsProps {
   settings: AppSettings;
@@ -24,9 +25,16 @@ interface SettingsProps {
   onToast: (msg: string, type?: 'success' | 'error' | 'info') => void;
   isAdmin?: boolean;
   currentUserUid?: string;
+  // Team management (merged from Team page)
+  team?: TeamMember[];
+  onUpdateRole?: (id: string, role: 'מנהל' | 'סוכן') => void;
+  onInvite?: (email: string, role: 'מנהל' | 'סוכן') => void;
+  onRemoveMember?: (id: string) => void;
+  // Email integration
+  workspaceId?: string; // null/undefined = admin (uses system/emailConfig)
 }
 
-type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'users' | 'security' | 'password';
+type Section = 'profile' | 'appearance' | 'notifications' | 'data' | 'about' | 'security' | 'password' | 'team' | 'email';
 
 const ALL_PAGES: { page: Page; label: string }[] = [
   { page: 'home',      label: 'לוח בקרה' },
@@ -50,11 +58,13 @@ const ACCENT_COLORS: { key: AppSettings['accentColor']; label: string; swatch: s
 
 export default function Settings({
   settings, leads, onSettingsChange, onImportLeads, onResetData, onToast,
-  isAdmin = false,
+  isAdmin = false, team = [], onUpdateRole, onInvite, onRemoveMember, workspaceId,
 }: SettingsProps) {
   const BASE_SECTIONS: { key: Section; label: string; desc: string; Icon: React.ElementType }[] = [
     { key: 'profile',       label: 'פרופיל',        desc: 'שם משתמש ותפקיד',         Icon: User    },
     { key: 'password',      label: 'שינוי סיסמה',   desc: 'עדכון הסיסמה שלך',         Icon: Lock    },
+    { key: 'team',          label: 'ניהול צוות',    desc: 'חברי צוות והזמנות',         Icon: Users   },
+    { key: 'email',         label: 'חיבור אימייל',  desc: 'שלח מיילים מהמערכת',       Icon: Mail    },
     { key: 'appearance',    label: 'מראה',           desc: 'ערכת נושא ותצוגה',         Icon: Palette },
     { key: 'notifications', label: 'התראות',         desc: 'הגדרות התראות',            Icon: Bell    },
     { key: 'data',          label: 'נתונים',         desc: 'ייצוא, ייבוא ואיפוס',       Icon: Database},
@@ -64,8 +74,7 @@ export default function Settings({
   const SECTIONS = isAdmin
     ? [
         ...BASE_SECTIONS,
-        { key: 'users'    as Section, label: 'משתמשים', desc: 'ניהול משתמשים והרשאות', Icon: Users2  },
-        { key: 'security' as Section, label: 'אבטחה',   desc: 'הגדרות גישה ואימות',    Icon: Shield  },
+        { key: 'security' as Section, label: 'אבטחה', desc: 'הגדרות גישה ואימות', Icon: Shield },
       ]
     : BASE_SECTIONS;
 
@@ -115,27 +124,83 @@ export default function Settings({
     }
   };
 
-  // ── Security section state ──
-  const [bypassAuth,        setBypassAuth]        = useState(false);
-  const [bypassAuthLoading, setBypassAuthLoading] = useState(false);
+  // ── Email config state ──
+  const [emailServiceId,   setEmailServiceId]   = useState('');
+  const [emailTemplateId,  setEmailTemplateId]  = useState('');
+  const [emailInviteTmpl,  setEmailInviteTmpl]  = useState('');
+  const [emailPublicKey,   setEmailPublicKey]   = useState('');
+  const [emailFromName,    setEmailFromName]    = useState('');
+  const [emailLoading,     setEmailLoading]     = useState(false);
+  const [emailTesting,     setEmailTesting]     = useState(false);
+  const [emailSaved,       setEmailSaved]       = useState(false);
 
   useEffect(() => {
-    if (!isAdmin) return;
-    getDoc(doc(db, 'app-settings', 'auth'))
-      .then(snap => { if (snap.exists()) setBypassAuth(snap.data().bypassAuth === true); })
-      .catch(() => {});
-  }, [isAdmin]);
+    if (section !== 'email') return;
+    const docRef = workspaceId
+      ? doc(db, 'workspaces', workspaceId)
+      : doc(db, 'system', 'emailConfig');
+    getDoc(docRef).then(snap => {
+      if (!snap.exists()) return;
+      const d = workspaceId ? snap.data().emailConfig ?? {} : snap.data();
+      setEmailServiceId(d.serviceId  ?? '');
+      setEmailTemplateId(d.templateId ?? '');
+      setEmailInviteTmpl(d.inviteTemplateId ?? '');
+      setEmailPublicKey(d.publicKey  ?? '');
+      setEmailFromName(d.fromName   ?? '');
+    }).catch(() => {});
+  }, [section, workspaceId]);
 
-  const handleToggleBypassAuth = async (val: boolean) => {
-    setBypassAuthLoading(true);
+  const handleSaveEmail = async () => {
+    setEmailLoading(true);
     try {
-      await setDoc(doc(db, 'app-settings', 'auth'), { bypassAuth: val }, { merge: true });
-      setBypassAuth(val);
-      onToast(val ? 'כניסה ללא אימות הופעלה' : 'כניסה ללא אימות בוטלה', 'info');
+      const config = {
+        serviceId: emailServiceId.trim(),
+        templateId: emailTemplateId.trim(),
+        inviteTemplateId: emailInviteTmpl.trim(),
+        publicKey: emailPublicKey.trim(),
+        fromName: emailFromName.trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      if (workspaceId) {
+        await updateDoc(doc(db, 'workspaces', workspaceId), { emailConfig: config });
+      } else {
+        await setDoc(doc(db, 'system', 'emailConfig'), config, { merge: true });
+      }
+      setEmailSaved(true);
+      onToast('הגדרות האימייל נשמרו ✓', 'success');
+      setTimeout(() => setEmailSaved(false), 3000);
     } catch {
-      onToast('שגיאה בעדכון הגדרת האבטחה', 'error');
+      onToast('שגיאה בשמירת הגדרות האימייל', 'error');
     } finally {
-      setBypassAuthLoading(false);
+      setEmailLoading(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!emailServiceId || !emailPublicKey || !emailTemplateId) {
+      onToast('מלא את כל שדות ה-EmailJS לפני בדיקה', 'error');
+      return;
+    }
+    setEmailTesting(true);
+    try {
+      const emailjs = await import('@emailjs/browser');
+      await emailjs.default.send(
+        emailServiceId,
+        emailTemplateId,
+        {
+          to_email:  auth.currentUser?.email ?? '',
+          to_name:   emailFromName || 'Test',
+          subject:   'RAY CRM — בדיקת חיבור אימייל',
+          message:   'החיבור לאימייל עובד בהצלחה! 🎉',
+          from_name: emailFromName || 'RAY CRM',
+        },
+        emailPublicKey,
+      );
+      onToast('מייל בדיקה נשלח בהצלחה ✓', 'success');
+    } catch (e) {
+      onToast('שגיאה בשליחת מייל בדיקה: ' + (e instanceof Error ? e.message : String(e)), 'error');
+    } finally {
+      setEmailTesting(false);
     }
   };
 
@@ -151,7 +216,7 @@ export default function Settings({
   const [inviteLoading, setInviteLoading] = useState(false);
 
   useEffect(() => {
-    if (section === 'users' && isAdmin) {
+    if (section === 'team' && isAdmin) {
       setUsersLoading(true);
       getDocs(collection(db, 'users'))
         .then(snap => {
@@ -284,6 +349,26 @@ export default function Settings({
       onToast('הרשאות עודכנו ✓', 'success');
     } catch {
       onToast('שגיאה בעדכון הרשאות', 'error');
+    }
+  };
+
+  /* ── Delete user ── */
+  const [confirmDeleteUid, setConfirmDeleteUid] = useState<string | null>(null);
+  const [deletingUid,      setDeletingUid]      = useState<string | null>(null);
+
+  const handleDeleteUser = async (uid: string) => {
+    setDeletingUid(uid);
+    try {
+      // Remove user profile from Firestore
+      await deleteDoc(doc(db, 'users', uid));
+      // Also clear workspaceId if user belonged to a workspace
+      setUsers(prev => prev.filter(u => u.uid !== uid));
+      onToast('המשתמש נמחק בהצלחה ✓', 'success');
+    } catch {
+      onToast('שגיאה במחיקת המשתמש', 'error');
+    } finally {
+      setDeletingUid(null);
+      setConfirmDeleteUid(null);
     }
   };
 
@@ -604,6 +689,361 @@ export default function Settings({
           </>
         )}
 
+        {/* ── TEAM ── */}
+        {section === 'team' && (
+          <>
+            <SectionHeader icon={<Users size={18} />} title="צוות ומשתמשים" desc="חברי צוות, הזמנות, הרשאות וסטטיסטיקות" />
+
+            {/* ── TeamManagement (members / invites / stats / assignment) ── */}
+            <TeamManagement
+              team={team}
+              leads={leads}
+              onUpdateRole={onUpdateRole ?? (() => {})}
+              onInvite={onInvite ?? (() => {})}
+              onRemoveMember={onRemoveMember}
+            />
+
+            {/* ── Registered users + invite link (admin only) ── */}
+            {isAdmin && (
+              <div className="space-y-4 mt-6">
+                <div className="flex items-center gap-2 justify-end">
+                  <h3 className="font-bold text-slate-700">משתמשים רשומים והרשאות</h3>
+                  <Users2 size={16} className="text-slate-400" />
+                </div>
+
+                {/* Create Invite link */}
+                <Card>
+                  <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
+                    <span>יצירת קישור הזמנה</span>
+                    <Link size={15} className="text-slate-400" />
+                  </div>
+                  <div className="space-y-4">
+                    <FormField label="אימייל מוזמן">
+                      <input
+                        type="email"
+                        value={inviteEmail}
+                        onChange={e => setInviteEmail(e.target.value)}
+                        className={inputCls}
+                        placeholder="user@example.com"
+                        dir="ltr"
+                      />
+                    </FormField>
+                    <FormField label="תפקיד">
+                      <select
+                        value={inviteRole}
+                        onChange={e => setInviteRole(e.target.value as 'admin' | 'agent')}
+                        className={inputCls}
+                      >
+                        <option value="agent">סוכן</option>
+                        <option value="admin">מנהל</option>
+                      </select>
+                    </FormField>
+                    <div>
+                      <div className="text-sm font-medium text-slate-700 mb-2 text-right">עמודים מורשים</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {ALL_PAGES.map(({ page, label }) => (
+                          <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
+                            <span className="text-xs text-slate-600">{label}</span>
+                            <input
+                              type="checkbox"
+                              checked={invitePages.includes(page)}
+                              onChange={e => {
+                                if (e.target.checked) setInvitePages(prev => [...prev, page]);
+                                else setInvitePages(prev => prev.filter(p => p !== page));
+                              }}
+                              className="w-4 h-4 rounded accent-indigo-600"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        onClick={handleCreateInvite}
+                        disabled={inviteLoading}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors"
+                      >
+                        <Link size={14} />
+                        {inviteLoading ? 'יוצר...' : 'צור קישור הזמנה'}
+                      </button>
+                    </div>
+                    {inviteLink && (
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                        <div className="text-xs font-semibold text-indigo-700 mb-2 text-right">קישור הזמנה:</div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(inviteLink); onToast('הקישור הועתק ✓', 'success'); }}
+                            className="flex-shrink-0 p-2 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+                          >
+                            <Copy size={14} className="text-indigo-600" />
+                          </button>
+                          <input
+                            readOnly value={inviteLink}
+                            className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-indigo-800 truncate"
+                            dir="ltr"
+                            onClick={e => (e.target as HTMLInputElement).select()}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+
+                {/* Users list */}
+                <Card>
+                  <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
+                    <span>משתמשים רשומים</span>
+                    <Users2 size={15} className="text-slate-400" />
+                  </div>
+                  {usersLoading ? (
+                    <div className="flex justify-center py-8">
+                      <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : users.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-right py-4">אין משתמשים רשומים עדיין</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {users.map(u => (
+                        <div key={u.uid} className="border border-slate-100 rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setConfirmDeleteUid(u.uid)}
+                                className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 border border-red-200 hover:border-red-300 rounded-lg px-2.5 py-1.5 transition-colors"
+                                title="מחק משתמש"
+                              >
+                                <Trash2 size={12} />
+                                <span>מחק</span>
+                              </button>
+                              <button
+                                onClick={() => handlePasswordReset(u.email)}
+                                className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-300 rounded-lg px-2.5 py-1.5 transition-colors"
+                              >
+                                <KeyRound size={12} />
+                                <span>שחזור סיסמה</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (editingUid === u.uid) { setEditingUid(null); }
+                                  else { setEditingUid(u.uid); setEditPages([...u.allowedPages]); }
+                                }}
+                                className="flex items-center gap-1 text-xs text-white bg-slate-700 hover:bg-slate-600 rounded-lg px-2.5 py-1.5 transition-colors"
+                              >
+                                {editingUid === u.uid ? 'ביטול' : 'ערוך הרשאות'}
+                              </button>
+                            </div>
+                            <div className="text-right">
+                              <div className="flex items-center gap-2 justify-end">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+                                  {u.role === 'admin' ? 'מנהל' : 'סוכן'}
+                                </span>
+                                <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
+                              </div>
+                              <div className="flex items-center gap-1 justify-end mt-0.5">
+                                <Mail size={10} className="text-slate-400" />
+                                <p className="text-xs text-slate-400" dir="ltr">{u.email}</p>
+                              </div>
+                            </div>
+                          </div>
+                          {editingUid === u.uid && (
+                            <div className="mt-3 pt-3 border-t border-slate-100">
+                              <div className="text-xs font-semibold text-slate-600 mb-2 text-right">עמודים מורשים:</div>
+                              <div className="grid grid-cols-3 gap-2 mb-3">
+                                {ALL_PAGES.map(({ page, label }) => (
+                                  <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
+                                    <span className="text-xs text-slate-600">{label}</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={editPages.includes(page)}
+                                      onChange={e => {
+                                        if (e.target.checked) setEditPages(prev => [...prev, page]);
+                                        else setEditPages(prev => prev.filter(p => p !== page));
+                                      }}
+                                      className="w-4 h-4 rounded accent-indigo-600"
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                              <div className="flex justify-end">
+                                <button
+                                  onClick={() => handleSaveUserPages(u.uid)}
+                                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                                >
+                                  <CheckCircle2 size={12} />
+                                  שמור הרשאות
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
+            )}
+
+            {/* ── Confirm Delete Dialog ── */}
+            {confirmDeleteUid && (() => {
+              const target = users.find(u => u.uid === confirmDeleteUid);
+              if (!target) return null;
+              return (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-right" dir="rtl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                        <Trash2 size={18} className="text-red-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-800">מחיקת משתמש</h3>
+                        <p className="text-xs text-slate-500">פעולה זו אינה ניתנת לביטול</p>
+                      </div>
+                    </div>
+                    <p className="text-sm text-slate-600 mb-6">
+                      האם למחוק את{' '}
+                      <span className="font-semibold text-slate-800">{target.firstName} {target.lastName}</span>
+                      {' '}({target.email})?
+                      <br />
+                      <span className="text-xs text-slate-400 mt-1 block">המשתמש יאבד גישה מיידית למערכת.</span>
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setConfirmDeleteUid(null)}
+                        className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
+                      >
+                        ביטול
+                      </button>
+                      <button
+                        onClick={() => handleDeleteUser(confirmDeleteUid)}
+                        disabled={deletingUid === confirmDeleteUid}
+                        className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        {deletingUid === confirmDeleteUid
+                          ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />מוחק...</>
+                          : <><Trash2 size={14} />מחק משתמש</>
+                        }
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </>
+        )}
+
+        {/* ── EMAIL ── */}
+        {section === 'email' && (
+          <>
+            <SectionHeader icon={<Mail size={18} />} title="חיבור אימייל" desc="חבר את האימייל שלך כדי לשלוח מיילים ישירות מהמערכת" />
+
+            {/* How it works */}
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-right">
+              <p className="font-semibold text-indigo-800 text-sm mb-1 flex items-center gap-2 justify-end">
+                <Mail size={14} />
+                כיצד עובד החיבור?
+              </p>
+              <ol className="text-xs text-indigo-700 space-y-1 list-decimal list-inside text-right">
+                <li>צור חשבון חינמי ב-<a href="https://www.emailjs.com" target="_blank" rel="noreferrer" className="underline font-medium">emailjs.com</a></li>
+                <li>הוסף Service (Gmail / Outlook / SMTP) — קבל Service ID</li>
+                <li>צור Email Template — קבל Template ID</li>
+                <li>העתק את ה-Public Key מ-Account → API Keys</li>
+                <li>הכנס את הפרטים כאן ולחץ שמור</li>
+              </ol>
+            </div>
+
+            <Card>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">Service ID</label>
+                    <input
+                      value={emailServiceId}
+                      onChange={e => setEmailServiceId(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      placeholder="service_xxxxxxx"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">Public Key</label>
+                    <input
+                      value={emailPublicKey}
+                      onChange={e => setEmailPublicKey(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      placeholder="xxxxxxxxxxxxxxxxxxxx"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">Template ID (מיילים כלליים)</label>
+                    <input
+                      value={emailTemplateId}
+                      onChange={e => setEmailTemplateId(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      placeholder="template_xxxxxxx"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">Template ID (הזמנות לצוות)</label>
+                    <input
+                      value={emailInviteTmpl}
+                      onChange={e => setEmailInviteTmpl(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      placeholder="template_xxxxxxx"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5 text-right">שם השולח (From Name)</label>
+                    <input
+                      value={emailFromName}
+                      onChange={e => setEmailFromName(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right"
+                      placeholder="לדוגמה: RAY Digital Agency"
+                    />
+                  </div>
+                </div>
+
+                {/* Status indicator */}
+                {(emailServiceId && emailPublicKey && emailTemplateId) ? (
+                  <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-right">
+                    <CheckCircle2 size={15} className="text-emerald-500 flex-shrink-0" />
+                    <span className="text-sm font-semibold text-emerald-700">EmailJS מוגדר ומחובר</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-right">
+                    <AlertTriangle size={15} className="text-amber-500 flex-shrink-0" />
+                    <span className="text-sm text-amber-700">מלא את כל השדות כדי להפעיל שליחת מיילים</span>
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={handleTestEmail}
+                    disabled={emailTesting || !emailServiceId || !emailPublicKey || !emailTemplateId}
+                    className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 text-slate-700 text-sm font-semibold rounded-xl transition-colors"
+                  >
+                    <Send size={14} />
+                    {emailTesting ? 'שולח...' : 'שלח מייל בדיקה'}
+                  </button>
+                  <button
+                    onClick={handleSaveEmail}
+                    disabled={emailLoading}
+                    className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-xl transition-colors ${
+                      emailSaved
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    } disabled:opacity-50`}
+                  >
+                    {emailSaved ? <><CheckCircle2 size={14} />נשמר!</> : <><Save size={14} />שמור הגדרות</>}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          </>
+        )}
+
         {/* ── ABOUT ── */}
         {section === 'about' && (
           <>
@@ -661,187 +1101,6 @@ export default function Settings({
           </>
         )}
 
-        {/* ── USERS (admin only) ── */}
-        {section === 'users' && isAdmin && (
-          <>
-            <SectionHeader icon={<Users2 size={18} />} title="ניהול משתמשים" desc="הרשאות, הזמנות ואיפוס סיסמאות" />
-
-            {/* Create Invite */}
-            <Card>
-              <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
-                <span>יצירת קישור הזמנה</span>
-                <Link size={15} className="text-slate-400" />
-              </div>
-              <div className="space-y-4">
-                <FormField label="אימייל מוזמן">
-                  <input
-                    type="email"
-                    value={inviteEmail}
-                    onChange={e => setInviteEmail(e.target.value)}
-                    className={inputCls}
-                    placeholder="user@example.com"
-                    dir="ltr"
-                  />
-                </FormField>
-                <FormField label="תפקיד">
-                  <select
-                    value={inviteRole}
-                    onChange={e => setInviteRole(e.target.value as 'admin' | 'agent')}
-                    className={inputCls}
-                  >
-                    <option value="agent">סוכן</option>
-                    <option value="admin">מנהל</option>
-                  </select>
-                </FormField>
-                <div>
-                  <div className="text-sm font-medium text-slate-700 mb-2 text-right">עמודים מורשים</div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {ALL_PAGES.map(({ page, label }) => (
-                      <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
-                        <span className="text-xs text-slate-600">{label}</span>
-                        <input
-                          type="checkbox"
-                          checked={invitePages.includes(page)}
-                          onChange={e => {
-                            if (e.target.checked) setInvitePages(prev => [...prev, page]);
-                            else setInvitePages(prev => prev.filter(p => p !== page));
-                          }}
-                          className="w-4 h-4 rounded accent-indigo-600"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <button
-                    onClick={handleCreateInvite}
-                    disabled={inviteLoading}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors"
-                  >
-                    <Link size={14} />
-                    {inviteLoading ? 'יוצר...' : 'צור קישור הזמנה'}
-                  </button>
-                </div>
-
-                {inviteLink && (
-                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
-                    <div className="text-xs font-semibold text-indigo-700 mb-2 text-right">קישור הזמנה:</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => { navigator.clipboard.writeText(inviteLink); onToast('הקישור הועתק ✓', 'success'); }}
-                        className="flex-shrink-0 p-2 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
-                        title="העתק"
-                      >
-                        <Copy size={14} className="text-indigo-600" />
-                      </button>
-                      <input
-                        readOnly
-                        value={inviteLink}
-                        className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-indigo-800 truncate"
-                        dir="ltr"
-                        onClick={e => (e.target as HTMLInputElement).select()}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Card>
-
-            {/* Users list */}
-            <Card>
-              <div className="font-semibold text-slate-700 mb-4 text-right flex items-center gap-2 justify-end">
-                <span>משתמשים רשומים</span>
-                <Users2 size={15} className="text-slate-400" />
-              </div>
-
-              {usersLoading ? (
-                <div className="flex justify-center py-8">
-                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : users.length === 0 ? (
-                <p className="text-sm text-slate-400 text-right py-4">אין משתמשים רשומים עדיין</p>
-              ) : (
-                <div className="space-y-3">
-                  {users.map(u => (
-                    <div key={u.uid} className="border border-slate-100 rounded-xl p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handlePasswordReset(u.email)}
-                            className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-300 rounded-lg px-2.5 py-1.5 transition-colors"
-                            title="שלח מייל איפוס סיסמה"
-                          >
-                            <KeyRound size={12} />
-                            <span>שחזור סיסמה</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (editingUid === u.uid) {
-                                setEditingUid(null);
-                              } else {
-                                setEditingUid(u.uid);
-                                setEditPages([...u.allowedPages]);
-                              }
-                            }}
-                            className="flex items-center gap-1 text-xs text-white bg-slate-700 hover:bg-slate-600 rounded-lg px-2.5 py-1.5 transition-colors"
-                          >
-                            {editingUid === u.uid ? 'ביטול' : 'ערוך הרשאות'}
-                          </button>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center gap-2 justify-end">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {u.role === 'admin' ? 'מנהל' : 'סוכן'}
-                            </span>
-                            <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
-                          </div>
-                          <div className="flex items-center gap-1 justify-end mt-0.5">
-                            <Mail size={10} className="text-slate-400" />
-                            <p className="text-xs text-slate-400" dir="ltr">{u.email}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {editingUid === u.uid && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <div className="text-xs font-semibold text-slate-600 mb-2 text-right">עמודים מורשים:</div>
-                          <div className="grid grid-cols-3 gap-2 mb-3">
-                            {ALL_PAGES.map(({ page, label }) => (
-                              <label key={page} className="flex items-center gap-2 cursor-pointer select-none justify-end">
-                                <span className="text-xs text-slate-600">{label}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={editPages.includes(page)}
-                                  onChange={e => {
-                                    if (e.target.checked) setEditPages(prev => [...prev, page]);
-                                    else setEditPages(prev => prev.filter(p => p !== page));
-                                  }}
-                                  className="w-4 h-4 rounded accent-indigo-600"
-                                />
-                              </label>
-                            ))}
-                          </div>
-                          <div className="flex justify-end">
-                            <button
-                              onClick={() => handleSaveUserPages(u.uid)}
-                              className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
-                            >
-                              <CheckCircle2 size={12} />
-                              שמור הרשאות
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-          </>
-        )}
 
         {/* ── CHANGE PASSWORD ── */}
         {section === 'password' && (
@@ -936,48 +1195,35 @@ export default function Settings({
 
             <Card>
               <div className="text-right mb-5">
-                <p className="font-semibold text-slate-700 mb-1">כניסה ללא אימות</p>
-                <p className="text-sm text-slate-400">כשמופעל, כל אחד שיגיע לאפליקציה יוכל להיכנס ישירות מבלי להזין שם משתמש וסיסמה</p>
+                <p className="font-semibold text-slate-700 mb-1">כניסה ללא אימות (Dev Mode)</p>
+                <p className="text-sm text-slate-400">פיצ'ר זה פעיל <strong>אוטומטית</strong> בסביבת פיתוח מקומית (localhost) בלבד — ללא צורך בהגדרה כאן</p>
               </div>
 
-              <div className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${bypassAuth ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
-                <button
-                  onClick={() => handleToggleBypassAuth(!bypassAuth)}
-                  disabled={bypassAuthLoading}
-                  className={`relative w-12 h-6 rounded-full transition-all flex-shrink-0 ${bypassAuth ? 'bg-amber-400' : 'bg-slate-300'} ${bypassAuthLoading ? 'opacity-50' : ''}`}
-                >
-                  <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${bypassAuth ? 'left-6' : 'left-0.5'}`} />
-                </button>
-                <div className="text-right flex items-center gap-3">
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-right">
+                <div className="flex items-start gap-2">
+                  <Info size={16} className="text-blue-500 flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-semibold text-slate-800 text-sm">
-                      {bypassAuth ? 'כניסה ללא אימות — פעיל' : 'כניסה ללא אימות — כבוי'}
+                    <p className="text-sm font-semibold text-blue-800 mb-1">הגדרת Dev Mode</p>
+                    <p className="text-xs text-blue-700 leading-relaxed">
+                      כאשר האפליקציה רצה על <code className="bg-blue-100 px-1 rounded">localhost</code> ואין משתמש מחובר, המערכת מאפשרת כניסה ישירה לצרכי פיתוח. בסביבת Production (ray-crm-app.web.app) נדרש אימות תמיד.
                     </p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {bypassAuth ? 'המערכת פתוחה לכולם ללא התחברות' : 'נדרש אימות עם שם משתמש וסיסמה'}
-                    </p>
+                    <p className="text-xs text-blue-600 mt-2 font-medium">⚙️ לשינוי התנהגות זו — ערוך את קובץ App.tsx שורה: const bypassAuth = isLocalhost && !user</p>
                   </div>
-                  {bypassAuth
-                    ? <Unlock size={20} className="text-amber-500 flex-shrink-0" />
-                    : <Lock    size={20} className="text-emerald-500 flex-shrink-0" />
-                  }
                 </div>
               </div>
 
-              {bypassAuth && (
-                <div className="mt-4 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 text-right">
-                  <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-700">
-                    <strong>אזהרה:</strong> כניסה ללא אימות מאפשרת לכל מי שיש לו את קישור האפליקציה לגשת לכל הנתונים. השתמש בזה רק בסביבת פיתוח או רשת פנימית מאובטחת.
-                  </p>
-                </div>
-              )}
+              <div className="mt-4 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 text-right">
+                <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-700">
+                  <strong>אזהרה:</strong> לעולם אל תפרוס ל-Production ללא אימות. Firestore Security Rules חייבים לדרוש auth בסביבת ייצור.
+                </p>
+              </div>
             </Card>
           </>
         )}
 
         {/* ── Save Button ── */}
-        {section !== 'data' && section !== 'about' && section !== 'users' && section !== 'security' && section !== 'password' && (
+        {section !== 'data' && section !== 'about' && section !== 'users' && section !== 'security' && section !== 'password' && section !== 'team' && section !== 'email' && (
           <div className="flex justify-start">
             <button
               onClick={handleSave}

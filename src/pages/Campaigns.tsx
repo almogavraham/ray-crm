@@ -216,8 +216,8 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[95vh] sm:max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <h2 className="font-black text-lg text-slate-800">{initial ? 'עריכת קמפיין' : 'קמפיין חדש'}</h2>
@@ -475,7 +475,7 @@ export default function Campaigns() {
       {/* ── Page header ────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-black text-slate-800">ניהול קמפיינים</h1>
+          <h1 className="text-xl md:text-2xl font-black text-slate-800">ניהול קמפיינים</h1>
           <p className="text-sm text-slate-500 mt-0.5">מעקב על ביצועי פרסום, תקציב ו-ROI בזמן אמת</p>
         </div>
         <button
@@ -529,7 +529,7 @@ export default function Campaigns() {
         </div>
 
         {/* Status filter */}
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-x-auto">
           {(['all', 'active', 'paused', 'ended', 'draft'] as const).map(s => (
             <button
               key={s}

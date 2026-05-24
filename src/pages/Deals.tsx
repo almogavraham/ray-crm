@@ -767,6 +767,417 @@ function MediaTab({ project, onSave }: { project: Project; onSave: (p: Project) 
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   ACTIVITY TAB
+═══════════════════════════════════════════════════════════════════════════ */
+function ActivityTab({ project, onSave, currentUser, lead }: {
+  project: Project; onSave: (p: Project) => void; currentUser: string; lead: Lead;
+}) {
+  const [newLog, setNewLog]     = useState('');
+  const [logType, setLogType]   = useState<ActivityType>('note');
+  const [filter, setFilter]     = useState<ActivityType | 'all'>('all');
+  const [aiLoading, setAiLoading]   = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [meetingPrep, setMeetingPrep]   = useState<string | null>(null);
+  const [meetingLoading, setMeetingLoading] = useState(false);
+
+  const log = project.activityLog ?? [];
+  const lastContact = log[0] ?? null;
+  const daysSince = lastContact
+    ? Math.floor((Date.now() - new Date(lastContact.timestamp).getTime()) / 86_400_000)
+    : null;
+
+  function addLog() {
+    if (!newLog.trim()) return;
+    const entry: ActivityEntry = {
+      id: Date.now().toString(),
+      type: logType,
+      text: newLog.trim(),
+      author: currentUser,
+      timestamp: new Date().toISOString(),
+    };
+    const updated = { ...project, activityLog: [entry, ...log], updatedAt: new Date().toISOString() };
+    onSave(updated);
+    setNewLog('');
+    suggestNextAction(entry, updated);
+  }
+
+  async function suggestNextAction(entry: ActivityEntry, updated: Project) {
+    setAiSuggestion(null);
+    setAiLoading(true);
+    try {
+      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const recent = (updated.activityLog ?? []).slice(0, 5).map(e => `${e.type}: ${e.text}`).join('\n');
+      const res = await client.messages.create({
+        model: 'claude-opus-4-5', max_tokens: 150,
+        messages: [{ role: 'user', content: `CRM. לקוח: ${lead.company}. רשמתי: "${entry.type}: ${entry.text}". היסטוריה:\n${recent}\n\nהצע פעולה אחת קצרה (משפט אחד) שאעשה עכשיו. בעברית בלבד.` }],
+      });
+      setAiSuggestion((res.content[0] as { text: string }).text.trim());
+    } catch { /* silent */ } finally { setAiLoading(false); }
+  }
+
+  async function generateMeetingPrep() {
+    setMeetingLoading(true); setMeetingPrep(null);
+    try {
+      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const recent   = log.slice(0, 10).map(e => `[${e.type}] ${e.text}`).join('\n');
+      const openTasks = (project.tasks ?? []).filter(t => !t.completed).map(t => t.title).join(', ');
+      const sols      = (project.solutions ?? []).map(s => `${s.title}(${s.status})`).join(', ');
+      const res = await client.messages.create({
+        model: 'claude-opus-4-5', max_tokens: 500,
+        messages: [{ role: 'user', content:
+          `אתה מכין אותי לפגישה עם לקוח: ${lead.company} (${lead.contactName}).\nהיסטוריה אחרונה:\n${recent || 'אין'}\nמשימות פתוחות: ${openTasks || 'אין'}\nפתרונות: ${sols || 'אין'}\n\nהכן לפגישה:\n📋 סיכום מאז הפגישה האחרונה (2-3 נקודות)\n✅ מה הושג\n🎯 נקודות לדיון\n❓ שאלות מומלצות\n\nבעברית, קצר וממוקד.` }],
+      });
+      setMeetingPrep((res.content[0] as { text: string }).text.trim());
+    } catch { /* silent */ } finally { setMeetingLoading(false); }
+  }
+
+  const filtered = filter === 'all' ? log : log.filter(e => e.type === filter);
+
+  return (
+    <div className="space-y-4">
+      {/* No-contact warning */}
+      {daysSince !== null && daysSince > 7 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between">
+          <button onClick={generateMeetingPrep} disabled={meetingLoading}
+            className="flex items-center gap-1.5 text-xs font-bold text-amber-700 hover:text-amber-900 bg-amber-100 px-3 py-1.5 rounded-xl transition-colors">
+            <Brain size={13} /> {meetingLoading ? 'מכין...' : 'הכן לפגישה ⚡'}
+          </button>
+          <div className="text-right">
+            <p className="text-sm font-bold text-amber-800">⚠️ {daysSince} ימים ללא תקשורת</p>
+            <p className="text-xs text-amber-600">מומלץ ליצור קשר</p>
+          </div>
+        </div>
+      )}
+
+      {/* Meeting prep card */}
+      {meetingPrep && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-right">
+          <div className="flex items-center justify-between mb-3">
+            <button onClick={() => setMeetingPrep(null)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={14} /></button>
+            <p className="text-sm font-black text-indigo-900">🎯 הכנה לפגישה</p>
+          </div>
+          <pre className="text-xs text-indigo-800 whitespace-pre-wrap font-sans leading-relaxed">{meetingPrep}</pre>
+        </div>
+      )}
+
+      {/* Quick-log box */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4">
+        <p className="text-sm font-black text-slate-800 mb-3 text-right">רשום פעילות חדשה</p>
+        <div className="flex gap-1.5 mb-3 justify-end flex-wrap">
+          {(Object.entries(ACT_TYPE) as [ActivityType, typeof ACT_TYPE[ActivityType]][]).map(([k, v]) => {
+            const Icon = v.icon;
+            return (
+              <button key={k} onClick={() => setLogType(k)}
+                className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${logType === k ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                <Icon size={11} />{v.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={addLog}
+            className="px-4 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-colors flex-shrink-0">
+            שמור
+          </button>
+          <textarea value={newLog} onChange={e => setNewLog(e.target.value)}
+            placeholder={`פרטי ה${ACT_TYPE[logType].label}...`}
+            className="flex-1 text-sm border border-slate-200 rounded-xl p-2.5 resize-none text-right focus:outline-none focus:border-indigo-400"
+            rows={2}
+            onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) addLog(); }}
+          />
+        </div>
+      </div>
+
+      {/* AI next-action suggestion */}
+      {(aiLoading || aiSuggestion) && (
+        <div className="bg-violet-50 border border-violet-200 rounded-2xl p-4 flex items-start gap-3">
+          <Sparkles size={18} className="text-violet-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 text-right">
+            <p className="text-xs font-bold text-violet-700 mb-1">💡 סוכן AI ממליץ על הפעולה הבאה</p>
+            {aiLoading
+              ? <div className="flex justify-end gap-1">{[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}</div>
+              : <p className="text-sm text-violet-800 font-medium">{aiSuggestion}</p>
+            }
+          </div>
+          {aiSuggestion && <button onClick={() => setAiSuggestion(null)} className="text-slate-300 hover:text-slate-500 transition-colors flex-shrink-0"><X size={13} /></button>}
+        </div>
+      )}
+
+      {/* Filter bar */}
+      <div className="flex gap-1.5 justify-end flex-wrap">
+        <button onClick={() => setFilter('all')}
+          className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${filter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+          הכל ({log.length})
+        </button>
+        {(Object.entries(ACT_TYPE) as [ActivityType, typeof ACT_TYPE[ActivityType]][]).map(([k, v]) => {
+          const count = log.filter(e => e.type === k).length;
+          if (!count) return null;
+          return (
+            <button key={k} onClick={() => setFilter(k)}
+              className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${filter === k ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+              {v.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Timeline */}
+      <div className="space-y-1">
+        {filtered.length === 0 ? (
+          <div className="text-center py-14">
+            <Activity size={40} className="mx-auto mb-3 text-slate-200" />
+            <p className="text-slate-400 font-semibold">אין פעילות עדיין</p>
+            <p className="text-xs text-slate-300 mt-1">רשום את הפנייה הראשונה למעלה</p>
+          </div>
+        ) : filtered.map((entry, i) => {
+          const cfg  = ACT_TYPE[entry.type];
+          const Icon = cfg.icon;
+          return (
+            <div key={entry.id} className="flex gap-3 group">
+              <div className="flex flex-col items-center">
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 ${cfg.color} flex-shrink-0`}>
+                  <Icon size={15} />
+                </div>
+                {i < filtered.length - 1 && <div className="w-px flex-1 bg-slate-100 mt-1 mb-1" />}
+              </div>
+              <div className="flex-1 pb-3">
+                <div className="bg-white rounded-xl border border-slate-100 p-3 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs text-slate-400">{entry.author} · {ago(entry.timestamp)}</span>
+                    <span className={`text-xs font-bold ${cfg.color}`}>{cfg.label}</span>
+                  </div>
+                  <p className="text-sm text-slate-700 text-right leading-relaxed">{entry.text}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLIENT TASKS TAB
+═══════════════════════════════════════════════════════════════════════════ */
+const TASK_PRIORITY_CFG = {
+  high:   { label: 'דחוף',  color: 'text-red-600',   bg: 'bg-red-50',   border: 'border-red-200',   dot: 'bg-red-500'   },
+  medium: { label: 'בינוני', color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-400' },
+  low:    { label: 'נמוך',  color: 'text-slate-500', bg: 'bg-slate-50', border: 'border-slate-200', dot: 'bg-slate-300'  },
+};
+
+const TASK_TEMPLATES = [
+  { title: 'שלח הצעת מחיר מעודכנת', priority: 'high'   as const },
+  { title: 'פולו-אפ שבועי',          priority: 'medium' as const },
+  { title: 'הכן דוח חודשי',          priority: 'medium' as const },
+  { title: 'ישיבת סקירה חודשית',     priority: 'high'   as const },
+  { title: 'בדוק ביצועי קמפיין',    priority: 'medium' as const },
+  { title: 'עדכן תנאי חוזה',         priority: 'low'    as const },
+];
+
+function ClientTasksTab({ project, onSave, lead, currentUser, team }: {
+  project: Project; onSave: (p: Project) => void; lead: Lead; currentUser: string; team: string[];
+}) {
+  const [form, setForm]     = useState<{ title: string; assignedTo: string; dueDate: string; priority: 'high' | 'medium' | 'low' }>({ title: '', assignedTo: currentUser, dueDate: '', priority: 'medium' });
+  const [filter, setFilter] = useState<'open' | 'all' | 'done'>('open');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiTasks,   setAiTasks]   = useState<{ title: string; priority: 'high' | 'medium' | 'low' }[] | null>(null);
+
+  const tasks   = project.tasks ?? [];
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+
+  function addTask(title?: string, priority?: 'high' | 'medium' | 'low') {
+    const t: ProjectTask = {
+      id: Date.now().toString(),
+      title: title ?? form.title.trim(),
+      completed: false,
+      assignedTo: form.assignedTo || currentUser,
+      dueDate: form.dueDate || undefined,
+      priority: priority ?? form.priority,
+    };
+    onSave({ ...project, tasks: [...tasks, t], updatedAt: new Date().toISOString() });
+    setForm(f => ({ ...f, title: '', dueDate: '' }));
+  }
+
+  function toggleTask(id: string) {
+    onSave({ ...project, tasks: tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t), updatedAt: new Date().toISOString() });
+  }
+
+  function deleteTask(id: string) {
+    onSave({ ...project, tasks: tasks.filter(t => t.id !== id), updatedAt: new Date().toISOString() });
+  }
+
+  async function suggestTasks() {
+    setAiLoading(true); setAiTasks(null);
+    try {
+      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const openT  = tasks.filter(t => !t.completed).map(t => t.title).join(', ');
+      const sols   = (project.solutions ?? []).map(s => `${s.title}(${s.status})`).join(', ');
+      const lastAct = (project.activityLog ?? [])[0];
+      const res = await client.messages.create({
+        model: 'claude-opus-4-5', max_tokens: 400,
+        messages: [{ role: 'user', content:
+          `CRM assistant. לקוח: ${lead.company}.\nמשימות פתוחות: ${openT || 'אין'}\nפתרונות: ${sols || 'אין'}\nפעילות אחרונה: ${lastAct ? `${lastAct.type}: ${lastAct.text}` : 'אין'}\nריטיינר: ${project.monthlyRetainer ? fmtK(project.monthlyRetainer) : 'לא ידוע'}\n\nהצע 3-4 משימות חכמות. ענה ONLY ב-JSON array:\n[{"title":"משימה","priority":"high|medium|low"}]` }],
+      });
+      const text = (res.content[0] as { text: string }).text;
+      const match = text.match(/\[[\s\S]*?\]/);
+      if (match) setAiTasks(JSON.parse(match[0]));
+    } catch { /* silent */ } finally { setAiLoading(false); }
+  }
+
+  const overdueCount = tasks.filter(t => !t.completed && t.dueDate && new Date(t.dueDate + 'T00:00:00') < midnight).length;
+  const openCount    = tasks.filter(t => !t.completed).length;
+  const doneCount    = tasks.filter(t => t.completed).length;
+  const filtered     = tasks.filter(t => filter === 'all' ? true : filter === 'open' ? !t.completed : t.completed);
+
+  return (
+    <div className="space-y-4">
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-center">
+          <p className="text-2xl font-black text-slate-900">{openCount}</p>
+          <p className="text-xs text-slate-400 mt-0.5">פתוחות</p>
+        </div>
+        <div className={`rounded-2xl border p-4 text-center ${overdueCount > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-slate-100 shadow-sm'}`}>
+          <p className={`text-2xl font-black ${overdueCount > 0 ? 'text-red-600' : 'text-slate-300'}`}>{overdueCount}</p>
+          <p className="text-xs text-slate-400 mt-0.5">באיחור</p>
+        </div>
+        <div className="bg-emerald-50 rounded-2xl border border-emerald-100 p-4 text-center">
+          <p className="text-2xl font-black text-emerald-600">{doneCount}</p>
+          <p className="text-xs text-slate-400 mt-0.5">הושלמו</p>
+        </div>
+      </div>
+
+      {/* AI Suggest panel */}
+      <div className="bg-violet-50 border border-violet-100 rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={suggestTasks} disabled={aiLoading}
+            className="flex items-center gap-1.5 text-xs font-bold text-violet-600 hover:text-violet-800 bg-white border border-violet-200 px-3 py-1.5 rounded-xl transition-all hover:shadow-sm">
+            {aiLoading ? <><div className="w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />מנתח...</> : <><Sparkles size={12} />הצע משימות AI</>}
+          </button>
+          <p className="text-xs font-bold text-violet-700">🤖 עוזר חכם</p>
+        </div>
+
+        {/* AI suggested tasks */}
+        {aiTasks && aiTasks.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {aiTasks.map((t, i) => {
+              const cfg = TASK_PRIORITY_CFG[t.priority];
+              return (
+                <div key={i} className="flex items-center justify-between bg-white rounded-xl p-2.5 border border-violet-100 shadow-sm">
+                  <button onClick={() => { addTask(t.title, t.priority); setAiTasks(prev => prev?.filter((_, j) => j !== i) ?? null); }}
+                    className="flex items-center gap-1 text-xs font-bold text-violet-600 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-lg transition-colors">
+                    <Plus size={11} />הוסף
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
+                    <p className="text-sm text-slate-700">{t.title}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Quick templates */}
+        {!aiTasks && !aiLoading && (
+          <div className="flex flex-wrap gap-1.5 justify-end">
+            {TASK_TEMPLATES.map(tmpl => (
+              <button key={tmpl.title}
+                onClick={() => setForm(f => ({ ...f, title: tmpl.title, priority: tmpl.priority }))}
+                className="text-xs text-violet-600 bg-white border border-violet-100 px-2.5 py-1 rounded-full hover:bg-violet-100 transition-colors">
+                + {tmpl.title}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add form */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4">
+        <p className="text-sm font-black text-slate-800 text-right mb-3">+ משימה חדשה</p>
+        <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+          placeholder="כותרת המשימה..." dir="rtl"
+          className="w-full text-sm border border-slate-200 rounded-xl p-2.5 text-right mb-2 focus:outline-none focus:border-indigo-400"
+          onKeyDown={e => { if (e.key === 'Enter' && form.title.trim()) addTask(); }}
+        />
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => form.title.trim() && addTask()}
+            className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-colors">
+            הוסף
+          </button>
+          <input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
+            className="flex-1 min-w-[110px] text-xs border border-slate-200 rounded-xl px-2.5 py-2 focus:outline-none focus:border-indigo-400" />
+          <select value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value as 'high'|'medium'|'low' }))}
+            className="flex-1 min-w-[80px] text-xs border border-slate-200 rounded-xl px-2 py-2 bg-white focus:outline-none">
+            <option value="high">דחוף</option>
+            <option value="medium">בינוני</option>
+            <option value="low">נמוך</option>
+          </select>
+          <select value={form.assignedTo} onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
+            className="flex-1 min-w-[100px] text-xs border border-slate-200 rounded-xl px-2 py-2 bg-white focus:outline-none">
+            {team.length > 0 ? team.map(m => <option key={m} value={m}>{m}</option>) : <option value={currentUser}>{currentUser}</option>}
+          </select>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div className="flex gap-1.5 justify-end">
+        {(['open', 'all', 'done'] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${filter === f ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+            {f === 'open' ? `פתוחות (${openCount})` : f === 'done' ? `הושלמו (${doneCount})` : 'הכל'}
+          </button>
+        ))}
+      </div>
+
+      {/* Task list */}
+      <div className="space-y-2">
+        {filtered.length === 0 ? (
+          <div className="text-center py-14">
+            <CheckCircle2 size={40} className="mx-auto mb-3 text-slate-200" />
+            <p className="text-slate-400 font-semibold">{filter === 'done' ? 'אין משימות שהושלמו' : 'אין משימות פתוחות'}</p>
+          </div>
+        ) : filtered.map(task => {
+          const isOverdue = !task.completed && !!task.dueDate && new Date(task.dueDate + 'T00:00:00') < midnight;
+          const priKey    = task.priority ?? 'medium';
+          const priCfg    = TASK_PRIORITY_CFG[priKey];
+          return (
+            <div key={task.id}
+              className={`group flex items-center gap-3 bg-white rounded-xl border p-3.5 transition-all ${task.completed ? 'opacity-50' : ''} ${isOverdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100 hover:border-slate-200 hover:shadow-sm'}`}>
+              {/* Complete toggle */}
+              <button onClick={() => toggleTask(task.id)}
+                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 hover:border-indigo-400'}`}>
+                {task.completed && <Check size={11} className="text-white" />}
+              </button>
+
+              {/* Content */}
+              <div className="flex-1 text-right min-w-0">
+                <div className="flex items-center justify-end gap-2 flex-wrap">
+                  {isOverdue && <span className="text-xs text-red-500 font-bold flex-shrink-0">⚠ באיחור</span>}
+                  {task.dueDate && !task.completed && (
+                    <span className="text-xs text-slate-400 flex-shrink-0">{fmtD(task.dueDate)}</span>
+                  )}
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${priCfg.bg} ${priCfg.color}`}>{priCfg.label}</span>
+                  <p className={`text-sm font-semibold truncate ${task.completed ? 'line-through text-slate-400' : 'text-slate-800'}`}>{task.title}</p>
+                </div>
+                {task.assignedTo && <p className="text-xs text-slate-400 mt-0.5">{task.assignedTo}</p>}
+              </div>
+
+              {/* Delete */}
+              <button onClick={() => deleteTask(task.id)}
+                className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-all flex-shrink-0">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    REPORT TAB
 ═══════════════════════════════════════════════════════════════════════════ */
 function ReportTab({ lead, project }: { lead: Lead; project: Project }) {
@@ -1011,92 +1422,17 @@ function ProjectsList({ account, team, onSelectProject, onSaveAccount }: {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-sm"
-        >
-          <Plus size={15} /> פרויקט חדש
-        </button>
         <div className="text-right">
           <p className="text-xs text-slate-400">פרויקטים</p>
           <p className="font-black text-slate-800 text-lg">{projects.length}</p>
         </div>
       </div>
 
-      {/* Create form */}
-      {creating && (
-        <div className="bg-white border-2 border-indigo-200 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <button onClick={() => setCreating(false)} className="w-7 h-7 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-400"><X size={14} /></button>
-            <h3 className="font-black text-slate-900">פרויקט חדש</h3>
-          </div>
-
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1">שם הפרויקט *</label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                placeholder="שם הפרויקט..." autoFocus />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1">תיאור</label>
-              <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                placeholder="תיאור קצר..." />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">ריטיינר חודשי (₪)</label>
-                <input type="number" value={form.monthlyRetainer} onChange={e => setForm(f => ({ ...f, monthlyRetainer: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                  placeholder="0" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">אחראי</label>
-                <select value={form.assignedTo} onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-300">
-                  <option value="">בחר...</option>
-                  {team.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">תחילת חוזה</label>
-                <input type="date" value={form.contractStart} onChange={e => setForm(f => ({ ...f, contractStart: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">סיום חוזה</label>
-                <input type="date" value={form.contractEnd} onChange={e => setForm(f => ({ ...f, contractEnd: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-              </div>
-            </div>
-            {/* Color picker */}
-            <div>
-              <label className="block text-xs font-bold text-slate-500 mb-2">צבע</label>
-              <div className="flex gap-2 flex-wrap">
-                {PROJ_COLORS.map(c => (
-                  <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
-                    className={`w-7 h-7 rounded-lg ${c} transition-all ${form.color === c ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : 'opacity-60 hover:opacity-100'}`} />
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <button onClick={createProject}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-colors">
-            צור פרויקט
-          </button>
-        </div>
-      )}
-
       {/* Empty state */}
-      {projects.length === 0 && !creating && (
+      {projects.length === 0 && (
         <div className="text-center py-16 text-slate-300">
           <FolderOpen size={48} className="mx-auto mb-3 opacity-50" />
           <p className="font-semibold text-slate-400">אין פרויקטים עדיין</p>
-          <p className="text-sm mt-1">לחץ "פרויקט חדש" כדי להתחיל</p>
         </div>
       )}
 
@@ -1179,9 +1515,10 @@ function ProjectsList({ account, team, onSelectProject, onSaveAccount }: {
 
 const PROJ_TABS = [
   { key: 'overview'  as const, label: 'סקירה',      icon: Activity   },
+  { key: 'activity'  as const, label: 'פעילות',     icon: MessageCircle },
+  { key: 'tasks'     as const, label: 'משימות',     icon: CheckCircle2  },
   { key: 'solutions' as const, label: 'פתרונות',    icon: Package    },
   { key: 'payments'  as const, label: 'תשלומים',    icon: CreditCard },
-  { key: 'media'     as const, label: 'מדיה',       icon: BarChart2  },
   { key: 'materials' as const, label: 'חומרים',     icon: Folder     },
   { key: 'proposals' as const, label: 'הצעות מחיר', icon: Receipt    },
   { key: 'report'    as const, label: 'דוח',         icon: FileText   },
@@ -1197,7 +1534,7 @@ function ProjectDetailView({ lead, account, project, onSaveProject, onBack, onLe
   currentUser: string;
   team: string[];
 }) {
-  const [tab, setTab] = useState<'overview' | 'solutions' | 'payments' | 'media' | 'materials' | 'proposals' | 'report'>('overview');
+  const [tab, setTab] = useState<'overview' | 'activity' | 'tasks' | 'solutions' | 'payments' | 'materials' | 'proposals' | 'report'>('overview');
   const st = PROJ_STATUS_CFG[project.status];
 
   return (
@@ -1239,13 +1576,14 @@ function ProjectDetailView({ lead, account, project, onSaveProject, onBack, onLe
         ); })}
       </div>
 
-      {tab === 'overview'  && <OverviewTab   lead={lead} project={project} onSave={onSaveProject} currentUser={currentUser} />}
-      {tab === 'solutions' && <SolutionsTab  project={project} onSave={onSaveProject} team={team} />}
-      {tab === 'payments'  && <PaymentsTab   project={project} onSave={onSaveProject} />}
-      {tab === 'media'     && <MediaTab      project={project} onSave={onSaveProject} />}
-      {tab === 'materials' && <MaterialsTab  project={project} onSave={onSaveProject} currentUser={currentUser} leadId={lead.id} />}
-      {tab === 'proposals' && <ProposalsTab  project={project} onSave={onSaveProject} clientName={lead.company} />}
-      {tab === 'report'    && <ReportTab     lead={lead} project={project} />}
+      {tab === 'overview'  && <OverviewTab      lead={lead} project={project} onSave={onSaveProject} currentUser={currentUser} />}
+      {tab === 'activity'  && <ActivityTab     project={project} onSave={onSaveProject} currentUser={currentUser} lead={lead} />}
+      {tab === 'tasks'     && <ClientTasksTab  project={project} onSave={onSaveProject} lead={lead} currentUser={currentUser} team={team} />}
+      {tab === 'solutions' && <SolutionsTab    project={project} onSave={onSaveProject} team={team} />}
+      {tab === 'payments'  && <PaymentsTab     project={project} onSave={onSaveProject} />}
+      {tab === 'materials' && <MaterialsTab    project={project} onSave={onSaveProject} currentUser={currentUser} leadId={lead.id} />}
+      {tab === 'proposals' && <ProposalsTab    project={project} onSave={onSaveProject} clientName={lead.company} />}
+      {tab === 'report'    && <ReportTab       lead={lead} project={project} />}
     </div>
   );
 }
@@ -1867,7 +2205,35 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
   onBack: () => void; onLeadClick: (l: Lead) => void;
   currentUser: string; team: string[];
 }) {
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const projects = account.projects ?? [];
+
+  // Auto-select: if 0 projects → create one silently; if 1 project → go straight in; if many → show list
+  const [selectedProject, setSelectedProject] = useState<Project | null>(() => {
+    if (projects.length === 1) return projects[0];
+    return null;
+  });
+
+  // On first mount: if no projects at all, create a default "ניהול לקוח" project and enter it
+  const [didInit, setDidInit] = useState(false);
+  useEffect(() => {
+    if (didInit) return;
+    setDidInit(true);
+    if (projects.length === 0) {
+      const defaultProj: Project = {
+        ...blankProject(),
+        name: 'ניהול לקוח',
+        status: 'active',
+      };
+      const updatedAccount: AccountData = {
+        ...account,
+        projects: [defaultProj],
+        updatedAt: new Date().toISOString(),
+      };
+      onSave(updatedAccount);
+      setSelectedProject(defaultProj);
+    }
+  }, []);
+
   const score = calcHealth(lead, undefined, account.contractEnd);
   const hm = healthMeta(score);
 
@@ -1893,7 +2259,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
         account={account}
         project={freshProject}
         onSaveProject={saveProject}
-        onBack={() => setSelectedProject(null)}
+        onBack={projects.length <= 1 ? onBack : () => setSelectedProject(null)}
         onLeadClick={onLeadClick}
         currentUser={currentUser}
         team={team}
@@ -1901,7 +2267,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
     );
   }
 
-  // Otherwise show the projects list
+  // Multi-project list view
   return (
     <div className="space-y-5">
       {/* Back + open lead */}
