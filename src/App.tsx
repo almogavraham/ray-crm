@@ -837,10 +837,16 @@ function AppInner() {
         userName={displayName}
         allowedPages={
           isWorkspaceUser
-            // Workspace users: use their stored allowedPages, never include 'admin'
-            ? (profile?.allowedPages ?? []).filter(p => p !== 'admin')
+            // Workspace users: prefer workspace-level page override; fall back to profile allowedPages
+            ? (() => {
+                const wsPages = workspace?.allowedPages;
+                const pages = Array.isArray(wsPages) && wsPages.length > 0
+                  ? wsPages
+                  : (profile?.allowedPages ?? []);
+                return pages.filter((p: Page) => p !== 'admin');
+              })()
             // Super admin / dev bypass: full access
-            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin','billing'] : []))
+            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin','billing'] as Page[] : []))
         }
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}

@@ -10,7 +10,7 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
-  KeyRound, AtSign, Unlink,
+  KeyRound, AtSign, Unlink, Layers,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
@@ -19,10 +19,12 @@ import {
 import { db, auth, functions } from '../lib/firebase';
 import { sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
-import type { WorkspaceProfile, WorkspaceStatus, UserProfile } from '../types';
+import type { WorkspaceProfile, WorkspaceStatus, UserProfile, Page } from '../types';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'features' | 'announcements' | 'releases' | 'system';
+type PlanKey  = 'trial' | 'basic' | 'pro' | 'enterprise';
+type PlanPages = Record<PlanKey, Page[]>;
 
 interface Announcement {
   id: string;
@@ -65,6 +67,30 @@ const FEATURE_LABELS: Record<string, string> = {
   ai:       'עוזר AI',    kanban:   'פייפליין Kanban', deals:    'ניהול לקוחות',
   content:  'קריאייטיב', agents:   'סוכנים חכמים',   overview: 'דוחות',
   tasks:    'משימות',     team:     'ניהול צוות',
+};
+
+const PAGE_LABELS: Partial<Record<Page, string>> = {
+  home:      'לוח בקרה',
+  dashboard: 'לידים',
+  kanban:    'פייפליין',
+  deals:     'לקוחות פעילים',
+  tasks:     'משימות',
+  content:   'קריאייטיב',
+  overview:  'דוחות',
+  agents:    'סוכנים AI',
+  ai:        'עוזר AI',
+  settings:  'הגדרות',
+  billing:   'מנוי ותשלום',
+  team:      'ניהול צוות',
+};
+// Pages manageable per-plan (exclude 'admin' — always hidden from workspace users)
+const MANAGED_PAGES: Page[] = ['home','dashboard','kanban','deals','tasks','content','overview','agents','ai','team','settings','billing'];
+
+const DEFAULT_PLAN_PAGES: PlanPages = {
+  trial:      ['home','dashboard','kanban','tasks','ai','settings','billing'],
+  basic:      ['home','dashboard','kanban','tasks','ai','overview','team','settings','billing','content'],
+  pro:        ['home','dashboard','kanban','deals','tasks','ai','overview','team','settings','billing','content','agents'],
+  enterprise: ['home','dashboard','kanban','deals','tasks','ai','overview','team','settings','billing','content','agents'],
 };
 
 const DEFAULT_FLAGS: FeatureFlags = {
@@ -132,8 +158,10 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   const [selected,   setSelected]   = useState<WorkspaceProfile | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [releases,   setReleases]   = useState<Release[]>([]);
-  const [flags,      setFlags]      = useState<FeatureFlags>(DEFAULT_FLAGS);
-  const [flagSaving, setFlagSaving] = useState(false);
+  const [flags,           setFlags]          = useState<FeatureFlags>(DEFAULT_FLAGS);
+  const [flagSaving,      setFlagSaving]     = useState(false);
+  const [planPages,       setPlanPages]      = useState<PlanPages>(DEFAULT_PLAN_PAGES);
+  const [planPagesSaving, setPlanPagesSaving] = useState(false);
 
   /* ── Load all data ──────────────────────────────────────────────────────── */
   const loadAll = useCallback(async () => {
@@ -150,8 +178,10 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
       setUsers(usersSnap.docs.map(d => d.data() as UserProfile));
       setAnnouncements(annSnap.docs.map(d => d.data() as Announcement));
       setReleases(relSnap.docs.map(d => d.data() as Release));
-      if (cfgSnap.exists() && cfgSnap.data().featureFlags) {
-        setFlags({ ...DEFAULT_FLAGS, ...cfgSnap.data().featureFlags });
+      if (cfgSnap.exists()) {
+        const cfg = cfgSnap.data();
+        if (cfg.featureFlags) setFlags({ ...DEFAULT_FLAGS, ...cfg.featureFlags });
+        if (cfg.planPages)    setPlanPages({ ...DEFAULT_PLAN_PAGES, ...cfg.planPages });
       }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
@@ -246,9 +276,37 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     } catch { toast('שגיאה בשמירת תכונות', 'error'); }
     finally { setFlagSaving(false); }
   };
-  const toggleFlag = (feature: string, plan: 'trial'|'basic'|'pro'|'enterprise') => {
+  const toggleFlag = (feature: string, plan: PlanKey) => {
     const next = { ...flags, [feature]: { ...flags[feature], [plan]: !flags[feature]?.[plan] } };
     setFlags(next);
+  };
+
+  /* ── Plan pages ──────────────────────────────────────────────────────────── */
+  const savePlanPages = async (next: PlanPages) => {
+    setPlanPagesSaving(true);
+    try {
+      await setDoc(doc(db, 'system', 'config'), { planPages: next }, { merge: true });
+      setPlanPages(next);
+      toast('דפי מסלול עודכנו ✓', 'success');
+    } catch { toast('שגיאה בשמירת דפי מסלול', 'error'); }
+    finally { setPlanPagesSaving(false); }
+  };
+  const togglePlanPage = (page: Page, plan: PlanKey) => {
+    const current = planPages[plan] ?? [];
+    const next: PlanPages = {
+      ...planPages,
+      [plan]: current.includes(page) ? current.filter(p => p !== page) : [...current, page],
+    };
+    setPlanPages(next);
+  };
+
+  /* ── Workspace page override ─────────────────────────────────────────────── */
+  const setWorkspacePages = async (wid: string, pages: Page[] | null) => {
+    const update = pages === null ? { allowedPages: null } : { allowedPages: pages };
+    await updateDoc(doc(db, 'workspaces', wid), update);
+    setWorkspaces(p => p.map(w => w.id === wid ? { ...w, allowedPages: pages ?? undefined } : w));
+    if (selected?.id === wid) setSelected(s => s ? { ...s, allowedPages: pages ?? undefined } : s);
+    toast(pages === null ? 'איפוס לברירת מחדל של המסלול ✓' : 'דפים עודכנו ✓', 'success');
   };
 
   /* ── Metrics ────────────────────────────────────────────────────────────── */
@@ -335,10 +393,10 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
         ) : (
           <>
             {tab === 'overview'      && <OverviewTab workspaces={workspaces} users={users} total={total} active={active} trial={trial} suspended={suspended} newMonth={newMonth} />}
-            {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} />}
+            {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} planPages={planPages} onSetPages={setWorkspacePages} />}
             {tab === 'analytics'     && <AnalyticsTab workspaces={workspaces} />}
             {tab === 'users'         && <UsersTab users={users} workspaces={workspaces} />}
-            {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} />}
+            {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} planPages={planPages} onTogglePage={togglePlanPage} onSavePlanPages={savePlanPages} planPagesSaving={planPagesSaving} />}
             {tab === 'announcements' && <AnnouncementsTab announcements={announcements} onRefresh={loadAll} onToast={toast} />}
             {tab === 'releases'      && <ReleasesTab releases={releases} workspaces={workspaces} onRefresh={loadAll} onToast={toast} />}
             {tab === 'system'        && <SystemTab workspaces={workspaces} onToast={toast} />}
@@ -554,10 +612,11 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Workspaces
 ══════════════════════════════════════════════════════════════════════════ */
-function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDelete, onToast }:
+function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDelete, onToast, planPages, onSetPages }:
   { workspaces: WorkspaceProfile[]; selected: WorkspaceProfile|null; onSelect: (w: WorkspaceProfile|null)=>void;
     onStatus: (id:string, s:WorkspaceStatus)=>Promise<void>; onPlan: (id:string, p:string)=>Promise<void>;
-    onDelete: (id:string)=>Promise<void>; onToast: (m:string,t?:'success'|'error'|'info')=>void }) {
+    onDelete: (id:string)=>Promise<void>; onToast: (m:string,t?:'success'|'error'|'info')=>void;
+    planPages: PlanPages; onSetPages: (wid:string, pages:Page[]|null)=>Promise<void>; }) {
 
   const [search, setSearch]   = useState('');
   const [status, setStatus]   = useState<WorkspaceStatus|'all'>('all');
@@ -658,15 +717,18 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
           onDelete={() => action(() => onDelete(selected.id), selected.id)}
           loading={actLoad}
           onToast={onToast}
+          planPages={planPages}
+          onSetPages={pages => onSetPages(selected.id, pages)}
         />
       )}
     </div>
   );
 }
 
-function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onToast }:
+function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onToast, planPages, onSetPages }:
   { ws: WorkspaceProfile; onClose: ()=>void; onStatus:(s:WorkspaceStatus)=>void;
-    onPlan:(p:string)=>void; onDelete:()=>void; loading:string|null; onToast:(m:string,t?:'success'|'error'|'info')=>void }) {
+    onPlan:(p:string)=>void; onDelete:()=>void; loading:string|null; onToast:(m:string,t?:'success'|'error'|'info')=>void;
+    planPages: PlanPages; onSetPages:(pages:Page[]|null)=>Promise<void>; }) {
 
   const d = daysLeft(ws.trialEndsAt);
   const RAY_DOMAIN     = 'ray-crm.com';
@@ -683,6 +745,35 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
   // Support action states
   const [resetLoad,  setResetLoad]  = useState(false);
   const [authLoad,   setAuthLoad]   = useState(false);
+
+  // Page override state for this workspace
+  const isCustomPages  = Array.isArray(ws.allowedPages);
+  const effectivePages: Page[] = isCustomPages
+    ? (ws.allowedPages as Page[])
+    : (planPages[ws.plan as PlanKey] ?? DEFAULT_PLAN_PAGES[ws.plan as PlanKey] ?? MANAGED_PAGES);
+  const [localPages,    setLocalPages]    = useState<Page[]>(effectivePages);
+  const [pagesSaving,   setPagesSaving]   = useState(false);
+
+  // Reset local pages when ws changes
+  useEffect(() => {
+    const ep = Array.isArray(ws.allowedPages)
+      ? (ws.allowedPages as Page[])
+      : (planPages[ws.plan as PlanKey] ?? DEFAULT_PLAN_PAGES[ws.plan as PlanKey] ?? MANAGED_PAGES);
+    setLocalPages(ep);
+  }, [ws.id, ws.allowedPages, ws.plan, planPages]); // eslint-disable-line
+
+  const handleSavePages = async () => {
+    setPagesSaving(true);
+    try { await onSetPages(localPages); }
+    finally { setPagesSaving(false); }
+  };
+  const handleResetPages = async () => {
+    setPagesSaving(true);
+    try {
+      await onSetPages(null);
+      setLocalPages(planPages[ws.plan as PlanKey] ?? DEFAULT_PLAN_PAGES[ws.plan as PlanKey] ?? MANAGED_PAGES);
+    } finally { setPagesSaving(false); }
+  };
 
   useEffect(() => {
     setMembersLoad(true);
@@ -805,6 +896,51 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               ))}
             </div>
           </div>
+        </div>
+
+        {/* ── Page access control ──────────────────────────────────── */}
+        <div className="px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+              <Layers size={11} /> דפים מורשים
+            </p>
+            {isCustomPages && (
+              <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">מותאם אישית</span>
+            )}
+          </div>
+
+          {/* Page toggles */}
+          <div className="flex flex-wrap gap-1.5 mb-2.5">
+            {MANAGED_PAGES.map(p => {
+              const active = localPages.includes(p);
+              return (
+                <button key={p}
+                  onClick={() => setLocalPages(prev => active ? prev.filter(x => x !== p) : [...prev, p])}
+                  className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition-all ${
+                    active ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-400'
+                  }`}>
+                  {PAGE_LABELS[p] ?? p}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex gap-1.5">
+            <button onClick={handleSavePages} disabled={pagesSaving}
+              className="flex-1 flex items-center justify-center gap-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white py-1.5 rounded-lg text-[10px] font-bold transition-colors">
+              {pagesSaving ? <RefreshCw size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
+              שמור דפים
+            </button>
+            {isCustomPages && (
+              <button onClick={handleResetPages} disabled={pagesSaving}
+                className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-600 py-1.5 px-2.5 rounded-lg text-[10px] font-bold transition-colors">
+                איפוס למסלול
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1.5">
+            {isCustomPages ? `הגדרה ידנית · מסלול: ${ws.plan}` : `נגזר ממסלול: ${ws.plan}`}
+          </p>
         </div>
 
         {/* AI Prompt */}
@@ -1178,60 +1314,118 @@ function UsersTab({ users, workspaces }:
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Feature Flags
 ══════════════════════════════════════════════════════════════════════════ */
-function FeaturesTab({ flags, onToggle, onSave, saving }:
-  { flags: FeatureFlags; onToggle:(f:string,p:'trial'|'basic'|'pro'|'enterprise')=>void; onSave:(f:FeatureFlags)=>Promise<void>; saving:boolean }) {
+function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage, onSavePlanPages, planPagesSaving }:
+  { flags: FeatureFlags; onToggle:(f:string,p:PlanKey)=>void; onSave:(f:FeatureFlags)=>Promise<void>; saving:boolean;
+    planPages: PlanPages; onTogglePage:(page:Page,plan:PlanKey)=>void;
+    onSavePlanPages:(pp:PlanPages)=>Promise<void>; planPagesSaving:boolean; }) {
 
-  const PLANS: ('trial'|'basic'|'pro'|'enterprise')[] = ['trial','basic','pro','enterprise'];
+  const PLANS: PlanKey[] = ['trial','basic','pro','enterprise'];
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-black text-slate-800">תכונות ותוכניות</h1>
-          <p className="text-slate-500 text-sm mt-0.5">שלוט אילו תכונות פתוחות לכל תוכנית</p>
+    <div className="p-6 space-y-6">
+
+      {/* ── Section 1: Feature flags ─────────────────────────────── */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-black text-slate-800">תכונות ותוכניות</h1>
+            <p className="text-slate-500 text-sm mt-0.5">שלוט אילו תכונות פתוחות לכל תוכנית</p>
+          </div>
+          <button onClick={() => onSave(flags)} disabled={saving}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Package size={14} />}
+            שמור תכונות
+          </button>
         </div>
-        <button onClick={() => onSave(flags)} disabled={saving}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
-          {saving ? <RefreshCw size={14} className="animate-spin" /> : <Package size={14} />}
-          שמור הגדרות
-        </button>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="grid grid-cols-5 px-5 py-3 bg-slate-50 border-b border-slate-200">
+            <div className="col-span-1 text-xs font-bold text-slate-500 uppercase tracking-wider">תכונה</div>
+            {PLANS.map(p => (
+              <div key={p} className="text-center">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[p]}`}>{p}</span>
+              </div>
+            ))}
+          </div>
+          {Object.entries(FEATURE_LABELS).map(([key, label]) => (
+            <div key={key} className="grid grid-cols-5 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
+              <div className="col-span-1">
+                <p className="text-sm font-medium text-slate-700">{label}</p>
+                <p className="text-xs text-slate-400">{key}</p>
+              </div>
+              {PLANS.map(p => {
+                const on = flags[key]?.[p] ?? false;
+                return (
+                  <div key={p} className="flex justify-center">
+                    <button onClick={() => onToggle(key, p)}
+                      className={`w-9 h-5 rounded-full transition-all relative ${on ? 'bg-indigo-600' : 'bg-slate-200'}`}>
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? 'right-0.5' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        {/* Header row */}
-        <div className="grid grid-cols-5 px-5 py-3 bg-slate-50 border-b border-slate-200">
-          <div className="col-span-1 text-xs font-bold text-slate-500 uppercase tracking-wider">תכונה</div>
-          {PLANS.map(p => (
-            <div key={p} className="text-center">
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[p]}`}>{p}</span>
+      {/* ── Section 2: Pages per plan ────────────────────────────── */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
+              <Layers size={18} className="text-indigo-600" /> דפים לפי מסלול
+            </h2>
+            <p className="text-slate-500 text-sm mt-0.5">הגדר אילו דפים כל מסלול יכול לגשת אליהם כברירת מחדל</p>
+          </div>
+          <button onClick={() => onSavePlanPages(planPages)} disabled={planPagesSaving}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+            {planPagesSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            שמור דפים
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* Header */}
+          <div className="grid grid-cols-5 px-5 py-3 bg-slate-50 border-b border-slate-200">
+            <div className="col-span-1 text-xs font-bold text-slate-500 uppercase tracking-wider">דף</div>
+            {PLANS.map(p => (
+              <div key={p} className="text-center">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[p]}`}>{p}</span>
+              </div>
+            ))}
+          </div>
+
+          {MANAGED_PAGES.map(page => (
+            <div key={page} className="grid grid-cols-5 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
+              <div className="col-span-1">
+                <p className="text-sm font-medium text-slate-700">{PAGE_LABELS[page] ?? page}</p>
+                <p className="text-xs text-slate-400">{page}</p>
+              </div>
+              {PLANS.map(plan => {
+                const on = (planPages[plan] ?? []).includes(page);
+                return (
+                  <div key={plan} className="flex justify-center">
+                    <button onClick={() => onTogglePage(page, plan)}
+                      className={`w-9 h-5 rounded-full transition-all relative ${on ? 'bg-emerald-500' : 'bg-slate-200'}`}>
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? 'right-0.5' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>
 
-        {Object.entries(FEATURE_LABELS).map(([key, label]) => (
-          <div key={key} className="grid grid-cols-5 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
-            <div className="col-span-1">
-              <p className="text-sm font-medium text-slate-700">{label}</p>
-              <p className="text-xs text-slate-400">{key}</p>
-            </div>
-            {PLANS.map(p => {
-              const on = flags[key]?.[p] ?? false;
-              return (
-                <div key={p} className="flex justify-center">
-                  <button onClick={() => onToggle(key, p)}
-                    className={`w-9 h-5 rounded-full transition-all relative ${on ? 'bg-indigo-600' : 'bg-slate-200'}`}>
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? 'right-0.5' : 'left-0.5'}`} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-700 flex items-start gap-2">
+          <Info size={14} className="flex-shrink-0 mt-0.5" />
+          <p>ברירות המחדל חלות על סביבות עבודה חדשות. סביבות עם הגדרה ידנית (כחול "מותאם אישית" בפאנל) לא יושפעו.</p>
+        </div>
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-700 flex items-start gap-2">
         <Info size={14} className="flex-shrink-0 mt-0.5" />
-        <p>שינויים בתכונות ייכנסו לתוקף בכניסה הבאה של המשתמש. תכונות מושבתות לא יופיעו בניווט.</p>
+        <p>שינויים בתכונות ייכנסו לתוקף בכניסה הבאה של המשתמש. תכונות ודפים מושבתים לא יופיעו בניווט.</p>
       </div>
     </div>
   );

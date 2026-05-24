@@ -353,6 +353,7 @@ export type WorkspaceProfile = {
     quickOptions?: number[];
   };
   memberCount?: number;          // denormalized counter
+  allowedPages?: Page[];         // override: which pages this workspace can see (null = use plan defaults)
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {
     idealClient?: string;        // לקוח אידיאלי — מי הקהל היעד
