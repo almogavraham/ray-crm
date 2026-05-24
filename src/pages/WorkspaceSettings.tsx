@@ -4,6 +4,7 @@ import {
   Lock, Eye, EyeOff, CheckCircle2, AlertCircle, UserPlus, Trash2,
   ChevronLeft, Crown, User, RefreshCw, Send, AlertTriangle,
 } from 'lucide-react';
+import { useLang } from '../contexts/LangContext';
 import {
   updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
@@ -32,6 +33,7 @@ const INPUT = 'w-full bg-white border border-slate-200 text-slate-800 placeholde
 export default function WorkspaceSettings({
   workspace, team, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
 }: Props) {
+  const { t, dir } = useLang();
   const [section, setSection] = useState<Section>('workspace');
 
   // ── Workspace profile state ──────────────────────────────────────────────
@@ -61,7 +63,7 @@ export default function WorkspaceSettings({
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { onToast('הלוגו חייב להיות עד 2MB', 'error'); return; }
+    if (file.size > 2 * 1024 * 1024) { onToast(t('settings.logoSizeError'), 'error'); return; }
     const reader = new FileReader();
     reader.onload = ev => setWsLogo(ev.target?.result as string ?? '');
     reader.readAsDataURL(file);
@@ -69,7 +71,7 @@ export default function WorkspaceSettings({
 
   // ── Save workspace profile ───────────────────────────────────────────────
   const handleSaveWorkspace = async () => {
-    if (!wsName.trim()) { onToast('שם העסק הוא שדה חובה', 'error'); return; }
+    if (!wsName.trim()) { onToast(t('settings.businessNameRequired'), 'error'); return; }
     setWsSaving(true);
     try {
       const updates: Record<string, unknown> = {
@@ -82,10 +84,10 @@ export default function WorkspaceSettings({
       if (wsLogo)     updates.logoUrl  = wsLogo;
       await updateDoc(doc(db, 'workspaces', workspace.id), updates);
       await onWorkspaceUpdate();
-      onToast('הגדרות הסביבה נשמרו ✓', 'success');
+      onToast(t('settings.workspaceSaved'), 'success');
     } catch (err) {
       console.error(err);
-      onToast('שגיאה בשמירת ההגדרות', 'error');
+      onToast(t('settings.errorSaving'), 'error');
     } finally {
       setWsSaving(false);
     }
@@ -94,22 +96,22 @@ export default function WorkspaceSettings({
   // ── Change password ──────────────────────────────────────────────────────
   const handleChangePassword = async () => {
     setPwError('');
-    if (newPw.length < 6)         { setPwError('הסיסמה חייבת להכיל לפחות 6 תווים'); return; }
-    if (newPw !== confirmPw)      { setPwError('הסיסמאות אינן תואמות'); return; }
-    if (!auth.currentUser)        { setPwError('לא מחובר'); return; }
+    if (newPw.length < 6)         { setPwError(t('settings.passwordMinLength')); return; }
+    if (newPw !== confirmPw)      { setPwError(t('settings.passwordMismatch')); return; }
+    if (!auth.currentUser)        { setPwError(t('settings.notLoggedIn')); return; }
     setPwSaving(true);
     try {
       const cred = EmailAuthProvider.credential(currentUserEmail, currentPw);
       await reauthenticateWithCredential(auth.currentUser, cred);
       await updatePassword(auth.currentUser, newPw);
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
-      onToast('הסיסמה עודכנה בהצלחה ✓', 'success');
+      onToast(t('settings.passwordUpdated'), 'success');
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
       if (code === 'auth/wrong-password' || code === 'auth/invalid-credential')
-        setPwError('הסיסמה הנוכחית שגויה');
+        setPwError(t('settings.passwordWrong'));
       else
-        setPwError('שגיאה בעדכון הסיסמה');
+        setPwError(t('settings.passwordError'));
     } finally {
       setPwSaving(false);
     }
@@ -117,7 +119,7 @@ export default function WorkspaceSettings({
 
   // ── Invite team member ───────────────────────────────────────────────────
   const handleInvite = async () => {
-    if (!inviteEmail.trim()) { onToast('הזן כתובת אימייל', 'error'); return; }
+    if (!inviteEmail.trim()) { onToast(t('settings.inviteEmailRequired'), 'error'); return; }
     setInviting(true);
     try {
       // Create invite token in Firestore
@@ -132,11 +134,11 @@ export default function WorkspaceSettings({
       });
       const inviteUrl = `${window.location.origin}/?token=${token}`;
       await navigator.clipboard.writeText(inviteUrl).catch(() => {});
-      onToast(`קישור הזמנה נוצר ועובר ל-${inviteEmail} — הועתק ללוח ✓`, 'success');
+      onToast(t('settings.inviteCreated'), 'success');
       setInviteEmail('');
     } catch (err) {
       console.error(err);
-      onToast('שגיאה ביצירת ההזמנה', 'error');
+      onToast(t('settings.inviteError'), 'error');
     } finally {
       setInviting(false);
     }
@@ -184,10 +186,10 @@ export default function WorkspaceSettings({
         },
       });
       setEmailSaved(true);
-      onToast('הגדרות האימייל נשמרו ✓', 'success');
+      onToast(t('settings.emailSaved'), 'success');
       setTimeout(() => setEmailSaved(false), 3000);
     } catch {
-      onToast('שגיאה בשמירת הגדרות האימייל', 'error');
+      onToast(t('settings.emailSaveError'), 'error');
     } finally {
       setEmailLoading(false);
     }
@@ -195,7 +197,7 @@ export default function WorkspaceSettings({
 
   const handleTestEmail = async () => {
     if (!emailServiceId || !emailPublicKey || !emailTemplateId) {
-      onToast('מלא את כל שדות ה-EmailJS לפני בדיקה', 'error');
+      onToast(t('settings.emailTestFillAll'), 'error');
       return;
     }
     setEmailTesting(true);
@@ -207,15 +209,15 @@ export default function WorkspaceSettings({
         {
           to_email:  auth.currentUser?.email ?? '',
           to_name:   emailFromName || 'Test',
-          subject:   'RAY CRM — בדיקת חיבור אימייל',
-          message:   'החיבור לאימייל עובד בהצלחה! 🎉',
+          subject:   'RAY CRM — Email connection test',
+          message:   t('settings.emailTestSuccess'),
           from_name: emailFromName || 'RAY CRM',
         },
         emailPublicKey,
       );
-      onToast('מייל בדיקה נשלח בהצלחה ✓', 'success');
+      onToast(t('settings.emailTestSuccess'), 'success');
     } catch (e) {
-      onToast('שגיאה בשליחת מייל בדיקה: ' + (e instanceof Error ? e.message : String(e)), 'error');
+      onToast(t('settings.emailTestError') + ': ' + (e instanceof Error ? e.message : String(e)), 'error');
     } finally {
       setEmailTesting(false);
     }
@@ -223,8 +225,8 @@ export default function WorkspaceSettings({
 
   // ── Remove team member ───────────────────────────────────────────────────
   const handleRemove = async (member: TeamMember) => {
-    if (member.uid === currentUserUid) { onToast('לא ניתן להסיר את עצמך', 'error'); return; }
-    if (!window.confirm(`להסיר את ${member.name} מהצוות?`)) return;
+    if (member.uid === currentUserUid) { onToast(t('settings.cannotRemoveSelf'), 'error'); return; }
+    if (!window.confirm(`${t('settings.confirmRemoveMember')} ${member.name} ${t('settings.confirmRemoveMemberSuffix')}`)) return;
     try {
       // Mark user profile as removed from workspace
       if (member.uid) {
@@ -232,34 +234,34 @@ export default function WorkspaceSettings({
       }
       // Remove from workspace team subcollection
       await deleteDoc(doc(db, 'workspaces', workspace.id, 'team', member.id)).catch(() => {});
-      onToast(`${member.name} הוסר מהצוות`, 'info');
+      onToast(`${member.name} ${t('settings.memberRemoved')}`, 'info');
       await onWorkspaceUpdate();
     } catch (err) {
       console.error(err);
-      onToast('שגיאה בהסרת חבר הצוות', 'error');
+      onToast(t('settings.memberRemoveError'), 'error');
     }
   };
 
   const SECTIONS: { key: Section; label: string; icon: React.ElementType }[] = [
-    { key: 'workspace', label: 'פרטי סביבת העבודה', icon: Building2 },
-    { key: 'team',      label: 'ניהול צוות',         icon: Users2   },
-    { key: 'email',     label: 'חיבור אימייל',        icon: Mail     },
-    { key: 'password',  label: 'שינוי סיסמה',         icon: Lock     },
-    { key: 'plan',      label: 'תוכנית ומנוי',        icon: Crown    },
+    { key: 'workspace', label: t('settings.workspaceProfile'), icon: Building2 },
+    { key: 'team',      label: t('settings.teamManagement'),   icon: Users2   },
+    { key: 'email',     label: t('settings.emailSettings'),    icon: Mail     },
+    { key: 'password',  label: t('settings.changePassword'),   icon: Lock     },
+    { key: 'plan',      label: t('settings.planManagement'),   icon: Crown    },
   ];
 
   const planLabel =
-    workspace.plan === 'trial'      ? 'ניסיון חינם' :
-    workspace.plan === 'basic'      ? 'Basic'        :
-    workspace.plan === 'pro'        ? 'Pro'          :
-    workspace.plan === 'enterprise' ? 'Enterprise'   : workspace.plan;
+    workspace.plan === 'trial'      ? t('billing.trial') :
+    workspace.plan === 'basic'      ? 'Basic'             :
+    workspace.plan === 'pro'        ? 'Pro'               :
+    workspace.plan === 'enterprise' ? 'Enterprise'        : workspace.plan;
   const trialEnd  = workspace.trialEndsAt ? new Date(workspace.trialEndsAt).toLocaleDateString('he-IL') : '';
 
   return (
-    <div className="max-w-4xl mx-auto" dir="rtl">
+    <div className="max-w-4xl mx-auto" dir={dir}>
       <div className="mb-6">
-        <h1 className="text-2xl font-black text-slate-800">הגדרות</h1>
-        <p className="text-slate-500 text-sm mt-1">ניהול סביבת העבודה שלך</p>
+        <h1 className="text-2xl font-black text-slate-800">{t('settings.title')}</h1>
+        <p className="text-slate-500 text-sm mt-1">{t('settings.workspace')}</p>
       </div>
 
       <div className="flex flex-col md:flex-row gap-6">
@@ -288,7 +290,7 @@ export default function WorkspaceSettings({
 
           {/* ── Workspace Info ─────────────────────────────────────────── */}
           {section === 'workspace' && (
-            <Card title="פרטי סביבת העבודה" icon={<Building2 size={18} />}>
+            <Card title={t('settings.workspaceProfile')} icon={<Building2 size={18} />}>
               {/* Logo */}
               <div className="flex items-center gap-4 mb-5">
                 <div
@@ -296,48 +298,48 @@ export default function WorkspaceSettings({
                   onClick={() => logoRef.current?.click()}
                 >
                   {wsLogo
-                    ? <img src={wsLogo} alt="לוגו" className="w-full h-full object-contain p-1" />
+                    ? <img src={wsLogo} alt={t('settings.logo')} className="w-full h-full object-contain p-1" />
                     : <Image size={24} className="text-slate-400" />
                   }
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-slate-700">לוגו העסק</p>
-                  <p className="text-xs text-slate-500 mt-0.5">PNG / JPG עד 2MB</p>
+                  <p className="text-sm font-medium text-slate-700">{t('settings.logo')}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{t('settings.logoSizeHint')}</p>
                   <button
                     onClick={() => logoRef.current?.click()}
                     className="mt-2 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
                   >
-                    החלף לוגו
+                    {t('settings.uploadLogo')}
                   </button>
                   <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
                 </div>
               </div>
 
               <div className="space-y-4">
-                <Field label="שם העסק *">
-                  <input value={wsName} onChange={e => setWsName(e.target.value)} className={INPUT} placeholder="שם העסק" />
+                <Field label={t('settings.businessName')}>
+                  <input value={wsName} onChange={e => setWsName(e.target.value)} className={INPUT} placeholder={t('settings.businessName')} />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label='ח.פ / ע.מ'>
+                  <Field label={t('settings.businessId')}>
                     <input value={wsBizId} onChange={e => setWsBizId(e.target.value)} className={INPUT} placeholder="515123456" />
                   </Field>
-                  <Field label="טלפון">
+                  <Field label={t('settings.businessPhone')}>
                     <input value={wsPhone} onChange={e => setWsPhone(e.target.value)} className={INPUT} placeholder="050-0000000" />
                   </Field>
                 </div>
-                <Field label="תחום עיסוק">
+                <Field label={t('settings.industry')}>
                   <select value={wsIndustry} onChange={e => setWsIndustry(e.target.value)} className={INPUT + ' appearance-none'}>
-                    <option value="">בחר תחום...</option>
+                    <option value="">{t('settings.industryPlaceholder')}</option>
                     {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
                   </select>
                 </Field>
-                <Field label="הנחיות AI מותאמות">
+                <Field label={t('settings.businessDesc')}>
                   <textarea
                     value={wsPrompt}
                     onChange={e => setWsPrompt(e.target.value)}
                     rows={4}
                     className={INPUT + ' resize-none'}
-                    placeholder="תאר את העסק שלך, קהל היעד, מוצרים/שירותים, סגנון תקשורת מועדף..."
+                    placeholder={t('settings.businessDescPlaceholder')}
                   />
                 </Field>
               </div>
@@ -349,7 +351,7 @@ export default function WorkspaceSettings({
                   className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors"
                 >
                   {wsSaving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-                  שמור שינויים
+                  {t('settings.saveSettings')}
                 </button>
               </div>
             </Card>
@@ -358,9 +360,9 @@ export default function WorkspaceSettings({
           {/* ── Team Management ────────────────────────────────────────── */}
           {section === 'team' && (
             <div className="space-y-4">
-              <Card title="הזמן חבר צוות" icon={<UserPlus size={18} />}>
+              <Card title={t('settings.inviteTeamMember')} icon={<UserPlus size={18} />}>
                 <div className="space-y-3">
-                  <Field label="אימייל">
+                  <Field label={t('team.email')}>
                     <input
                       type="email"
                       value={inviteEmail}
@@ -370,7 +372,7 @@ export default function WorkspaceSettings({
                       dir="ltr"
                     />
                   </Field>
-                  <Field label="תפקיד">
+                  <Field label={t('team.role')}>
                     <div className="flex gap-2">
                       {(['מנהל', 'סוכן'] as const).map(r => (
                         <button
@@ -382,7 +384,7 @@ export default function WorkspaceSettings({
                               : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
                           }`}
                         >
-                          {r}
+                          {r === 'מנהל' ? t('team.manager') : t('team.agent')}
                         </button>
                       ))}
                     </div>
@@ -393,15 +395,15 @@ export default function WorkspaceSettings({
                     className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2"
                   >
                     {inviting ? <RefreshCw size={14} className="animate-spin" /> : <UserPlus size={14} />}
-                    יצירת קישור הזמנה
+                    {t('team.sendInvite')}
                   </button>
-                  <p className="text-xs text-slate-500 text-center">הקישור יועתק ללוח — שלח אותו לחבר הצוות</p>
+                  <p className="text-xs text-slate-500 text-center">{t('team.inviteSent')}</p>
                 </div>
               </Card>
 
-              <Card title="חברי הצוות" icon={<Users2 size={18} />}>
+              <Card title={t('team.title')} icon={<Users2 size={18} />}>
                 {team.length === 0 ? (
-                  <p className="text-slate-500 text-sm text-center py-4">אין חברי צוות עדיין</p>
+                  <p className="text-slate-500 text-sm text-center py-4">{t('team.noMembers')}</p>
                 ) : (
                   <div className="space-y-2">
                     {team.map(member => (
@@ -419,7 +421,7 @@ export default function WorkspaceSettings({
                           <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                             member.role === 'מנהל' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'
                           }`}>
-                            {member.role}
+                            {member.role === 'מנהל' ? t('team.manager') : t('team.agent')}
                           </span>
                           {member.uid !== currentUserUid && (
                             <button
@@ -446,15 +448,15 @@ export default function WorkspaceSettings({
               {savedEmailConfigured === null ? (
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
                   <RefreshCw size={14} className="animate-spin text-slate-400" />
-                  <span className="text-sm text-slate-500">בודק סטטוס חיבור...</span>
+                  <span className="text-sm text-slate-500">{t('common.loading')}</span>
                 </div>
               ) : savedEmailConfigured ? (
                 <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3.5">
                   <CheckCircle2 size={18} className="text-emerald-500 flex-shrink-0" />
                   <div>
-                    <p className="text-sm font-bold text-emerald-800">האימייל מחובר ✓</p>
+                    <p className="text-sm font-bold text-emerald-800">{t('settings.emailSettings')} ✓</p>
                     <p className="text-xs text-emerald-700 mt-0.5">
-                      הגדרות EmailJS שמורות ופעילות — שליחת מיילים מהמערכת עובדת
+                      {t('settings.emailConnected')}
                     </p>
                   </div>
                 </div>
@@ -462,60 +464,48 @@ export default function WorkspaceSettings({
                 <div className="flex items-center gap-3 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3.5">
                   <AlertTriangle size={18} className="text-amber-500 flex-shrink-0" />
                   <div>
-                    <p className="text-sm font-bold text-amber-800">האימייל לא מחובר עדיין</p>
+                    <p className="text-sm font-bold text-amber-800">{t('settings.emailNotConnected')}</p>
                     <p className="text-xs text-amber-700 mt-0.5">
-                      מלא את הפרטים למטה ולחץ שמור כדי להפעיל שליחת מיילים
+                      {t('settings.emailNotConnectedDesc')}
                     </p>
                   </div>
                 </div>
               )}
 
               {/* ── Setup instructions ───────────────────────────────────── */}
-              <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5" dir="rtl">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5" dir={dir}>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0">
                     <Mail size={12} className="text-white" />
                   </div>
-                  <p className="font-bold text-indigo-900 text-sm">איך מחברים אימייל? — הגדרה חד-פעמית</p>
+                  <p className="font-bold text-indigo-900 text-sm">{t('settings.emailSetupTitle')}</p>
                 </div>
                 <ol className="space-y-2.5 text-sm text-indigo-800">
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
                     <span>
-                      צור חשבון חינמי ב-{' '}
                       <a href="https://www.emailjs.com" target="_blank" rel="noreferrer"
                         className="font-bold text-indigo-600 underline hover:text-indigo-900">
                         emailjs.com
                       </a>
-                      {' '}(100 מיילים/חודש בחינם)
+                      {' — '}{t('settings.emailSetupStep1')}
                     </span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
-                    <span>
-                      הוסף <strong>Service</strong> (Gmail / Outlook / SMTP) תחת{' '}
-                      <span className="font-mono text-xs bg-indigo-100 px-1.5 py-0.5 rounded">Email Services</span>
-                      {' '}— קבל <strong>Service ID</strong>
-                    </span>
+                    <span>{t('settings.emailSetupStep2')}</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
-                    <span>
-                      צור <strong>Email Template</strong> תחת{' '}
-                      <span className="font-mono text-xs bg-indigo-100 px-1.5 py-0.5 rounded">Email Templates</span>
-                      {' '}— קבל <strong>Template ID</strong>
-                    </span>
+                    <span>{t('settings.emailSetupStep3')}</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">4</span>
-                    <span>
-                      העתק את ה-<strong>Public Key</strong> מתוך{' '}
-                      <span className="font-mono text-xs bg-indigo-100 px-1.5 py-0.5 rounded">Account → API Keys</span>
-                    </span>
+                    <span>{t('settings.emailSetupStep4')}</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">5</span>
-                    <span className="font-semibold text-indigo-900">הכנס את הפרטים בטופס למטה ולחץ <strong>שמור</strong></span>
+                    <span className="font-semibold text-indigo-900">{t('settings.emailSetupStep5')}</span>
                   </li>
                 </ol>
                 <a
@@ -525,12 +515,12 @@ export default function WorkspaceSettings({
                   className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-900 transition-colors"
                 >
                   <ChevronLeft size={12} className="rotate-180" />
-                  פתח את EmailJS
+                  {t('settings.emailOpenEmailJS')}
                 </a>
               </div>
 
               {/* ── Config form ──────────────────────────────────────────── */}
-              <Card title="פרטי חיבור EmailJS" icon={<Mail size={18} />}>
+              <Card title={t('settings.emailConfigTitle')} icon={<Mail size={18} />}>
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -551,7 +541,7 @@ export default function WorkspaceSettings({
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                        Template ID — מיילים כלליים
+                        {t('settings.emailTemplateGeneral')}
                         <span className="text-red-500 mr-0.5">*</span>
                       </label>
                       <input value={emailTemplateId} onChange={e => setEmailTemplateId(e.target.value)}
@@ -559,16 +549,16 @@ export default function WorkspaceSettings({
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                        Template ID — הזמנות לצוות
-                        <span className="text-slate-400 text-xs font-normal mr-1">(אופציונלי)</span>
+                        {t('settings.emailTemplateInvite')}
+                        <span className="text-slate-400 text-xs font-normal mr-1">{t('settings.emailTemplateInviteOptional')}</span>
                       </label>
                       <input value={emailInviteTmpl} onChange={e => setEmailInviteTmpl(e.target.value)}
                         className={INPUT} placeholder="template_xxxxxxx" dir="ltr" />
                     </div>
                     <div className="md:col-span-2">
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">שם השולח (יוצג בנמען)</label>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">{t('settings.emailSenderName')}</label>
                       <input value={emailFromName} onChange={e => setEmailFromName(e.target.value)}
-                        className={INPUT} placeholder="שם החברה שלך" />
+                        className={INPUT} placeholder={t('settings.emailSenderPlaceholder')} />
                     </div>
                   </div>
 
@@ -579,7 +569,7 @@ export default function WorkspaceSettings({
                       className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 text-slate-700 text-sm font-semibold rounded-xl transition-colors"
                     >
                       <Send size={14} />
-                      {emailTesting ? 'שולח...' : 'שלח מייל בדיקה'}
+                      {emailTesting ? t('forgotPassword.sending') : t('settings.emailTestButton')}
                     </button>
                     <button
                       onClick={async () => { await handleSaveEmail(); setSavedEmailConfigured(!!(emailServiceId && emailTemplateId && emailPublicKey)); }}
@@ -591,8 +581,8 @@ export default function WorkspaceSettings({
                       } disabled:opacity-50`}
                     >
                       {emailSaved
-                        ? <><CheckCircle2 size={14} /> נשמר!</>
-                        : <><Save size={14} /> שמור</>
+                        ? <><CheckCircle2 size={14} /> {t('settings.saved')}</>
+                        : <><Save size={14} /> {t('common.save')}</>
                       }
                     </button>
                   </div>
@@ -603,16 +593,16 @@ export default function WorkspaceSettings({
 
           {/* ── Change Password ────────────────────────────────────────── */}
           {section === 'password' && (
-            <Card title="שינוי סיסמה" icon={<Lock size={18} />}>
+            <Card title={t('settings.changePassword')} icon={<Lock size={18} />}>
               <div className="space-y-4">
-                <Field label="סיסמה נוכחית">
+                <Field label={t('settings.currentPassword')}>
                   <div className="relative">
                     <input
                       type={showPw ? 'text' : 'password'}
                       value={currentPw}
                       onChange={e => setCurrentPw(e.target.value)}
                       className={INPUT + ' pl-10'}
-                      placeholder="הסיסמה הנוכחית"
+                      placeholder={t('settings.passwordCurrentPlaceholder')}
                       dir="ltr"
                     />
                     <button type="button" onClick={() => setShowPw(p => !p)}
@@ -621,23 +611,23 @@ export default function WorkspaceSettings({
                     </button>
                   </div>
                 </Field>
-                <Field label="סיסמה חדשה">
+                <Field label={t('settings.newPassword')}>
                   <input
                     type={showPw ? 'text' : 'password'}
                     value={newPw}
                     onChange={e => setNewPw(e.target.value)}
                     className={INPUT}
-                    placeholder="לפחות 6 תווים"
+                    placeholder={t('settings.passwordNewPlaceholder')}
                     dir="ltr"
                   />
                 </Field>
-                <Field label="אימות סיסמה חדשה">
+                <Field label={t('settings.confirmPassword')}>
                   <input
                     type={showPw ? 'text' : 'password'}
                     value={confirmPw}
                     onChange={e => setConfirmPw(e.target.value)}
                     className={INPUT}
-                    placeholder="חזור על הסיסמה"
+                    placeholder={t('settings.passwordConfirmPlaceholder')}
                     dir="ltr"
                   />
                 </Field>
@@ -654,7 +644,7 @@ export default function WorkspaceSettings({
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2"
                 >
                   {pwSaving ? <RefreshCw size={14} className="animate-spin" /> : <Lock size={14} />}
-                  עדכן סיסמה
+                  {t('settings.updatePassword')}
                 </button>
               </div>
             </Card>
@@ -662,7 +652,7 @@ export default function WorkspaceSettings({
 
           {/* ── Plan Info ──────────────────────────────────────────────── */}
           {section === 'plan' && (
-            <Card title="תוכנית ומנוי" icon={<Crown size={18} />}>
+            <Card title={t('settings.planManagement')} icon={<Crown size={18} />}>
               <div className="space-y-4">
                 <div className={`rounded-2xl p-5 border-2 ${
                   workspace.status === 'active' ? 'border-emerald-500 bg-emerald-50' :
@@ -673,8 +663,8 @@ export default function WorkspaceSettings({
                     <div>
                       <p className="font-bold text-slate-800 text-lg">{planLabel}</p>
                       <p className="text-sm text-slate-600 mt-0.5">
-                        {workspace.status === 'trial' && trialEnd ? `תוקף ניסיון עד: ${trialEnd}` :
-                         workspace.status === 'active' ? 'מנוי פעיל' : 'מנוי מושהה'}
+                        {workspace.status === 'trial' && trialEnd ? `${t('billing.trialActive')}: ${trialEnd}` :
+                         workspace.status === 'active' ? t('billing.activePlan') : t('billing.trialEnded')}
                       </p>
                     </div>
                     <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${
@@ -682,24 +672,24 @@ export default function WorkspaceSettings({
                       workspace.status === 'trial'     ? 'bg-indigo-500 text-white'  :
                       'bg-red-500 text-white'
                     }`}>
-                      {workspace.status === 'active' ? 'פעיל' : workspace.status === 'trial' ? 'ניסיון' : 'מושהה'}
+                      {workspace.status === 'active' ? t('billing.activePlan') : workspace.status === 'trial' ? t('billing.trial') : t('billing.trialEnded')}
                     </span>
                   </div>
                 </div>
 
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2 text-sm">
-                  <Row label="שם העסק"    value={workspace.name} />
-                  <Row label="אימייל"      value={workspace.email} />
-                  {workspace.phone      && <Row label="טלפון"   value={workspace.phone} />}
-                  {workspace.businessId && <Row label='ח.פ'     value={workspace.businessId} />}
-                  {workspace.industry   && <Row label="תחום"    value={workspace.industry} />}
-                  <Row label="תאריך הצטרפות" value={new Date(workspace.createdAt).toLocaleDateString('he-IL')} />
+                  <Row label={t('settings.businessName')}    value={workspace.name} />
+                  <Row label={t('team.email')}      value={workspace.email} />
+                  {workspace.phone      && <Row label={t('settings.businessPhone')}   value={workspace.phone} />}
+                  {workspace.businessId && <Row label={t('settings.businessId')}     value={workspace.businessId} />}
+                  {workspace.industry   && <Row label={t('settings.industry')}    value={workspace.industry} />}
+                  <Row label={t('team.joinedAt')} value={new Date(workspace.createdAt).toLocaleDateString('he-IL')} />
                 </div>
 
                 {/* Unique workspace URL */}
                 {workspace.slug && (
                   <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
-                    <p className="text-xs font-semibold text-indigo-700 mb-1.5">הקישור הייחודי שלך</p>
+                    <p className="text-xs font-semibold text-indigo-700 mb-1.5">{t('settings.uniqueLink')}</p>
                     <div className="flex items-center gap-2">
                       <p className="flex-1 text-sm font-mono font-bold text-indigo-800 truncate" dir="ltr">
                         {workspace.slug}.ray-crm.com
@@ -707,7 +697,7 @@ export default function WorkspaceSettings({
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(`https://${workspace.slug}.ray-crm.com`);
-                          onToast('קישור הועתק ✓', 'success');
+                          onToast(t('settings.linkCopied'), 'success');
                         }}
                         className="text-indigo-400 hover:text-indigo-700 transition-colors flex-shrink-0"
                       >
@@ -715,13 +705,13 @@ export default function WorkspaceSettings({
                       </button>
                     </div>
                     <p className="text-[10px] text-indigo-600 mt-1.5">
-                      זהו הקישור שאיתו כל חברי הצוות שלך יכנסו למערכת
+                      {t('settings.uniqueLinkDesc')}
                     </p>
                   </div>
                 )}
 
                 <div className="text-center pt-2">
-                  <p className="text-slate-500 text-sm">לשדרוג תוכנית, צור קשר עם המנהל שלך</p>
+                  <p className="text-slate-500 text-sm">{t('settings.upgradePlan')}</p>
                 </div>
               </div>
             </Card>

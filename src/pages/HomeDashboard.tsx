@@ -4,6 +4,7 @@ import {
   ArrowUpRight, ArrowDownRight, Clock, Star,
   Activity, Target, Zap, AlertTriangle,
 } from 'lucide-react';
+import { useLang } from '../contexts/LangContext';
 import { SmartAlerts } from './Agents';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -79,6 +80,7 @@ function StatCard({ label, value, sub, trend, accent, icon: Icon }: {
 
 /* ── Main ───────────────────────────────────────────────────────────────── */
 export default function HomeDashboard({ leads, standaloneTask, currentUser, onLeadClick, onPageChange }: HomeDashboardProps) {
+  const { t, dir } = useLang();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -170,7 +172,7 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
   };
 
   return (
-    <div className="space-y-4" dir="rtl">
+    <div className="space-y-4" dir={dir}>
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -195,17 +197,17 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
             style={{ backgroundColor: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}
           >
             <AlertTriangle size={13} />
-            {stats.overdueTasks} משימות באיחור
+            {stats.overdueTasks} {t('home.overdueTasksBtn')}
           </button>
         )}
       </div>
 
       {/* ── KPI Cards ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={Users}       label="סה״כ לידים"     value={String(leads.length)}        accent="#6366f1" trend={{ value: stats.newLeads, label: `${stats.newLeads} חדשים` }} />
-        <StatCard icon={Star}        label="לקוחות פעילים"  value={String(stats.activeClients)}  accent="#10b981" trend={{ value: stats.conversionRate, label: `${stats.conversionRate}% המרה` }} />
-        <StatCard icon={CheckSquare} label="משימות פתוחות"  value={String(stats.openTasks)}      accent="#f59e0b" sub={stats.overdueTasks > 0 ? `${stats.overdueTasks} באיחור` : 'הכל בזמן ✓'} />
-        <StatCard icon={Wallet}      label="ערך פייפליין"    value={fmt(stats.pipelineValue)}     accent="#8b5cf6" sub={`הכנסות: ${fmt(stats.revenue)}/חודש`} />
+        <StatCard icon={Users}       label={t('home.statTotalLeads')}     value={String(leads.length)}        accent="#6366f1" trend={{ value: stats.newLeads, label: `${stats.newLeads} ${t('home.statNewLeads')}` }} />
+        <StatCard icon={Star}        label={t('home.statActiveClients')}  value={String(stats.activeClients)}  accent="#10b981" trend={{ value: stats.conversionRate, label: `${stats.conversionRate}% ${t('home.statConversion')}` }} />
+        <StatCard icon={CheckSquare} label={t('home.statOpenTasks')}  value={String(stats.openTasks)}      accent="#f59e0b" sub={stats.overdueTasks > 0 ? `${stats.overdueTasks} ${t('home.statOverdue')}` : t('home.statAllOnTime')} />
+        <StatCard icon={Wallet}      label={t('home.statPipelineValue')}    value={fmt(stats.pipelineValue)}     accent="#8b5cf6" sub={`${t('home.statRevenue')}: ${fmt(stats.revenue)}/${t('kanban.perMonth').replace('/', '')}`} />
       </div>
 
       {/* ── Charts ─────────────────────────────────────────────────────── */}
@@ -215,15 +217,15 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
         <div className="lg:col-span-2" style={card}>
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>לידים לפי חודש</h3>
-              <p className="text-[11px] mt-0.5" style={{ color: '#94a3b8' }}>6 חודשים אחרונים</p>
+              <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.chartLeadsByMonth')}</h3>
+              <p className="text-[11px] mt-0.5" style={{ color: '#94a3b8' }}>{t('home.chartLast6Months')}</p>
             </div>
             <div className="flex items-center gap-3 text-[10px]" style={{ color: '#94a3b8' }}>
               <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />לידים
+                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />{t('home.chartLeads')}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />לקוחות
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />{t('home.chartClients')}
               </span>
             </div>
           </div>
@@ -242,8 +244,8 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
         <div style={card}>
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>מקורות לידים</h3>
-              <p className="text-[11px] mt-0.5" style={{ color: '#94a3b8' }}>התפלגות</p>
+              <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.chartLeadSources')}</h3>
+              <p className="text-[11px] mt-0.5" style={{ color: '#94a3b8' }}>{t('home.chartDistribution')}</p>
             </div>
             <Target size={13} style={{ color: '#cbd5e1' }} />
           </div>
@@ -259,7 +261,7 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-44 flex items-center justify-center text-[12px]" style={{ color: '#cbd5e1' }}>אין נתונים</div>
+            <div className="h-44 flex items-center justify-center text-[12px]" style={{ color: '#cbd5e1' }}>{t('home.chartNoData')}</div>
           )}
         </div>
       </div>
@@ -270,7 +272,7 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
         {/* Pipeline stages */}
         <div style={card}>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>פייפליין לפי שלב</h3>
+            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.pipelineByStage')}</h3>
             <TrendingUp size={13} style={{ color: '#cbd5e1' }} />
           </div>
           <div className="space-y-3">
@@ -303,25 +305,25 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
               e.currentTarget.style.backgroundColor = 'transparent';
             }}
           >
-            פתח פייפליין ←
+            {t('home.openPipeline')}
           </button>
         </div>
 
         {/* Recent leads */}
         <div style={card}>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>לידים אחרונים</h3>
+            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.recentLeads')}</h3>
             <button
               onClick={() => onPageChange('dashboard')}
               className="text-[11px] font-semibold transition-colors"
               style={{ color: '#4f46e5' }}
             >
-              הכל →
+              {t('home.seeAll')}
             </button>
           </div>
           <div className="space-y-1">
             {recentLeads.length === 0 && (
-              <p className="text-[11px] text-center py-6" style={{ color: '#cbd5e1' }}>אין לידים עדיין</p>
+              <p className="text-[11px] text-center py-6" style={{ color: '#cbd5e1' }}>{t('home.recentLeadsEmpty')}</p>
             )}
             {recentLeads.map(l => (
               <button key={l.id} onClick={() => onLeadClick(l)}
@@ -354,37 +356,37 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
         {/* Upcoming tasks */}
         <div style={card}>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>משימות קרובות</h3>
+            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.upcomingTasks')}</h3>
             <button
               onClick={() => onPageChange('tasks')}
               className="text-[11px] font-semibold transition-colors"
               style={{ color: '#4f46e5' }}
             >
-              הכל →
+              {t('home.seeAll')}
             </button>
           </div>
           <div className="space-y-1">
             {upcomingTasks.length === 0 && (
               <div className="text-center py-6">
                 <CheckSquare size={20} className="mx-auto mb-2" style={{ color: '#e2e8f0' }} />
-                <p className="text-[11px]" style={{ color: '#cbd5e1' }}>אין משימות ל-7 ימים הקרובים</p>
+                <p className="text-[11px]" style={{ color: '#cbd5e1' }}>{t('home.noUpcomingTasks')}</p>
               </div>
             )}
-            {upcomingTasks.map(t => {
-              const d = new Date(t.date+'T00:00:00');
+            {upcomingTasks.map(task => {
+              const d = new Date(task.date+'T00:00:00');
               const isToday = d.toDateString() === new Date().toDateString();
-              const priorityDot = t.priority==='high' ? '#ef4444' : t.priority==='medium' ? '#f59e0b' : '#cbd5e1';
+              const priorityDot = task.priority==='high' ? '#ef4444' : task.priority==='medium' ? '#f59e0b' : '#cbd5e1';
               return (
-                <div key={t.id} className="flex items-start gap-2.5 p-2 rounded-lg transition-all"
+                <div key={task.id} className="flex items-start gap-2.5 p-2 rounded-lg transition-all"
                   onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')}
                   onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
                   style={{ borderRadius: 8 }}
                 >
                   <div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0" style={{ backgroundColor: priorityDot }} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-medium truncate" style={{ color: '#334155' }}>{t.description}</p>
-                    <p className="text-[10px] font-semibold mt-0.5" style={{ color: isToday ? '#4f46e5' : '#94a3b8' }}>
-                      {isToday ? 'היום' : d.toLocaleDateString('he-IL', { day:'numeric', month:'short' })} · {t.time}
+                    <p className="text-[12px] font-medium truncate" style={{ color: '#334155' }}>{task.description}</p>
+                    <p className="text-[10px] font-semibold mt.0.5" style={{ color: isToday ? '#4f46e5' : '#94a3b8' }}>
+                      {isToday ? t('home.today') : d.toLocaleDateString('he-IL', { day:'numeric', month:'short' })} · {task.time}
                     </p>
                   </div>
                 </div>
@@ -406,7 +408,7 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
               }}
             >
               <Clock size={11} />
-              ראה את כל המשימות
+              {t('home.seeAllTasks')}
             </button>
           )}
         </div>
@@ -420,11 +422,11 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
             className="text-[11px] font-semibold transition-colors"
             style={{ color: '#4f46e5' }}
           >
-            כל הסוכנים →
+            {t('home.allAgents')}
           </button>
           <div className="flex items-center gap-1.5">
             <AlertTriangle size={13} style={{ color: '#94a3b8' }} />
-            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>התראות חכמות</h3>
+            <h3 className="font-semibold text-[13px]" style={{ color: '#1e293b' }}>{t('home.smartAlerts')}</h3>
           </div>
         </div>
         <SmartAlerts leads={leads} standaloneTask={standaloneTask} />
@@ -438,17 +440,17 @@ export default function HomeDashboard({ leads, standaloneTask, currentUser, onLe
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            <span className="text-[11px]" style={{ color: '#64748b' }}>כל הנתונים מסונכרנים</span>
+            <span className="text-[11px]" style={{ color: '#64748b' }}>{t('home.dataSynced')}</span>
           </div>
         </div>
         <div className="flex items-center gap-4 text-[10px]" style={{ color: '#94a3b8' }}>
           <span className="flex items-center gap-1.5">
             <Activity size={10} />
-            {leads.length} לידים פעילים
+            {leads.length} {t('home.activeLeads')}
           </span>
           <span className="hidden sm:flex items-center gap-1.5">
             <Users size={10} />
-            {stats.activeClients} לקוחות
+            {stats.activeClients} {t('home.statActiveClients')}
           </span>
         </div>
       </div>

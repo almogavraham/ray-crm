@@ -10,6 +10,7 @@ import {
   ChevronLeft, RefreshCw, Download, Info, Sparkles,
 } from 'lucide-react';
 import type { Lead, LeadStatus, LeadSource } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 type MappableField = 'company' | 'contactName' | 'phone' | 'email' | 'budget' | 'status' | 'source' | 'notes' | 'skip';
@@ -77,17 +78,7 @@ const FIELD_PATTERNS: Record<Exclude<MappableField, 'skip'>, string[]> = {
   ],
 };
 
-const FIELD_LABELS: Record<MappableField, string> = {
-  company:     '🏢 שם חברה / ליד *',
-  contactName: '👤 שם איש קשר',
-  phone:       '📞 טלפון',
-  email:       '✉️ אימייל',
-  budget:      '💰 תקציב',
-  status:      '📊 סטטוס',
-  source:      '🔗 מקור',
-  notes:       '📝 הערות',
-  skip:        '— דלג —',
-};
+// FIELD_LABELS is computed inside the component using t()
 
 const VALID_STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
 const VALID_SOURCES:  LeadSource[]  = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
@@ -124,7 +115,7 @@ function normalizeSource(raw: string): LeadSource {
 }
 
 /** Try to find the actual header row (skip empty leading rows) */
-function findHeaderRow(all: string[][]): { headerIdx: number; headers: string[] } {
+function findHeaderRow(all: string[][], colPrefix: string): { headerIdx: number; headers: string[] } {
   for (let i = 0; i < Math.min(5, all.length); i++) {
     const row = all[i].map(c => String(c ?? '').trim());
     const nonEmpty = row.filter(Boolean);
@@ -134,7 +125,7 @@ function findHeaderRow(all: string[][]): { headerIdx: number; headers: string[] 
   }
   // Fallback: generate generic headers
   const cols = all[0]?.length ?? 0;
-  return { headerIdx: 0, headers: Array.from({ length: cols }, (_, i) => `עמודה ${i + 1}`) };
+  return { headerIdx: 0, headers: Array.from({ length: cols }, (_, i) => `${colPrefix} ${i + 1}`) };
 }
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
@@ -146,6 +137,20 @@ interface Props {
 
 /* ── Component ───────────────────────────────────────────────────────────── */
 export default function ExcelImportModal({ onImport, onClose, currentUser }: Props) {
+  const { t, dir } = useLang();
+
+  const FIELD_LABELS: Record<MappableField, string> = {
+    company:     t('excelImport.fieldCompany'),
+    contactName: t('excelImport.fieldContact'),
+    phone:       t('excelImport.fieldPhone'),
+    email:       t('excelImport.fieldEmail'),
+    budget:      t('excelImport.fieldBudget'),
+    status:      t('excelImport.fieldStatus'),
+    source:      t('excelImport.fieldSource'),
+    notes:       t('excelImport.fieldNotes'),
+    skip:        t('excelImport.fieldSkip'),
+  };
+
   const [step,      setStep]      = useState<'upload' | 'map' | 'importing' | 'done'>('upload');
   const [headers,   setHeaders]   = useState<string[]>([]);
   const [rows,      setRows]      = useState<string[][]>([]);
@@ -172,17 +177,17 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
         const all = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '', raw: false })
           .map(r => (r as unknown[]).map(c => String(c ?? '').trim())) as string[][];
 
-        if (all.length === 0) { setError('הקובץ ריק'); return; }
+        if (all.length === 0) { setError(t('excelImport.errorEmpty')); return; }
 
         // Find the real header row
-        const { headerIdx, headers: hdrs } = findHeaderRow(all);
+        const { headerIdx, headers: hdrs } = findHeaderRow(all, t('excelImport.colPrefix'));
 
         const dataRows = all
           .slice(headerIdx + 1)
           .filter(r => r.some(c => c.trim().length > 0)); // skip blank rows
 
         if (dataRows.length === 0) {
-          setError('לא נמצאו שורות נתונים בקובץ. ודא שהקובץ מכיל לפחות שורת כותרות + שורת נתונים.');
+          setError(t('excelImport.errorNoData'));
           return;
         }
 
@@ -203,11 +208,11 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
         setStep('map');
       } catch (err) {
         console.error('Excel parse error:', err);
-        setError('שגיאה בקריאת הקובץ — ודא שזה קובץ Excel תקני (.xlsx / .xls / .csv)');
+        setError(t('excelImport.errorParse'));
       }
     };
     reader.readAsArrayBuffer(file);
-  }, []);
+  }, [t]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -314,7 +319,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
 
   /* ── Render ─────────────────────────────────────────────────────────────── */
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" dir={dir}>
       <div className="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
 
         {/* ── Header ── */}
@@ -324,7 +329,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
           </button>
           <div className="flex items-center gap-2">
             <FileSpreadsheet size={18} className="text-emerald-400" />
-            <h2 className="text-white font-bold text-base">ייבוא לידים מאקסל</h2>
+            <h2 className="text-white font-bold text-base">{t('excelImport.title')}</h2>
             {fileName && <span className="text-slate-500 text-xs truncate max-w-[120px]">{fileName}</span>}
           </div>
         </div>
@@ -340,7 +345,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                   'border-slate-700 text-slate-700'}`}>
                   {i + 1}
                 </div>
-                {s === 'upload' ? 'העלאת קובץ' : 'מיפוי עמודות'}
+                {s === 'upload' ? t('excelImport.step1') : t('excelImport.step2')}
               </div>
             ))}
           </div>
@@ -368,8 +373,8 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                 }`}>
                   <Upload size={26} className={dragging ? 'text-emerald-400' : 'text-slate-500'} />
                 </div>
-                <p className="text-white font-semibold text-base mb-1">גרור קובץ לכאן או לחץ לבחירה</p>
-                <p className="text-slate-500 text-sm">Excel (.xlsx, .xls) או CSV</p>
+                <p className="text-white font-semibold text-base mb-1">{t('excelImport.dropzone')}</p>
+                <p className="text-slate-500 text-sm">{t('excelImport.dropzoneDesc')}</p>
                 <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFileChange} />
               </div>
 
@@ -386,22 +391,22 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                   <button onClick={downloadTemplate}
                     className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 text-sm font-semibold transition-colors">
                     <Download size={14} />
-                    הורד תבנית Excel לדוגמה
+                    {t('excelImport.downloadTemplate')}
                   </button>
                   <div className="flex items-center gap-1.5 text-slate-500 text-xs">
                     <Sparkles size={11} className="text-indigo-400" />
-                    זיהוי אוטומטי חכם
+                    {t('excelImport.autoDetect')}
                   </div>
                 </div>
                 <div className="border-t border-slate-700 pt-3 space-y-1.5">
                   {[
-                    'המערכת מזהה אוטומטית את עמודות הטלפון, אימייל, תקציב וכו׳',
-                    'שורה ראשונה = כותרות עמודות (לא חובה, יש זיהוי חכם)',
-                    'כל שורה = ליד אחד',
-                  ].map(t => (
-                    <div key={t} className="flex items-start gap-2 text-slate-500 text-xs">
+                    t('excelImport.tip1'),
+                    t('excelImport.tip2'),
+                    t('excelImport.tip3'),
+                  ].map(tip => (
+                    <div key={tip} className="flex items-start gap-2 text-slate-500 text-xs">
                       <Info size={10} className="flex-shrink-0 mt-0.5 text-slate-600" />
-                      {t}
+                      {tip}
                     </div>
                   ))}
                 </div>
@@ -415,13 +420,13 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
               {/* Summary */}
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-bold">
-                  {rows.length} שורות נמצאו
+                  {rows.length} {t('excelImport.rowsFound')}
                 </span>
                 <span className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 px-3 py-1 rounded-full text-xs font-bold">
-                  {headers.length} עמודות
+                  {headers.length} {t('excelImport.columns')}
                 </span>
                 <span className="bg-slate-700 text-slate-400 px-3 py-1 rounded-full text-xs">
-                  {mappedCount} עמודות מזוהות אוטומטית
+                  {mappedCount} {t('excelImport.autoMapped')}
                 </span>
               </div>
 
@@ -429,13 +434,13 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
               {!hasCompanyCol && (
                 <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-amber-400 text-xs">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                  <span>לא זוהתה עמודת "שם חברה" — עמודה ראשונה תשמש כשם הליד אוטומטית. תוכל לשנות למטה.</span>
+                  <span>{t('excelImport.noCompanyCol')}</span>
                 </div>
               )}
 
               {/* Column mapping */}
               <div className="space-y-1.5">
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">מיפוי עמודות</p>
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">{t('excelImport.columnMapping')}</p>
                 <div className="space-y-1.5">
                   {headers.map((hdr, hIdx) => {
                     const sampleValues = previewRows
@@ -454,7 +459,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                         {/* Column name + sample */}
                         <div className="flex-1 text-right min-w-0">
                           <span className={`text-sm font-semibold ${isMapped ? 'text-white' : 'text-slate-500'}`}>
-                            {hdr || `עמודה ${hIdx + 1}`}
+                            {hdr || `${t('excelImport.colPrefix')} ${hIdx + 1}`}
                           </span>
                           {sampleValues.length > 0 && (
                             <span className="text-slate-600 text-xs mr-2 truncate">
@@ -486,7 +491,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
               {previewRows.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                    תצוגה מקדימה — {Math.min(4, rows.length)} מתוך {rows.length} שורות
+                    {t('excelImport.preview')} — {Math.min(4, rows.length)} {t('excelImport.outOf')} {rows.length} {t('excelImport.rows')}
                   </p>
                   <div className="overflow-x-auto rounded-xl border border-slate-700">
                     <table className="w-full text-xs">
@@ -494,7 +499,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                         <tr className="bg-slate-800 border-b border-slate-700">
                           {headers.map((h, i) => (
                             <th key={i} className="px-3 py-2 text-right text-slate-400 font-medium whitespace-nowrap">
-                              {h || `עמודה ${i + 1}`}
+                              {h || `${t('excelImport.colPrefix')} ${i + 1}`}
                               {mapping[h] !== 'skip' && mapping[h] && (
                                 <span className="mr-1 text-emerald-400 text-[10px]">
                                   → {FIELD_LABELS[mapping[h]].replace(/[🏢👤📞✉️💰📊🔗]/g, '').replace(' *','').trim()}
@@ -518,7 +523,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                     </table>
                   </div>
                   {rows.length > 4 && (
-                    <p className="text-slate-600 text-xs text-center">...ועוד {rows.length - 4} שורות</p>
+                    <p className="text-slate-600 text-xs text-center">...{t('excelImport.moreRows')} {rows.length - 4} {t('excelImport.rows')}</p>
                   )}
                 </div>
               )}
@@ -530,14 +535,14 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                   className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 text-sm transition-colors"
                 >
                   <ChevronLeft size={14} />
-                  חזרה
+                  {t('excelImport.back')}
                 </button>
                 <button
                   onClick={doImport}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-sm transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-500/20"
                 >
                   <Upload size={15} />
-                  ייבא {rows.length} לידים
+                  {t('excelImport.import')} {rows.length} {t('excelImport.leads')}
                 </button>
               </div>
             </div>
@@ -550,8 +555,8 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                 <RefreshCw size={28} className="text-emerald-400 animate-spin" />
               </div>
               <div>
-                <p className="text-white font-bold text-lg">מייבא לידים...</p>
-                <p className="text-slate-500 text-sm mt-1">מעבד {rows.length} רשומות</p>
+                <p className="text-white font-bold text-lg">{t('excelImport.importing')}</p>
+                <p className="text-slate-500 text-sm mt-1">{t('excelImport.processing')} {rows.length} {t('excelImport.records')}</p>
               </div>
             </div>
           )}
@@ -563,24 +568,24 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                 <CheckCircle2 size={32} className="text-emerald-400" />
               </div>
               <div>
-                <p className="text-white font-black text-2xl">הייבוא הושלם!</p>
-                <p className="text-slate-400 text-sm mt-1">הלידים נוספו לרשימה שלך</p>
+                <p className="text-white font-black text-2xl">{t('excelImport.done')}</p>
+                <p className="text-slate-400 text-sm mt-1">{t('excelImport.doneDesc')}</p>
               </div>
               <div className="flex gap-3 justify-center">
                 <div className="bg-emerald-500/15 border border-emerald-500/30 rounded-2xl px-8 py-4 text-center">
                   <p className="text-emerald-400 font-black text-3xl">{imported}</p>
-                  <p className="text-slate-500 text-xs mt-1">לידים יובאו</p>
+                  <p className="text-slate-500 text-xs mt-1">{t('excelImport.imported')}</p>
                 </div>
                 {skipped > 0 && (
                   <div className="bg-slate-800 border border-slate-700 rounded-2xl px-8 py-4 text-center">
                     <p className="text-slate-400 font-black text-3xl">{skipped}</p>
-                    <p className="text-slate-500 text-xs mt-1">שורות ריקות/דולגו</p>
+                    <p className="text-slate-500 text-xs mt-1">{t('excelImport.skipped')}</p>
                   </div>
                 )}
                 {imported > 0 && Object.values(mapping).includes('notes') && (
                   <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-2xl px-6 py-4 text-center">
                     <p className="text-indigo-400 font-black text-2xl">📝</p>
-                    <p className="text-slate-500 text-xs mt-1">הערות סונכרנו</p>
+                    <p className="text-slate-500 text-xs mt-1">{t('excelImport.notesSynced')}</p>
                   </div>
                 )}
               </div>
@@ -588,7 +593,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                 onClick={onClose}
                 className="w-full bg-white hover:bg-neutral-100 text-black font-bold py-3.5 rounded-2xl transition-colors text-sm"
               >
-                סגור וצפה בלידים
+                {t('excelImport.closeView')}
               </button>
             </div>
           )}

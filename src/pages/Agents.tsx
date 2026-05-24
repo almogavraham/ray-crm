@@ -14,6 +14,7 @@ import type { Lead, TeamMember, StandaloneTask, TaskPriority } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { useLang } from '../contexts/LangContext';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'performance' | 'brief' | 'portal' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
@@ -66,6 +67,7 @@ function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const [threshold,    setThreshold]    = useState(7);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [messages,     setMessages]     = useState<Record<string, string>>({});
@@ -158,9 +160,9 @@ ${styleSection}
   };
 
   const urgency = (days: number) => {
-    if (days >= 21) return { border: 'border-red-700/50',    bg: 'bg-red-900/20',    dot: 'bg-red-400',    label: '🔴 דחוף מאוד', color: 'text-red-400' };
-    if (days >= 14) return { border: 'border-orange-700/40', bg: 'bg-orange-900/15', dot: 'bg-orange-400', label: '🟠 דחוף',        color: 'text-orange-400' };
-    return              { border: 'border-amber-700/30',  bg: 'bg-amber-900/10',  dot: 'bg-amber-400',  label: '🟡 מעקב נדרש', color: 'text-amber-400' };
+    if (days >= 21) return { border: 'border-red-700/50',    bg: 'bg-red-900/20',    dot: 'bg-red-400',    label: '🔴 ' + t('agents.urgent'),        color: 'text-red-400' };
+    if (days >= 14) return { border: 'border-orange-700/40', bg: 'bg-orange-900/15', dot: 'bg-orange-400', label: '🟠 ' + t('agents.needsAttention'), color: 'text-orange-400' };
+    return              { border: 'border-amber-700/30',  bg: 'bg-amber-900/10',  dot: 'bg-amber-400',  label: '🟡 ' + t('agents.needsAttention'), color: 'text-amber-400' };
   };
 
   return (
@@ -172,12 +174,12 @@ ${styleSection}
             <Clock size={18} className="text-white" />
           </div>
           <div>
-            <p className="text-white font-bold text-sm">סוכן מעקב חכם</p>
-            <p className="text-zinc-500 text-xs">מזהה לידים שנשכחו ומייצר הודעה מותאמת</p>
+            <p className="text-white font-bold text-sm">{t('agents.tab.followup')}</p>
+            <p className="text-zinc-500 text-xs">{t('agents.followupDesc')}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-zinc-500 text-xs">סף ימים:</span>
+          <span className="text-zinc-500 text-xs">{t('agents.daysThreshold')}</span>
           {[3, 7, 14, 21].map(d => (
             <button key={d} onClick={() => setThreshold(d)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${threshold === d ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-white'}`}>
@@ -190,9 +192,9 @@ ${styleSection}
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: 'לטיפול',         value: staleLeads.length,                                          color: 'text-red-400' },
-          { label: 'דחוף (21+ ימים)', value: staleLeads.filter(l => daysSinceUpdate(l) >= 21).length,  color: 'text-orange-400' },
-          { label: 'Mirror Style',   value: mirrorStyles.length,                                        color: 'text-violet-400' },
+          { label: t('agents.needsAttention'),  value: staleLeads.length,                                         color: 'text-red-400' },
+          { label: t('agents.urgent'),          value: staleLeads.filter(l => daysSinceUpdate(l) >= 21).length,  color: 'text-orange-400' },
+          { label: t('agents.mirrorStyle'),     value: mirrorStyles.length,                                       color: 'text-violet-400' },
         ].map(s => (
           <div key={s.label} className="bg-zinc-900/80 border border-white/[0.07] rounded-xl p-3 text-center">
             <div className={`text-2xl font-black ${s.color}`}>{s.value}</div>
@@ -205,8 +207,8 @@ ${styleSection}
       {staleLeads.length === 0 ? (
         <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
           <CheckCircle2 size={40} className="text-emerald-400 mx-auto mb-3" />
-          <p className="text-white font-bold">כל הלידים מעודכנים! 🎉</p>
-          <p className="text-zinc-400 text-sm mt-1">אין לידים ללא עדכון מעל {threshold} ימים</p>
+          <p className="text-white font-bold">{t('agents.allUpdated')}</p>
+          <p className="text-zinc-400 text-sm mt-1">{t('agents.noLeadsThreshold')} {threshold} {t('agents.daysLabel')}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -266,7 +268,7 @@ ${styleSection}
                   {!msg && (
                     <button onClick={() => generateMessage(lead)} disabled={isGen}
                       className="mt-3 w-full flex items-center justify-center gap-2 text-xs font-bold py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-600/40 text-indigo-300 transition-all disabled:opacity-50">
-                      {isGen ? <><Loader2 size={12} className="animate-spin"/> מייצר...</> : <><Brain size={12}/> צור הודעת מעקב AI</>}
+                      {isGen ? <><Loader2 size={12} className="animate-spin"/> {t('agents.generating')}</> : <><Brain size={12}/> {t('agents.generateFollowup')}</>}
                     </button>
                   )}
                 </div>
@@ -278,21 +280,21 @@ ${styleSection}
                     <div className="flex items-center gap-2 flex-wrap">
                       <button onClick={() => copyMsg(lead.id, msg)}
                         className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                        <Copy size={10}/> {copiedId === lead.id ? '✓ הועתק' : 'העתק'}
+                        <Copy size={10}/> {copiedId === lead.id ? '✓ ' + t('agents.copied') : t('agents.copyMessage')}
                       </button>
                       {waNumber && (
                         <a href={`https://wa.me/${waNumber}?text=${encodeURIComponent(msg)}`}
                           target="_blank" rel="noreferrer"
                           className="flex items-center gap-1.5 text-xs bg-green-800/60 hover:bg-green-700/60 text-green-300 border border-green-700/40 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                          <MessageCircle size={10}/> שלח ווטסאפ
+                          <MessageCircle size={10}/> {t('agents.sendWhatsapp')}
                         </a>
                       )}
                       <button onClick={() => generateMessage(lead)} disabled={isGen}
                         className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">
-                        <RefreshCw size={10}/> שנה
+                        <RefreshCw size={10}/> {t('agents.change')}
                       </button>
                       <span className="mr-auto text-[10px] text-slate-600 flex items-center gap-1">
-                        <Sparkles size={9} className="text-violet-500"/> {mirrorStyles.length > 0 ? 'Mirror Style' : 'ברירת מחדל'}
+                        <Sparkles size={9} className="text-violet-500"/> {mirrorStyles.length > 0 ? t('agents.mirrorStyle') : 'Default'}
                       </span>
                     </div>
                   </div>
@@ -310,6 +312,7 @@ ${styleSection}
    FEATURE 2 — REVENUE FORECAST
 ══════════════════════════════════════════════════════════════════════════════ */
 export function RevenueForecast({ leads }: { leads: Lead[] }) {
+  const { t } = useLang();
   const [scenario, setScenario] = useState<'base' | 'optimistic' | 'pessimistic'>('base');
   const mod = { base: 1, optimistic: 1.4, pessimistic: 0.6 }[scenario];
 
@@ -345,8 +348,8 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
             <TrendingUp size={18} className="text-white"/>
           </div>
           <div>
-            <p className="text-white font-bold text-sm">תחזית הכנסות</p>
-            <p className="text-zinc-500 text-xs">חישוב ממשקל הסתברויות פייפליין</p>
+            <p className="text-white font-bold text-sm">{t('agents.forecastTitle')}</p>
+            <p className="text-zinc-500 text-xs">{t('agents.forecastDesc')}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -355,7 +358,7 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${scenario === s
                 ? s === 'optimistic' ? 'bg-emerald-600 text-white' : s === 'pessimistic' ? 'bg-red-700 text-white' : 'bg-blue-600 text-white'
                 : 'bg-slate-700 text-slate-400 hover:text-white'}`}>
-              {s === 'pessimistic' ? '📉 פסימי' : s === 'optimistic' ? '📈 אופטימי' : '📊 בסיס'}
+              {s === 'pessimistic' ? t('agents.pessimistic') : s === 'optimistic' ? t('agents.optimistic') : t('agents.base')}
             </button>
           ))}
         </div>
@@ -364,9 +367,9 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
       {/* Big 3 numbers */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: 'מאושר', sub: `${activeLeads.length} לקוחות פעילים`, val: confirmed, color: 'emerald' },
-          { label: 'צפוי מפייפליין', sub: `${pipelineLeads.length} לידים | סה"כ ₪${pipelineTotal.toLocaleString()}`, val: fromPipeline, color: 'blue' },
-          { label: 'סה"כ תחזית', sub: `תרחיש ${scenario === 'base' ? 'בסיס' : scenario === 'optimistic' ? 'אופטימי' : 'פסימי'}`, val: total, color: 'indigo' },
+          { label: t('agents.confirmed'), sub: `${activeLeads.length} ${t('agents.stat.activeClients')}`, val: confirmed, color: 'emerald' },
+          { label: t('agents.fromPipeline'), sub: `${pipelineLeads.length} ${t('agents.stat.leads')} | ₪${pipelineTotal.toLocaleString()}`, val: fromPipeline, color: 'blue' },
+          { label: t('agents.forecastTotal'), sub: scenario === 'base' ? t('agents.base') : scenario === 'optimistic' ? t('agents.optimistic') : t('agents.pessimistic'), val: total, color: 'indigo' },
         ].map(({ label, sub, val, color }) => (
           <div key={label} className={`bg-${color}-900/30 border border-${color}-700/40 rounded-2xl p-4 text-center`}>
             <p className={`text-${color}-400 text-[10px] font-bold uppercase tracking-widest mb-1`}>{label}</p>
@@ -378,7 +381,7 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
 
       {/* Breakdown bars */}
       <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-5 space-y-4">
-        <h3 className="text-white font-bold text-sm">פירוט לפי סטטוס</h3>
+        <h3 className="text-white font-bold text-sm">{t('agents.byStatus')}</h3>
         {groups.map(g => {
           const raw = g.leads.reduce((s, l) => s + l.budget, 0);
           const exp = raw * (g.status === 'לקוח פעיל' ? 1 : g.prob * mod);
@@ -408,7 +411,7 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
       {top5.length > 0 && (
         <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-5 space-y-3">
           <h3 className="text-white font-bold text-sm flex items-center gap-2">
-            <Star size={14} className="text-amber-400"/> הזדמנויות עם הכי הרבה פוטנציאל
+            <Star size={14} className="text-amber-400"/> {t('agents.topOpportunities')}
           </h3>
           {top5.map(({ lead, exp }) => (
             <div key={lead.id} className="flex items-center justify-between bg-zinc-800/60 rounded-xl px-4 py-3">
@@ -436,6 +439,7 @@ function ProposalGenerator({ leads, currentUser, onToast }: {
   currentUser: string;
   onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const [selectedLead, setSelectedLead] = useState('');
   const [services,     setServices]     = useState<string[]>([]);
   const [budget,       setBudget]       = useState('');
@@ -510,8 +514,8 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
           <Target size={18} className="text-white"/>
         </div>
         <div>
-          <p className="text-white font-bold text-sm">מחולל הצעות מחיר AI</p>
-          <p className="text-zinc-500 text-xs">הצעת מחיר שיווקית מקצועית תוך שניות</p>
+          <p className="text-white font-bold text-sm">{t('agents.proposalTitle')}</p>
+          <p className="text-zinc-500 text-xs">{t('agents.proposalDesc')}</p>
         </div>
       </div>
 
@@ -520,10 +524,10 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
         <div className="space-y-4">
           {/* Lead selector */}
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-2">ליד (אופציונלי)</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-2">{t('agents.leadOptional')}</label>
             <select value={selectedLead} onChange={e => setSelectedLead(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
-              <option value="">— ללא ליד ספציפי —</option>
+              <option value="">{t('agents.noSpecificLead')}</option>
               {leads.filter(l => ['חדש','בתהליך'].includes(l.status)).map(l => (
                 <option key={l.id} value={l.id}>{l.company} — {l.contactName}</option>
               ))}
@@ -532,7 +536,7 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
 
           {/* Services */}
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-2">שירותים לכלול</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-2">{t('agents.servicesToInclude')}</label>
             <div className="flex flex-wrap gap-2">
               {SERVICE_LIST.map(s => (
                 <button key={s} onClick={() => toggleService(s)}
@@ -549,21 +553,21 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
 
           {/* Budget */}
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-2">תקציב חודשי מוצע (₪)</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-2">{t('agents.monthlyBudget')}</label>
             <input type="number" value={budget} onChange={e => setBudget(e.target.value)} placeholder="5000"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30"/>
           </div>
 
           {/* Notes */}
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-2">הערות נוספות</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-2">{t('agents.additionalNotes')}</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="פרטים מיוחדים, דרישות, נקודות שיש להדגיש..."
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white resize-none focus:outline-none focus:ring-1 focus:ring-white/30 text-right"/>
           </div>
 
           <button onClick={generate} disabled={loading || services.length === 0}
             className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-            {loading ? <><Loader2 size={15} className="animate-spin"/> מייצר הצעה...</> : <><Zap size={15}/> צור הצעת מחיר</>}
+            {loading ? <><Loader2 size={15} className="animate-spin"/> {t('agents.generatingProposal')}</> : <><Zap size={15}/> {t('agents.generateProposal')}</>}
           </button>
         </div>
 
@@ -574,9 +578,9 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
               <div className="flex items-center justify-between mb-3">
                 <button onClick={copyResult}
                   className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">
-                  <Copy size={10}/> {copied ? '✓ הועתק' : 'העתק הכל'}
+                  <Copy size={10}/> {copied ? '✓ ' + t('agents.copied') : t('agents.copyAll')}
                 </button>
-                <span className="text-[10px] text-slate-600 flex items-center gap-1"><Sparkles size={9} className="text-violet-400"/> נוצר על ידי AI</span>
+                <span className="text-[10px] text-slate-600 flex items-center gap-1"><Sparkles size={9} className="text-violet-400"/> {t('agents.aiGenerated')}</span>
               </div>
               <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap text-right overflow-y-auto max-h-[500px]">
                 {result}
@@ -585,8 +589,8 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
           ) : (
             <div className="flex flex-col items-center justify-center h-full py-12 text-center">
               <Target size={32} className="text-slate-700 mb-3"/>
-              <p className="text-slate-500 text-sm">בחר שירותים ולחץ "צור הצעת מחיר"</p>
-              <p className="text-slate-600 text-xs mt-1">ה-AI יכתוב הצעה מקצועית ומשכנעת</p>
+              <p className="text-slate-500 text-sm">{t('agents.selectAndGenerate')}</p>
+              <p className="text-slate-600 text-xs mt-1">{t('agents.aiGenerated')}</p>
             </div>
           )}
         </div>
@@ -605,6 +609,7 @@ interface SmartAlert {
 }
 
 export function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standaloneTask: StandaloneTask[] }) {
+  const { t } = useLang();
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const alerts: SmartAlert[] = [];
 
@@ -691,24 +696,24 @@ export function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standalo
             <AlertTriangle size={18} className="text-white"/>
           </div>
           <div>
-            <p className="text-white font-bold text-sm">התראות חכמות</p>
-            <p className="text-zinc-500 text-xs">סריקת מערכת חיה — {alerts.length} נקודות לטיפול</p>
+            <p className="text-white font-bold text-sm">{t('agents.smartAlerts')}</p>
+            <p className="text-zinc-500 text-xs">{t('agents.alertsLive')} — {alerts.length} {t('agents.alertsPoints')}</p>
           </div>
         </div>
         <div className="flex gap-2 text-xs">
-          {criticals.length > 0 && <span className="bg-red-700/40 text-red-300 px-2 py-0.5 rounded-full font-bold border border-red-600/40">{criticals.length} קריטי</span>}
-          {warnings.length > 0  && <span className="bg-amber-700/30 text-amber-300 px-2 py-0.5 rounded-full font-bold border border-amber-600/30">{warnings.length} אזהרה</span>}
-          {infos.length > 0     && <span className="bg-blue-700/30 text-blue-300 px-2 py-0.5 rounded-full font-bold border border-blue-600/30">{infos.length} מידע</span>}
+          {criticals.length > 0 && <span className="bg-red-700/40 text-red-300 px-2 py-0.5 rounded-full font-bold border border-red-600/40">{criticals.length} {t('agents.critical')}</span>}
+          {warnings.length > 0  && <span className="bg-amber-700/30 text-amber-300 px-2 py-0.5 rounded-full font-bold border border-amber-600/30">{warnings.length} {t('agents.warning')}</span>}
+          {infos.length > 0     && <span className="bg-blue-700/30 text-blue-300 px-2 py-0.5 rounded-full font-bold border border-blue-600/30">{infos.length} {t('agents.info')}</span>}
         </div>
       </div>
 
       {alerts.length === 0 ? (
         <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
           <CheckCircle2 size={40} className="text-emerald-400 mx-auto mb-3"/>
-          <p className="text-white font-bold">הכל תקין! אין התראות 🎉</p>
+          <p className="text-white font-bold">{t('agents.allOk')}</p>
         </div>
       ) : (
-        [['קריטי', criticals], ['אזהרה', warnings], ['מידע', infos]].map(([label, group]) =>
+        [[t('agents.critical'), criticals], [t('agents.warning'), warnings], [t('agents.info'), infos]].map(([label, group]) =>
           (group as SmartAlert[]).length > 0 ? (
             <div key={label as string} className="space-y-2">
               <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1">{label as string}</p>
@@ -733,6 +738,7 @@ export function SmartAlerts({ leads, standaloneTask }: { leads: Lead[]; standalo
    FEATURE 5 — SOURCE ROI
 ══════════════════════════════════════════════════════════════════════════════ */
 export function SourceROI({ leads }: { leads: Lead[] }) {
+  const { t } = useLang();
   const SOURCES = ['אורגני','פרסום ממומן','הפניה','אינסטגרם','פייסבוק','גוגל'] as const;
   const EMOJI: Record<string, string>  = { 'אורגני':'🌱','פרסום ממומן':'💰','הפניה':'🤝','אינסטגרם':'📸','פייסבוק':'👤','גוגל':'🔍' };
   const COLOR: Record<string, string>  = { 'אורגני':'bg-emerald-500','פרסום ממומן':'bg-blue-500','הפניה':'bg-violet-500','אינסטגרם':'bg-pink-500','פייסבוק':'bg-indigo-500','גוגל':'bg-amber-500' };
@@ -757,8 +763,8 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
           <BarChart3 size={18} className="text-white"/>
         </div>
         <div>
-          <p className="text-white font-bold text-sm">ROI מקורות</p>
-          <p className="text-zinc-500 text-xs">מהיכן מגיעים הלקוחות הרווחיים ביותר</p>
+          <p className="text-white font-bold text-sm">{t('agents.roiTitle')}</p>
+          <p className="text-zinc-500 text-xs">{t('agents.roiDesc')}</p>
         </div>
       </div>
 
@@ -766,7 +772,7 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
         <div className="bg-gradient-to-l from-emerald-900/30 to-slate-800/60 border border-emerald-700/40 rounded-2xl p-4 flex items-center gap-3">
           <span className="text-4xl">{EMOJI[best.src]}</span>
           <div>
-            <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-widest">המקור הכי רווחי</p>
+            <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-widest">{t('agents.bestSource')}</p>
             <p className="text-white font-black text-lg">{best.src}</p>
             <p className="text-zinc-500 text-xs">₪{best.rev.toLocaleString()}/חודש · {Math.round(best.conv)}% אחוז סגירה · {best.all} לידים</p>
           </div>
@@ -775,7 +781,7 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
 
       {/* Revenue bars */}
       <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-5 space-y-4">
-        <h3 className="text-white font-bold text-sm">הכנסה חודשית לפי מקור</h3>
+        <h3 className="text-white font-bold text-sm">{t('agents.revenueBySource')}</h3>
         {data.map(d => (
           <div key={d.src} className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
@@ -785,7 +791,7 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
                 <span className="text-slate-500">({d.all} לידים, {d.active} סגורים)</span>
               </div>
               <div className="flex gap-3">
-                <span className="text-slate-400">סגירה: {Math.round(d.conv)}%</span>
+                <span className="text-slate-400">{t('agents.close')}: {Math.round(d.conv)}%</span>
                 <span className="text-white font-bold">₪{d.rev.toLocaleString()}</span>
               </div>
             </div>
@@ -799,7 +805,7 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
 
       {/* Volume columns */}
       <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-5">
-        <h3 className="text-white font-bold text-sm mb-4">נפח לידים לפי מקור</h3>
+        <h3 className="text-white font-bold text-sm mb-4">{t('agents.volumeBySource')}</h3>
         <div className="flex items-end gap-3" style={{ height: 120 }}>
           {data.map(d => (
             <div key={d.src} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
@@ -815,8 +821,8 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
           ))}
         </div>
         <div className="flex gap-4 text-[10px] mt-3">
-          <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm bg-emerald-500/80"/> לקוח פעיל</div>
-          <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm bg-slate-600/50"/> בפייפליין</div>
+          <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm bg-emerald-500/80"/> {t('agents.stat.activeClients')}</div>
+          <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm bg-slate-600/50"/> Pipeline</div>
         </div>
       </div>
 
@@ -825,12 +831,12 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-slate-700/50">
-              <th className="text-right text-slate-500 font-semibold px-4 py-3">מקור</th>
-              <th className="text-center text-slate-500 font-semibold px-3 py-3">לידים</th>
-              <th className="text-center text-slate-500 font-semibold px-3 py-3">פעילים</th>
-              <th className="text-center text-slate-500 font-semibold px-3 py-3">סגירה</th>
-              <th className="text-center text-slate-500 font-semibold px-3 py-3">ציון AI</th>
-              <th className="text-left text-slate-500 font-semibold px-4 py-3">הכנסה</th>
+              <th className="text-right text-slate-500 font-semibold px-4 py-3">{t('agents.colSource')}</th>
+              <th className="text-center text-slate-500 font-semibold px-3 py-3">{t('agents.colLeads')}</th>
+              <th className="text-center text-slate-500 font-semibold px-3 py-3">{t('agents.colActive')}</th>
+              <th className="text-center text-slate-500 font-semibold px-3 py-3">{t('agents.colClose')}</th>
+              <th className="text-center text-slate-500 font-semibold px-3 py-3">{t('agents.colAiScore')}</th>
+              <th className="text-left text-slate-500 font-semibold px-4 py-3">{t('agents.colRevenue')}</th>
             </tr>
           </thead>
           <tbody>
@@ -859,6 +865,7 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const [selectedId, setSelectedId] = useState('');
   const [loading,    setLoading]    = useState(false);
   const [result,     setResult]     = useState<{
@@ -935,15 +942,15 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
     <div className="space-y-4">
       <div className="bg-black/60 border border-white/[0.08] rounded-2xl p-4 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center"><Search size={18} className="text-black"/></div>
-        <div><p className="text-white font-bold text-sm">סוכן העשרת לידים</p><p className="text-zinc-500 text-xs">AI מחפש ברשת מידע על החברה ומוסיף לכרטיס</p></div>
+        <div><p className="text-white font-bold text-sm">{t('agents.enrichTitle')}</p><p className="text-zinc-500 text-xs">{t('agents.enrichDesc')}</p></div>
       </div>
       <div className="grid md:grid-cols-2 gap-4">
         <div className="space-y-4">
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">בחר ליד להעשרה</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.selectLeadEnrich')}</label>
             <select value={selectedId} onChange={e => { setSelectedId(e.target.value); setResult(null); }}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
-              <option value="">— בחר ליד —</option>
+              <option value="">{t('agents.selectLead')}</option>
               {leads.filter(l => l.status !== 'לא רלוונטי').map(l => (
                 <option key={l.id} value={l.id}>{l.company} ({l.status})</option>
               ))}
@@ -958,7 +965,7 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
           )}
           <button onClick={enrich} disabled={!selectedId || loading}
             className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-            {loading ? <><Loader2 size={15} className="animate-spin"/> מחפש ברשת...</> : <><Globe size={15}/> העשר עם AI</>}
+            {loading ? <><Loader2 size={15} className="animate-spin"/> {t('agents.searching')}</> : <><Globe size={15}/> {t('agents.enrichWithAI')}</>}
           </button>
         </div>
         <div className="bg-zinc-900/50 border border-white/[0.06] rounded-2xl p-4 min-h-[260px]">
@@ -967,22 +974,22 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
               {result.readinessScore !== undefined && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-zinc-500 text-xs">מוכנות דיגיטלית</span>
+                    <span className="text-zinc-500 text-xs">{t('agents.digitalReadiness')}</span>
                     <span className={`font-black text-lg ${sc(result.readinessScore)}`}>{result.readinessScore}%</span>
                   </div>
                   <div className="h-2 bg-slate-700 rounded-full"><div className={`h-2 rounded-full ${sb(result.readinessScore)}`} style={{ width: `${result.readinessScore}%` }}/></div>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2 text-xs">
-                {result.industry   && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">תחום</p><p className="text-white font-medium">{result.industry}</p></div>}
-                {result.employees  && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">גודל</p><p className="text-white font-medium">{result.employees}</p></div>}
-                {result.founded    && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">הוקמה</p><p className="text-white font-medium">{result.founded}</p></div>}
-                {result.website    && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">אתר</p><a href={result.website} target="_blank" rel="noreferrer" className="text-cyan-400 flex items-center gap-1 hover:underline"><ExternalLink size={10}/> פתח</a></div>}
+                {result.industry   && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">{t('agents.industry')}</p><p className="text-white font-medium">{result.industry}</p></div>}
+                {result.employees  && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">{t('agents.size')}</p><p className="text-white font-medium">{result.employees}</p></div>}
+                {result.founded    && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">{t('agents.founded')}</p><p className="text-white font-medium">{result.founded}</p></div>}
+                {result.website    && <div className="bg-zinc-800/60 rounded-lg p-2"><p className="text-slate-500">{t('agents.website')}</p><a href={result.website} target="_blank" rel="noreferrer" className="text-cyan-400 flex items-center gap-1 hover:underline"><ExternalLink size={10}/> {t('agents.open')}</a></div>}
               </div>
               {result.description && <p className="text-xs text-slate-300 bg-slate-700/30 rounded-xl p-3 leading-relaxed">{result.description}</p>}
               {result.insights && result.insights.length > 0 && (
                 <div className="space-y-1">
-                  <p className="text-slate-500 text-xs font-bold">תובנות מכירה:</p>
+                  <p className="text-slate-500 text-xs font-bold">{t('agents.salesInsights')}</p>
                   {result.insights.map((ins, i) => (
                     <div key={i} className="flex items-start gap-2 text-xs"><span className="text-cyan-400 flex-shrink-0">→</span><span className="text-slate-300">{ins}</span></div>
                   ))}
@@ -990,16 +997,16 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
               )}
               {result.suggestedBudget && (
                 <div className="flex items-center justify-between bg-emerald-900/20 border border-emerald-700/30 rounded-xl p-3">
-                  <div><p className="text-emerald-400 text-xs font-bold">תקציב מוצע</p><p className="text-white font-black">₪{result.suggestedBudget.toLocaleString()}/חודש</p></div>
-                  <button onClick={applyBudget} className="text-xs bg-emerald-700/50 hover:bg-emerald-600/60 text-emerald-300 border border-emerald-600/40 px-3 py-1.5 rounded-lg transition-colors font-medium">החל על הליד</button>
+                  <div><p className="text-emerald-400 text-xs font-bold">{t('agents.suggestedBudget')}</p><p className="text-white font-black">₪{result.suggestedBudget.toLocaleString()}/חודש</p></div>
+                  <button onClick={applyBudget} className="text-xs bg-emerald-700/50 hover:bg-emerald-600/60 text-emerald-300 border border-emerald-600/40 px-3 py-1.5 rounded-lg transition-colors font-medium">{t('agents.applyToLead')}</button>
                 </div>
               )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full py-12 text-center">
               <Globe size={32} className="text-slate-700 mb-3"/>
-              <p className="text-slate-500 text-sm">בחר ליד ולחץ "העשר"</p>
-              <p className="text-slate-600 text-xs mt-1">AI יחפש ברשת ויביא מידע</p>
+              <p className="text-slate-500 text-sm">{t('agents.selectLeadFirst')}</p>
+              <p className="text-slate-600 text-xs mt-1">{t('agents.aiWillSearch')}</p>
             </div>
           )}
         </div>
@@ -1026,6 +1033,7 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const [workflows,  setWorkflows]  = useState<Workflow[]>([]);
   const [loadingWf,  setLoadingWf]  = useState(true);
   const [showForm,   setShowForm]   = useState(false);
@@ -1092,35 +1100,35 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
     onToast?.(`הופעל על ${count} לידים ✓`, 'success');
   };
 
-  const TLABELS: Record<string, string> = { days_inactive: 'ימים ללא עדכון ≥', status_is: 'סטטוס =', score_above: 'ציון AI ≥' };
-  const ALABELS: Record<string, string> = { create_task: 'צור משימה:', change_status: 'שנה סטטוס ל:' };
+  const TLABELS: Record<string, string> = { days_inactive: t('agents.triggerDaysInactive') + ' ≥', status_is: 'Status =', score_above: 'AI Score ≥' };
+  const ALABELS: Record<string, string> = { create_task: t('agents.actionCreateTask') + ':', change_status: t('agents.actionChangeStatus') + ':' };
 
   return (
     <div className="space-y-4">
       <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Settings size={18} className="text-black"/></div>
-          <div><p className="text-white font-bold text-sm">בונה אוטומציות</p><p className="text-zinc-500 text-xs">כללים שפועלים אוטומטית על הלידים</p></div>
+          <div><p className="text-white font-bold text-sm">{t('agents.workflowTitle')}</p><p className="text-zinc-500 text-xs">{t('agents.workflowDesc')}</p></div>
         </div>
         <button onClick={() => setShowForm(v => !v)} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">
-          <Plus size={14}/> אוטומציה חדשה
+          <Plus size={14}/> {t('agents.newAutomation')}
         </button>
       </div>
 
       {showForm && (
         <div className="bg-slate-800/60 border border-amber-700/40 rounded-2xl p-5 space-y-4">
-          <h3 className="text-white font-bold text-sm">✨ אוטומציה חדשה</h3>
+          <h3 className="text-white font-bold text-sm">✨ {t('agents.newAutomation')}</h3>
           <input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-            placeholder="שם האוטומציה"
+            placeholder={t('agents.automationName')}
             className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30 text-right"/>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <p className="text-amber-400 text-xs font-bold">⚡ טריגר — מתי</p>
+              <p className="text-amber-400 text-xs font-bold">{t('agents.trigger')}</p>
               <select value={form.triggerType} onChange={e => setForm(p => ({ ...p, triggerType: e.target.value as Workflow['triggerType'] }))}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                <option value="days_inactive">ימים ללא עדכון</option>
-                <option value="status_is">סטטוס ליד</option>
-                <option value="score_above">ציון AI מעל</option>
+                <option value="days_inactive">{t('agents.triggerDaysInactive')}</option>
+                <option value="status_is">{t('agents.triggerStatusIs')}</option>
+                <option value="score_above">{t('agents.triggerScoreAbove')}</option>
               </select>
               {form.triggerType === 'status_is' ? (
                 <select value={form.triggerValue} onChange={e => setForm(p => ({ ...p, triggerValue: e.target.value }))}
@@ -1133,11 +1141,11 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
               )}
             </div>
             <div className="space-y-2">
-              <p className="text-blue-400 text-xs font-bold">🎯 פעולה — מה לעשות</p>
+              <p className="text-blue-400 text-xs font-bold">{t('agents.action')}</p>
               <select value={form.actionType} onChange={e => setForm(p => ({ ...p, actionType: e.target.value as Workflow['actionType'], actionValue: '' }))}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                <option value="create_task">צור משימה</option>
-                <option value="change_status">שנה סטטוס</option>
+                <option value="create_task">{t('agents.actionCreateTask')}</option>
+                <option value="change_status">{t('agents.actionChangeStatus')}</option>
               </select>
               {form.actionType === 'create_task' ? (
                 <input value={form.actionValue} onChange={e => setForm(p => ({ ...p, actionValue: e.target.value }))}
@@ -1153,8 +1161,8 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
             </div>
           </div>
           <div className="flex gap-3 justify-end">
-            <button onClick={() => setShowForm(false)} className="text-zinc-400 hover:text-white text-sm px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors">ביטול</button>
-            <button onClick={saveWorkflow} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-6 py-2 rounded-xl transition-colors flex items-center gap-2"><CheckCircle2 size={14}/> שמור</button>
+            <button onClick={() => setShowForm(false)} className="text-zinc-400 hover:text-white text-sm px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors">{t('common.cancel')}</button>
+            <button onClick={saveWorkflow} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-6 py-2 rounded-xl transition-colors flex items-center gap-2"><CheckCircle2 size={14}/> {t('common.save')}</button>
           </div>
         </div>
       )}
@@ -1164,8 +1172,8 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
       ) : workflows.length === 0 ? (
         <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
           <Settings size={36} className="text-slate-700 mx-auto mb-3"/>
-          <p className="text-white font-bold">אין אוטומציות עדיין</p>
-          <p className="text-zinc-400 text-sm mt-1">צור את האוטומציה הראשונה שלך למעלה</p>
+          <p className="text-white font-bold">{t('agents.noAutomations')}</p>
+          <p className="text-zinc-400 text-sm mt-1">{t('agents.createFirstAutomation')}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -1185,11 +1193,11 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
                       {wf.active && matchCount > 0 && <span className="text-[10px] bg-amber-600/30 text-amber-300 border border-amber-600/40 px-2 py-0.5 rounded-full font-bold">{matchCount} לידים</span>}
                     </div>
                     <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs">
-                      <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full">אם: {TLABELS[wf.triggerType]} {wf.triggerValue}</span>
+                      <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full">{t('agents.ifCondition')} {TLABELS[wf.triggerType]} {wf.triggerValue}</span>
                       <ChevronRight size={10} className="text-slate-600"/>
-                      <span className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30">אז: {ALABELS[wf.actionType]} "{wf.actionValue}"</span>
+                      <span className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30">{t('agents.thenAction')} {ALABELS[wf.actionType]} "{wf.actionValue}"</span>
                     </div>
-                    {wf.runCount > 0 && <p className="text-slate-600 text-[10px] mt-1">הופעלה {wf.runCount} פעמים</p>}
+                    {wf.runCount > 0 && <p className="text-slate-600 text-[10px] mt-1">{t('agents.runCount')} {wf.runCount} {t('agents.times')}</p>}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
                     <button onClick={() => runWf(wf)} disabled={running === wf.id || !wf.active || matchCount === 0} title="הפעל עכשיו"
@@ -1219,6 +1227,7 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
    FEATURE 8 — CLIENT PORTAL MANAGER
 ══════════════════════════════════════════════════════════════════════════════ */
 function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProps['onToast'] }) {
+  const { t } = useLang();
   const [portals,  setPortals]  = useState<Record<string, string>>({}); // leadId → token
   const [loading,  setLoading]  = useState(true);
   const [genFor,   setGenFor]   = useState<string | null>(null);
@@ -1263,8 +1272,8 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
       <div className="bg-black/60 border border-white/[0.08] rounded-2xl p-4 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Link size={18} className="text-black"/></div>
         <div>
-          <p className="text-white font-bold text-sm">פורטל לקוחות</p>
-          <p className="text-zinc-500 text-xs">שלח ללקוח קישור לצפייה בסטטוס הפרויקט שלו</p>
+          <p className="text-white font-bold text-sm">{t('agents.portalTitle')}</p>
+          <p className="text-zinc-500 text-xs">{t('agents.portalDesc')}</p>
         </div>
       </div>
 
@@ -1273,8 +1282,8 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
       ) : activeClients.length === 0 ? (
         <div className="text-center py-12 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
           <Link size={32} className="text-slate-700 mx-auto mb-3"/>
-          <p className="text-white font-bold">אין לקוחות פעילים עדיין</p>
-          <p className="text-zinc-400 text-sm mt-1">הפורטל זמין ללקוחות בסטטוס "לקוח פעיל"</p>
+          <p className="text-white font-bold">{t('agents.noActiveClients')}</p>
+          <p className="text-zinc-400 text-sm mt-1">{t('agents.portalAvailableFor')}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -1297,17 +1306,17 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
                     <>
                       <button onClick={() => copyLink(lead.id)}
                         className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                        <Copy size={10}/> {copiedId === lead.id ? '✓' : 'העתק'}
+                        <Copy size={10}/> {copiedId === lead.id ? '✓' : t('agents.copyMessage')}
                       </button>
                       <button onClick={() => openPortal(lead.id)}
                         className="flex items-center gap-1.5 text-xs bg-teal-800/50 hover:bg-teal-700/60 text-teal-300 border border-teal-700/40 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                        <ExternalLink size={10}/> פתח
+                        <ExternalLink size={10}/> {t('agents.open')}
                       </button>
                     </>
                   ) : (
                     <button onClick={() => generatePortal(lead)} disabled={genFor === lead.id}
                       className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-lg transition-colors font-bold">
-                      {genFor === lead.id ? <Loader2 size={10} className="animate-spin"/> : <Link size={10}/>} צור פורטל
+                      {genFor === lead.id ? <Loader2 size={10} className="animate-spin"/> : <Link size={10}/>} {t('agents.createPortal')}
                     </button>
                   )}
                 </div>
@@ -1318,11 +1327,11 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
       )}
 
       <div className="bg-zinc-900/50 border border-white/[0.06] rounded-2xl p-4 text-xs text-slate-500 space-y-1">
-        <p className="font-bold text-slate-400">📌 מה הלקוח רואה בפורטל:</p>
-        <p>• פרטי הפרויקט וסטטוס עדכני</p>
-        <p>• היסטוריית הערות ועדכונים</p>
-        <p>• פריסת שירותים ותקציב</p>
-        <p>• ציון בריאות הפרויקט</p>
+        <p className="font-bold text-slate-400">{t('agents.portalWhat')}</p>
+        <p>{t('agents.portalItem1')}</p>
+        <p>{t('agents.portalItem2')}</p>
+        <p>{t('agents.portalItem3')}</p>
+        <p>{t('agents.portalItem4')}</p>
       </div>
     </div>
   );
@@ -1334,6 +1343,7 @@ function PortalManager({ leads, onToast }: { leads: Lead[]; onToast?: AgentsProp
 export function AgentPerformance({ leads, team, standaloneTask }: {
   leads: Lead[]; team: TeamMember[]; standaloneTask: StandaloneTask[];
 }) {
+  const { t } = useLang();
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   const stats = team.map(member => {
@@ -1357,14 +1367,14 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
     <div className="space-y-4">
       <div className="bg-black/60 border border-white/[0.08] rounded-2xl p-4 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Award size={18} className="text-black"/></div>
-        <div><p className="text-white font-bold text-sm">ביצועי סוכנים</p><p className="text-zinc-500 text-xs">{team.length} חברי צוות · ליידרבורד לפי הכנסה</p></div>
+        <div><p className="text-white font-bold text-sm">{t('agents.performanceTitle')}</p><p className="text-zinc-500 text-xs">{team.length} · {t('agents.leaderboard')}</p></div>
       </div>
 
       {stats.length === 0 ? (
         <div className="text-center py-12 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
           <Users size={36} className="text-slate-700 mx-auto mb-3"/>
-          <p className="text-white font-bold">שייך לידים לחברי הצוות</p>
-          <p className="text-zinc-400 text-sm mt-1">בשדה "מוקצה ל" בכרטיסי הלידים</p>
+          <p className="text-white font-bold">{t('agents.assignLeads')}</p>
+          <p className="text-zinc-400 text-sm mt-1">{t('agents.assignLeadsHint')}</p>
         </div>
       ) : (
         <>
@@ -1385,17 +1395,17 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
                     </div>
                     <div className="grid grid-cols-4 gap-2 mt-2 text-center">
                       {[
-                        { label: 'הכנסה',   val: `₪${Math.round(s.revenue/1000)}K`, color: 'text-emerald-400' },
-                        { label: 'סגירה',   val: `${Math.round(s.closeRate)}%`,      color: 'text-blue-400' },
-                        { label: 'לידים',   val: s.total,                            color: 'text-slate-300' },
-                        { label: 'איחור',   val: s.overdue,                          color: s.overdue > 0 ? 'text-red-400' : 'text-slate-500' },
+                        { label: t('agents.revenue'),   val: `₪${Math.round(s.revenue/1000)}K`, color: 'text-emerald-400' },
+                        { label: t('agents.close'),     val: `${Math.round(s.closeRate)}%`,      color: 'text-blue-400' },
+                        { label: t('agents.stat.leads'), val: s.total,                           color: 'text-slate-300' },
+                        { label: t('agents.overdue'),   val: s.overdue,                          color: s.overdue > 0 ? 'text-red-400' : 'text-slate-500' },
                       ].map(({ label, val, color }) => (
                         <div key={label}><div className={`text-sm font-black ${color}`}>{val}</div><div className="text-[10px] text-slate-600">{label}</div></div>
                       ))}
                     </div>
                     <div className="mt-2">
                       <div className="flex justify-between mb-0.5">
-                        <span className="text-[10px] text-slate-600">ציון ביצועים</span>
+                        <span className="text-[10px] text-slate-600">{t('agents.performanceScore')}</span>
                         <span className={`text-[10px] font-bold ${sc(s.perf)}`}>{s.perf}%</span>
                       </div>
                       <div className="h-1.5 bg-slate-700 rounded-full"><div className={`h-1.5 rounded-full ${sb(s.perf)}`} style={{ width: `${s.perf}%` }}/></div>
@@ -1406,13 +1416,13 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
             ))}
           </div>
           <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-4">
-            <h3 className="text-white font-bold text-sm mb-3">סיכום צוות</h3>
+            <h3 className="text-white font-bold text-sm mb-3">{t('agents.teamSummary')}</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
               {[
-                { label: 'סה"כ הכנסה',    val: `₪${stats.reduce((s,a)=>s+a.revenue,0).toLocaleString()}`, color: 'text-emerald-400' },
-                { label: 'ממוצע סגירה',   val: `${Math.round(stats.reduce((s,a)=>s+a.closeRate,0)/stats.length)}%`, color: 'text-blue-400' },
-                { label: 'סה"כ לידים',    val: stats.reduce((s,a)=>s+a.total,0), color: 'text-slate-300' },
-                { label: 'משימות באיחור', val: stats.reduce((s,a)=>s+a.overdue,0), color: 'text-red-400' },
+                { label: t('agents.totalRevenue'),  val: `₪${stats.reduce((s,a)=>s+a.revenue,0).toLocaleString()}`, color: 'text-emerald-400' },
+                { label: t('agents.avgClose'),      val: `${Math.round(stats.reduce((s,a)=>s+a.closeRate,0)/stats.length)}%`, color: 'text-blue-400' },
+                { label: t('agents.totalLeads'),    val: stats.reduce((s,a)=>s+a.total,0), color: 'text-slate-300' },
+                { label: t('agents.overdueTasks'),  val: stats.reduce((s,a)=>s+a.overdue,0), color: 'text-red-400' },
               ].map(({ label, val, color }) => (
                 <div key={label} className="bg-zinc-800/60 rounded-xl p-3">
                   <div className={`text-xl font-black ${color}`}>{val}</div>
@@ -1433,6 +1443,7 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
 function MeetingBrief({ leads, currentUser, onToast }: {
   leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const [selectedId,   setSelectedId]   = useState('');
   const [meetingDate,  setMeetingDate]  = useState(new Date().toISOString().split('T')[0]);
   const [loading,      setLoading]      = useState(false);
@@ -1506,22 +1517,22 @@ ${openTasks}
     <div className="space-y-4">
       <div className="bg-black/60 border border-white/[0.08] rounded-2xl p-4 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><FileText size={18} className="text-black"/></div>
-        <div><p className="text-white font-bold text-sm">סוכן הכנת פגישה</p><p className="text-zinc-500 text-xs">תדריך פגישה מלא עם שאלות, התנגדויות ואסטרטגיה</p></div>
+        <div><p className="text-white font-bold text-sm">{t('agents.briefTitle')}</p><p className="text-zinc-500 text-xs">{t('agents.briefDesc')}</p></div>
       </div>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="space-y-3">
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">לקוח לפגישה</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.clientForMeeting')}</label>
             <select value={selectedId} onChange={e => { setSelectedId(e.target.value); setBrief(''); }}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
-              <option value="">— בחר ליד —</option>
+              <option value="">{t('agents.selectLead')}</option>
               {leads.filter(l => ['חדש','בתהליך','לקוח פעיל'].includes(l.status)).map(l => (
                 <option key={l.id} value={l.id}>{l.company} ({l.status})</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">תאריך הפגישה</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.meetingDate')}</label>
             <input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30"/>
           </div>
@@ -1530,22 +1541,22 @@ ${openTasks}
               <p className="text-white font-bold">{lead.company}</p>
               <p className="text-slate-400">{lead.contactName} · {lead.phone}</p>
               <p className="text-slate-400">₪{lead.budget.toLocaleString()}/חודש · ציון {lead.aiScore}%</p>
-              <p className="text-slate-400">{lead.notes.length} הערות · {lead.tasks.filter(t=>!t.completed).length} משימות</p>
+              <p className="text-slate-400">{lead.notes.length} {t('agents.notesLabel')} · {lead.tasks.filter(tk=>!tk.completed).length} {t('agents.tasksLabel')}</p>
             </div>
           )}
           <button onClick={generate} disabled={!selectedId || loading}
             className="w-full bg-slate-600 hover:bg-slate-500 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-            {loading ? <><Loader2 size={15} className="animate-spin"/> מכין תדריך...</> : <><FileText size={15}/> הכן תדריך</>}
+            {loading ? <><Loader2 size={15} className="animate-spin"/> {t('agents.preparingBrief')}</> : <><FileText size={15}/> {t('agents.prepareBrief')}</>}
           </button>
         </div>
         <div className="md:col-span-2 bg-zinc-900/50 border border-white/[0.06] rounded-2xl p-5 min-h-[360px]">
           {brief ? (
             <>
               <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] text-slate-600 flex items-center gap-1"><Sparkles size={9} className="text-slate-400"/> נוצר על ידי AI</span>
+                <span className="text-[10px] text-slate-600 flex items-center gap-1"><Sparkles size={9} className="text-slate-400"/> {t('agents.aiGenerated')}</span>
                 <button onClick={() => { navigator.clipboard.writeText(brief).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
                   className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                  <Copy size={10}/> {copied ? '✓ הועתק' : 'העתק'}
+                  <Copy size={10}/> {copied ? '✓ ' + t('agents.copied') : t('agents.copyMessage')}
                 </button>
               </div>
               <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap text-right overflow-y-auto max-h-[550px]">{brief}</div>
@@ -1553,8 +1564,8 @@ ${openTasks}
           ) : (
             <div className="flex flex-col items-center justify-center h-full py-16 text-center">
               <FileText size={40} className="text-slate-700 mb-3"/>
-              <p className="text-slate-500 text-sm font-medium">בחר לקוח ולחץ "הכן תדריך"</p>
-              <p className="text-slate-600 text-xs mt-1">שאלות, התנגדויות, אסטרטגיית מחיר ועוד</p>
+              <p className="text-slate-500 text-sm font-medium">{t('agents.selectClientFirst')}</p>
+              <p className="text-slate-600 text-xs mt-1">{t('agents.briefDetails')}</p>
             </div>
           )}
         </div>
@@ -1569,6 +1580,7 @@ ${openTasks}
 function MarketingAI({ leads, currentUser, onToast }: {
   leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast'];
 }) {
+  const { t } = useLang();
   const platforms = [
     { key: 'instagram', label: 'אינסטגרם', emoji: '📸' },
     { key: 'facebook',  label: 'פייסבוק',  emoji: '👤' },
@@ -1636,12 +1648,12 @@ ${clientCtx}
     <div className="space-y-4">
       <div className="bg-black/60 border border-white/[0.08] rounded-2xl p-4 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Sparkles size={18} className="text-black"/></div>
-        <div><p className="text-white font-bold text-sm">מנוע תוכן שיווקי AI</p><p className="text-zinc-500 text-xs">יוצר תוכן מקצועי לכל הפלטפורמות תוך שניות</p></div>
+        <div><p className="text-white font-bold text-sm">{t('agents.marketingTitle')}</p><p className="text-zinc-500 text-xs">{t('agents.marketingDesc')}</p></div>
       </div>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="space-y-4">
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-2">פלטפורמה</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-2">{t('agents.platform')}</label>
             <div className="grid grid-cols-3 gap-1.5">
               {platforms.map(p => (
                 <button key={p.key} onClick={() => setPlatform(p.key)}
@@ -1652,14 +1664,14 @@ ${clientCtx}
             </div>
           </div>
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">מטרת התוכן</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.contentGoal')}</label>
             <select value={goal} onChange={e => setGoal(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
               {goals.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">טון</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.tone')}</label>
             <select value={tone} onChange={e => setTone(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
               <option value="professional">מקצועי</option>
@@ -1669,16 +1681,16 @@ ${clientCtx}
             </select>
           </div>
           <div>
-            <label className="block text-zinc-500 text-xs font-medium mb-1.5">התאמה ללקוח (אופציונלי)</label>
+            <label className="block text-zinc-500 text-xs font-medium mb-1.5">{t('agents.clientAdapt')}</label>
             <select value={selectedId} onChange={e => setSelectedId(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30">
-              <option value="">— כללי —</option>
+              <option value="">{t('agents.general')}</option>
               {leads.map(l => <option key={l.id} value={l.id}>{l.company}</option>)}
             </select>
           </div>
           <button onClick={generate} disabled={loading}
             className="w-full bg-pink-600 hover:bg-pink-500 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-            {loading ? <><Loader2 size={15} className="animate-spin"/> יוצר תוכן...</> : <><Sparkles size={15}/> צור תוכן</>}
+            {loading ? <><Loader2 size={15} className="animate-spin"/> {t('agents.generatingContent')}</> : <><Sparkles size={15}/> {t('agents.generateContent')}</>}
           </button>
         </div>
         <div className="md:col-span-2 bg-zinc-900/50 border border-white/[0.06] rounded-2xl p-5 min-h-[360px]">
@@ -2306,6 +2318,7 @@ export default function Agents({
   leads, team, currentUser, standaloneTask,
   onCreateTask, onUpdateLead, onToast,
 }: AgentsProps) {
+  const { t } = useLang();
   const [tab, setTab] = useState<AgentTab>('followup');
 
   const staleCount   = leads.filter(l => ['חדש','בתהליך','רימרקטינג'].includes(l.status) && daysSinceUpdate(l) >= 7).length;
@@ -2332,30 +2345,30 @@ export default function Agents({
   }).length;
 
   const tabs: { key: AgentTab; emoji: string; label: string; badge?: string | number }[] = [
-    { key: 'followup',    emoji: '🎯', label: 'סוכן מעקב',     badge: staleCount > 0 ? staleCount : undefined },
-    { key: 'forecast',    emoji: '📈', label: 'תחזית הכנסות',  badge: `₪${Math.round(confirmed/1000)}K` },
-    { key: 'proposal',    emoji: '✍️', label: 'מחולל הצעות',   badge: undefined },
-    { key: 'alerts',      emoji: '🚨', label: 'התראות',        badge: alertCount > 0 ? alertCount : undefined },
-    { key: 'roi',         emoji: '📊', label: 'ROI מקורות',    badge: undefined },
-    { key: 'enrich',      emoji: '🔍', label: 'העשרת לידים',   badge: undefined },
-    { key: 'workflow',    emoji: '⚡', label: 'אוטומציות',     badge: undefined },
-    { key: 'portal',      emoji: '🔗', label: 'פורטל לקוחות',  badge: undefined },
-    { key: 'performance', emoji: '🏆', label: 'ביצועי סוכנים', badge: undefined },
-    { key: 'brief',       emoji: '📋', label: 'הכנת פגישה',    badge: undefined },
-    { key: 'marketing',   emoji: '🎨', label: 'תוכן שיווקי',   badge: undefined },
-    { key: 'campaign',    emoji: '📡', label: 'קמפיינים',      badge: undefined },
-    { key: 'churn',       emoji: '🛡️', label: 'מגן נטישה',    badge: clients_at_risk > 0 ? clients_at_risk : undefined },
-    { key: 'templates',   emoji: '📄', label: 'תבניות',        badge: undefined },
-    { key: 'coach',       emoji: '🧠', label: 'מאמן מכירות',  badge: undefined },
+    { key: 'followup',    emoji: '🎯', label: t('agents.tab.followup'),    badge: staleCount > 0 ? staleCount : undefined },
+    { key: 'forecast',    emoji: '📈', label: t('agents.tab.forecast'),    badge: `₪${Math.round(confirmed/1000)}K` },
+    { key: 'proposal',    emoji: '✍️', label: t('agents.tab.proposal'),   badge: undefined },
+    { key: 'alerts',      emoji: '🚨', label: t('agents.tab.alerts'),     badge: alertCount > 0 ? alertCount : undefined },
+    { key: 'roi',         emoji: '📊', label: t('agents.tab.roi'),        badge: undefined },
+    { key: 'enrich',      emoji: '🔍', label: t('agents.tab.enrich'),     badge: undefined },
+    { key: 'workflow',    emoji: '⚡', label: t('agents.tab.workflow'),   badge: undefined },
+    { key: 'portal',      emoji: '🔗', label: t('agents.tab.portal'),    badge: undefined },
+    { key: 'performance', emoji: '🏆', label: t('agents.tab.performance'), badge: undefined },
+    { key: 'brief',       emoji: '📋', label: t('agents.tab.brief'),      badge: undefined },
+    { key: 'marketing',   emoji: '🎨', label: t('agents.tab.marketing'),  badge: undefined },
+    { key: 'campaign',    emoji: '📡', label: t('agents.tab.campaign'),   badge: undefined },
+    { key: 'churn',       emoji: '🛡️', label: t('agents.tab.churn'),    badge: clients_at_risk > 0 ? clients_at_risk : undefined },
+    { key: 'templates',   emoji: '📄', label: t('agents.tab.templates'),  badge: undefined },
+    { key: 'coach',       emoji: '🧠', label: t('agents.tab.coach'),     badge: undefined },
   ];
 
   const activeClients = leads.filter(l => l.status === 'לקוח פעיל').length;
 
   const tabGroups: { label: string; desc: string; keys: AgentTab[] }[] = [
-    { label: 'מכירות',  desc: '5 סוכנים', keys: ['followup','forecast','proposal','alerts','roi'] },
-    { label: 'לידים',   desc: '4 סוכנים', keys: ['enrich','workflow','brief','performance'] },
-    { label: 'לקוחות',  desc: '3 סוכנים', keys: ['portal','churn','templates'] },
-    { label: 'שיווק',   desc: '3 סוכנים', keys: ['marketing','campaign','coach'] },
+    { label: t('agents.group.sales'),     desc: '5', keys: ['followup','forecast','proposal','alerts','roi'] },
+    { label: t('agents.group.leads'),     desc: '4', keys: ['enrich','workflow','brief','performance'] },
+    { label: t('agents.group.clients'),   desc: '3', keys: ['portal','churn','templates'] },
+    { label: t('agents.group.marketing'), desc: '3', keys: ['marketing','campaign','coach'] },
   ];
 
   const currentTab = tabs.find(t => t.key === tab)!;
@@ -2381,7 +2394,7 @@ export default function Agents({
               <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-white border-2 border-black animate-pulse"/>
             </div>
             <div>
-              <h1 className="text-white font-black text-xl md:text-2xl leading-none tracking-tight">סוכנים חכמים</h1>
+              <h1 className="text-white font-black text-xl md:text-2xl leading-none tracking-tight">{t('agents.smartAgents')}</h1>
               <p className="text-white/30 text-[10px] font-semibold tracking-widest uppercase mt-0.5">AI Agents · 24 / 7</p>
             </div>
           </div>
@@ -2399,10 +2412,10 @@ export default function Agents({
         {/* Stats */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            { label: 'לידים',        val: leads.length },
-            { label: 'לקוחות פעילים',val: activeClients },
-            { label: 'הכנסה חודשית', val: `₪${Math.round(confirmed/1000)}K` },
-            { label: 'התראות',       val: alertCount },
+            { label: t('agents.stat.leads'),         val: leads.length },
+            { label: t('agents.stat.activeClients'), val: activeClients },
+            { label: t('agents.stat.monthlyRevenue'), val: `₪${Math.round(confirmed/1000)}K` },
+            { label: t('agents.stat.alerts'),        val: alertCount },
           ].map((s, i) => (
             <div key={s.label} className="bg-white/[0.05] border border-white/[0.08] rounded-xl p-2.5 text-center">
               <div className={`text-base md:text-lg font-black ${i === 3 && alertCount > 0 ? 'text-white' : 'text-white'}`}>{s.val}</div>

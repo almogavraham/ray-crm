@@ -7,37 +7,38 @@ import {
 import { db } from '../lib/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import type { Campaign, CampaignPlatform, CampaignStatus, CampaignObjective } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
-const PLATFORM_META: Record<CampaignPlatform, { label: string; emoji: string; ring: string; badge: string; dot: string }> = {
-  meta:     { label: 'Meta',     emoji: '📘', ring: 'border-blue-400',    badge: 'bg-blue-100 text-blue-700',      dot: 'bg-blue-500' },
-  google:   { label: 'Google',   emoji: '🔍', ring: 'border-red-400',     badge: 'bg-red-100 text-red-700',        dot: 'bg-red-500' },
-  tiktok:   { label: 'TikTok',   emoji: '🎵', ring: 'border-slate-700',   badge: 'bg-slate-800 text-white',        dot: 'bg-slate-800' },
-  linkedin: { label: 'LinkedIn', emoji: '💼', ring: 'border-sky-500',     badge: 'bg-sky-100 text-sky-700',        dot: 'bg-sky-600' },
-  other:    { label: 'אחר',      emoji: '🌐', ring: 'border-slate-300',   badge: 'bg-slate-100 text-slate-600',    dot: 'bg-slate-400' },
+const PLATFORM_META: Record<CampaignPlatform, { labelKey: string; emoji: string; ring: string; badge: string; dot: string }> = {
+  meta:     { labelKey: 'Meta',                      emoji: '📘', ring: 'border-blue-400',    badge: 'bg-blue-100 text-blue-700',      dot: 'bg-blue-500' },
+  google:   { labelKey: 'Google',                    emoji: '🔍', ring: 'border-red-400',     badge: 'bg-red-100 text-red-700',        dot: 'bg-red-500' },
+  tiktok:   { labelKey: 'TikTok',                    emoji: '🎵', ring: 'border-slate-700',   badge: 'bg-slate-800 text-white',        dot: 'bg-slate-800' },
+  linkedin: { labelKey: 'LinkedIn',                  emoji: '💼', ring: 'border-sky-500',     badge: 'bg-sky-100 text-sky-700',        dot: 'bg-sky-600' },
+  other:    { labelKey: 'campaigns.platformOther',   emoji: '🌐', ring: 'border-slate-300',   badge: 'bg-slate-100 text-slate-600',    dot: 'bg-slate-400' },
 };
 
-const STATUS_META: Record<CampaignStatus, { label: string; badge: string; icon: React.ElementType }> = {
-  active: { label: 'פעיל',    badge: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
-  paused: { label: 'מושהה',  badge: 'bg-amber-100 text-amber-700',     icon: Pause },
-  ended:  { label: 'הסתיים', badge: 'bg-slate-100 text-slate-500',     icon: AlertCircle },
-  draft:  { label: 'טיוטה',  badge: 'bg-indigo-100 text-indigo-700',   icon: Pencil },
+const STATUS_META: Record<CampaignStatus, { labelKey: string; badge: string; icon: React.ElementType }> = {
+  active: { labelKey: 'campaigns.statusActive', badge: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
+  paused: { labelKey: 'campaigns.statusPaused', badge: 'bg-amber-100 text-amber-700',     icon: Pause },
+  ended:  { labelKey: 'campaigns.statusEnded',  badge: 'bg-slate-100 text-slate-500',     icon: AlertCircle },
+  draft:  { labelKey: 'campaigns.statusDraft',  badge: 'bg-indigo-100 text-indigo-700',   icon: Pencil },
 };
 
-const OBJECTIVE_LABELS: Record<CampaignObjective, string> = {
-  awareness:  'מודעות',
-  leads:      'לידים',
-  sales:      'מכירות',
-  engagement: 'מעורבות',
+const OBJECTIVE_KEYS: Record<CampaignObjective, string> = {
+  awareness:  'campaigns.objAwareness',
+  leads:      'campaigns.objLeads',
+  sales:      'campaigns.objSales',
+  engagement: 'campaigns.objEngagement',
 };
 
-const PLATFORM_TABS: { value: CampaignPlatform | 'all'; label: string }[] = [
-  { value: 'all',      label: 'הכל' },
-  { value: 'meta',     label: 'Meta' },
-  { value: 'google',   label: 'Google' },
-  { value: 'tiktok',   label: 'TikTok' },
-  { value: 'linkedin', label: 'LinkedIn' },
-  { value: 'other',    label: 'אחר' },
+const PLATFORM_TAB_VALUES: { value: CampaignPlatform | 'all'; labelKey: string }[] = [
+  { value: 'all',      labelKey: 'campaigns.all' },
+  { value: 'meta',     labelKey: 'Meta' },
+  { value: 'google',   labelKey: 'Google' },
+  { value: 'tiktok',   labelKey: 'TikTok' },
+  { value: 'linkedin', labelKey: 'LinkedIn' },
+  { value: 'other',    labelKey: 'campaigns.platformOther' },
 ];
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
@@ -81,6 +82,7 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
   onDelete: (id: string) => void;
   onTogglePause: (c: Campaign) => void;
 }) {
+  const { t } = useLang();
   const plat   = PLATFORM_META[campaign.platform];
   const stat   = STATUS_META[campaign.status];
   const utilPct = util(campaign);
@@ -88,6 +90,7 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
   const roasVal = roas(campaign);
   const crVal   = cr(campaign);
   const StatIcon = stat.icon;
+  const platLabel = plat.labelKey.startsWith('campaigns.') ? t(plat.labelKey) : plat.labelKey;
 
   return (
     <div className={`bg-white rounded-2xl border-2 ${plat.ring} shadow-sm hover:shadow-md transition-all flex flex-col`}>
@@ -100,14 +103,14 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
               <p className="font-bold text-slate-800 text-sm leading-tight truncate">{campaign.name}</p>
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${plat.badge}`}>
-                  {plat.label}
+                  {platLabel}
                 </span>
                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${stat.badge}`}>
                   <StatIcon size={9} />
-                  {stat.label}
+                  {t(stat.labelKey)}
                 </span>
                 <span className="text-[10px] text-slate-400 font-medium">
-                  {OBJECTIVE_LABELS[campaign.objective]}
+                  {t(OBJECTIVE_KEYS[campaign.objective])}
                 </span>
               </div>
             </div>
@@ -115,7 +118,7 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
           <div className="flex gap-1 flex-shrink-0">
             <button
               onClick={() => onTogglePause(campaign)}
-              title={campaign.status === 'active' ? 'השהה' : 'הפעל'}
+              title={campaign.status === 'active' ? t('campaigns.pause') : t('campaigns.resume')}
               className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"
             >
               {campaign.status === 'active'
@@ -135,8 +138,8 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
         {/* Budget bar */}
         <div className="mt-3">
           <div className="flex justify-between text-[11px] text-slate-500 mb-1">
-            <span>הוצאה: <span className="font-semibold text-slate-700">₪{fmt(campaign.spent)}</span></span>
-            <span>תקציב: <span className="font-semibold text-slate-700">₪{fmt(campaign.budget)}</span></span>
+            <span>{t('campaigns.expense')}: <span className="font-semibold text-slate-700">₪{fmt(campaign.spent)}</span></span>
+            <span>{t('campaigns.budget')}: <span className="font-semibold text-slate-700">₪{fmt(campaign.budget)}</span></span>
           </div>
           <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
             <div
@@ -146,17 +149,17 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
               style={{ width: `${utilPct}%` }}
             />
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5 text-left">{utilPct.toFixed(0)}% מהתקציב</p>
+          <p className="text-[10px] text-slate-400 mt-0.5 text-left">{utilPct.toFixed(0)}% {t('campaigns.ofBudget')}</p>
         </div>
       </div>
 
       {/* Metrics grid */}
       <div className="grid grid-cols-2 gap-px bg-slate-100 flex-1">
         {[
-          { label: 'לידים', value: fmt(campaign.leads),           icon: Users,            color: 'text-indigo-600' },
+          { label: t('campaigns.objLeads'), value: fmt(campaign.leads),           icon: Users,            color: 'text-indigo-600' },
           { label: 'CPL',   value: cplVal > 0 ? `₪${fmt(Math.round(cplVal))}` : '—', icon: BadgeDollarSign, color: 'text-amber-600' },
           { label: 'ROAS',  value: roasVal > 0 ? `×${roasVal.toFixed(1)}` : '—',     icon: TrendingUp,      color: 'text-emerald-600' },
-          { label: 'המרה',  value: crVal > 0 ? `${crVal.toFixed(0)}%` : '—',          icon: BarChart3,       color: 'text-blue-600' },
+          { label: t('campaigns.conversion'), value: crVal > 0 ? `${crVal.toFixed(0)}%` : '—', icon: BarChart3, color: 'text-blue-600' },
         ].map(({ label, value, icon: MIcon, color }) => (
           <div key={label} className="bg-white p-3 flex flex-col items-center gap-1">
             <MIcon size={14} className={color} />
@@ -191,6 +194,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
   saving?: boolean;
   saveError?: string | null;
 }) {
+  const { t } = useLang();
   const [form, setForm] = useState<Omit<Campaign, 'id' | 'createdAt'>>(
     initial ? {
       name: initial.name, platform: initial.platform, status: initial.status,
@@ -220,7 +224,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[95vh] sm:max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <h2 className="font-black text-lg text-slate-800">{initial ? 'עריכת קמפיין' : 'קמפיין חדש'}</h2>
+          <h2 className="font-black text-lg text-slate-800">{initial ? t('campaigns.editTitle') : t('campaigns.newTitle')}</h2>
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
             <X size={14} />
           </button>
@@ -230,7 +234,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
           {/* Name */}
           <div>
-            <label className={lbl}>שם הקמפיין *</label>
+            <label className={lbl}>{t('campaigns.campaignName')}</label>
             <input
               className={inp} placeholder="למשל: Real Estate Leads - Q2"
               value={form.name} onChange={e => set('name', e.target.value)}
@@ -240,7 +244,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
           {/* Platform + Status */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>פלטפורמה</label>
+              <label className={lbl}>{t('campaigns.platform')}</label>
               <div className="relative">
                 <select
                   value={form.platform}
@@ -248,14 +252,14 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
                   className={inp + ' appearance-none pr-3'}
                 >
                   {Object.entries(PLATFORM_META).map(([k, v]) => (
-                    <option key={k} value={k}>{v.emoji} {v.label}</option>
+                    <option key={k} value={k}>{v.emoji} {v.labelKey.startsWith('campaigns.') ? t(v.labelKey) : v.labelKey}</option>
                   ))}
                 </select>
                 <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               </div>
             </div>
             <div>
-              <label className={lbl}>סטטוס</label>
+              <label className={lbl}>{t('campaigns.status')}</label>
               <div className="relative">
                 <select
                   value={form.status}
@@ -263,7 +267,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
                   className={inp + ' appearance-none pr-3'}
                 >
                   {Object.entries(STATUS_META).map(([k, v]) => (
-                    <option key={k} value={k}>{v.label}</option>
+                    <option key={k} value={k}>{t(v.labelKey)}</option>
                   ))}
                 </select>
                 <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
@@ -273,9 +277,9 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
 
           {/* Objective */}
           <div>
-            <label className={lbl}>מטרת הקמפיין</label>
+            <label className={lbl}>{t('campaigns.objective')}</label>
             <div className="grid grid-cols-4 gap-2">
-              {(Object.keys(OBJECTIVE_LABELS) as CampaignObjective[]).map(obj => (
+              {(Object.keys(OBJECTIVE_KEYS) as CampaignObjective[]).map(obj => (
                 <button
                   key={obj}
                   onClick={() => set('objective', obj)}
@@ -285,7 +289,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
                       : 'border-slate-200 text-slate-500 hover:border-slate-300'
                   }`}
                 >
-                  {OBJECTIVE_LABELS[obj]}
+                  {t(OBJECTIVE_KEYS[obj])}
                 </button>
               ))}
             </div>
@@ -294,11 +298,11 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
           {/* Budget + Spent */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>תקציב חודשי (₪)</label>
+              <label className={lbl}>{t('campaigns.monthlyBudget')}</label>
               {numInp('budget')}
             </div>
             <div>
-              <label className={lbl}>הוצאה בפועל (₪)</label>
+              <label className={lbl}>{t('campaigns.actualExpense')}</label>
               {numInp('spent')}
             </div>
           </div>
@@ -306,25 +310,25 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
           {/* Leads + Conversions */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>לידים שנוצרו</label>
+              <label className={lbl}>{t('campaigns.leadsGenerated')}</label>
               {numInp('leads')}
             </div>
             <div>
-              <label className={lbl}>לקוחות שנסגרו</label>
+              <label className={lbl}>{t('campaigns.clientsClosed')}</label>
               {numInp('conversions')}
             </div>
           </div>
 
           {/* Revenue */}
           <div>
-            <label className={lbl}>הכנסה שנוצרה (₪)</label>
+            <label className={lbl}>{t('campaigns.revenueGenerated')}</label>
             {numInp('revenue')}
           </div>
 
           {/* Dates */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>תאריך התחלה</label>
+              <label className={lbl}>{t('campaigns.startDate')}</label>
               <input
                 type="date" value={form.startDate}
                 onChange={e => set('startDate', e.target.value)}
@@ -332,7 +336,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
               />
             </div>
             <div>
-              <label className={lbl}>תאריך סיום (אופציונלי)</label>
+              <label className={lbl}>{t('campaigns.endDate')}</label>
               <input
                 type="date" value={form.endDate ?? ''}
                 onChange={e => set('endDate', e.target.value)}
@@ -343,10 +347,10 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
 
           {/* Notes */}
           <div>
-            <label className={lbl}>הערות</label>
+            <label className={lbl}>{t('campaigns.notes')}</label>
             <textarea
               className={inp + ' resize-none'} rows={2}
-              placeholder="פרטים נוספים על הקמפיין..."
+              placeholder={t('campaigns.notesPlaceholder')}
               value={form.notes ?? ''}
               onChange={e => set('notes', e.target.value)}
             />
@@ -366,10 +370,10 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
             className="flex-1 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2"
           >
             {saving && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-            {saving ? 'שומר...' : initial ? 'שמור שינויים' : 'צור קמפיין'}
+            {saving ? t('campaigns.saving') : initial ? t('campaigns.saveChanges') : t('campaigns.createCampaign')}
           </button>
           <button onClick={onClose} disabled={saving} className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 transition-colors disabled:opacity-40">
-            ביטול
+            {t('common.cancel')}
           </button>
         </div>
       </div>
@@ -381,6 +385,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function Campaigns() {
+  const { t, dir } = useLang();
   const [campaigns, setCampaigns]     = useState<Campaign[]>([]);
   const [showModal, setShowModal]     = useState(false);
   const [editing, setEditing]         = useState<Campaign | undefined>();
@@ -421,14 +426,14 @@ export default function Campaigns() {
       setShowModal(false);
       setEditing(undefined);
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'שגיאה בשמירה');
+      setSaveError(e instanceof Error ? e.message : t('campaigns.savingError'));
     } finally {
       setSaving(false);
     }
   };
 
   const deleteCampaign = async (id: string) => {
-    if (!confirm('למחוק את הקמפיין?')) return;
+    if (!confirm(t('campaigns.confirmDelete'))) return;
     await deleteDoc(doc(db, 'campaigns', id)).catch(console.error);
   };
 
@@ -470,28 +475,28 @@ export default function Campaigns() {
   const isEmpty = campaigns.length === 0;
 
   return (
-    <div className="space-y-5" dir="rtl">
+    <div className="space-y-5" dir={dir}>
 
       {/* ── Page header ────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl md:text-2xl font-black text-slate-800">ניהול קמפיינים</h1>
-          <p className="text-sm text-slate-500 mt-0.5">מעקב על ביצועי פרסום, תקציב ו-ROI בזמן אמת</p>
+          <h1 className="text-xl md:text-2xl font-black text-slate-800">{t('campaigns.title')}</h1>
+          <p className="text-sm text-slate-500 mt-0.5">{t('campaigns.subtitle')}</p>
         </div>
         <button
           onClick={openNew}
           className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm"
         >
-          <Plus size={16} /> קמפיין חדש
+          <Plus size={16} /> {t('campaigns.new')}
         </button>
       </div>
 
       {/* ── KPI cards ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard icon={Wallet}        label="סה״כ הוצאות"   value={`₪${fmt(Math.round(kpis.totalSpent))}`}   color="bg-indigo-500" />
-        <KpiCard icon={Users}         label="סה״כ לידים"    value={fmt(kpis.totalLeads)}                      color="bg-blue-500"   sub={`${campaigns.filter(c=>c.status==='active').length} קמפיינים פעילים`} />
-        <KpiCard icon={BadgeDollarSign} label="עלות ממוצעת לליד (CPL)" value={kpis.avgCPL > 0 ? `₪${fmt(Math.round(kpis.avgCPL))}` : '—'} color="bg-amber-500" />
-        <KpiCard icon={TrendingUp}    label="סה״כ הכנסות"  value={`₪${fmt(Math.round(kpis.totalRevenue))}`}  color="bg-emerald-500" sub={kpis.totalROAS > 0 ? `ROAS ×${kpis.totalROAS.toFixed(1)}` : undefined} />
+        <KpiCard icon={Wallet}        label={t('campaigns.totalExpenses')} value={`₪${fmt(Math.round(kpis.totalSpent))}`}   color="bg-indigo-500" />
+        <KpiCard icon={Users}         label={t('campaigns.totalLeads')}    value={fmt(kpis.totalLeads)}                      color="bg-blue-500"   sub={`${campaigns.filter(c=>c.status==='active').length} ${t('campaigns.activeCount')}`} />
+        <KpiCard icon={BadgeDollarSign} label={t('campaigns.avgCpl')} value={kpis.avgCPL > 0 ? `₪${fmt(Math.round(kpis.avgCPL))}` : '—'} color="bg-amber-500" />
+        <KpiCard icon={TrendingUp}    label={t('campaigns.totalRevenue')}  value={`₪${fmt(Math.round(kpis.totalRevenue))}`}  color="bg-emerald-500" sub={kpis.totalROAS > 0 ? `ROAS ×${kpis.totalROAS.toFixed(1)}` : undefined} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────────────── */}
@@ -501,7 +506,7 @@ export default function Campaigns() {
           <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="חיפוש קמפיין..."
+            placeholder={t('campaigns.search')}
             className="w-full pr-9 pl-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-slate-400 transition-colors"
           />
           {search && (
@@ -513,7 +518,7 @@ export default function Campaigns() {
 
         {/* Platform tabs */}
         <div className="flex gap-1 overflow-x-auto">
-          {PLATFORM_TABS.map(({ value, label }) => (
+          {PLATFORM_TAB_VALUES.map(({ value, labelKey }) => (
             <button
               key={value}
               onClick={() => setPlatFilter(value)}
@@ -523,7 +528,7 @@ export default function Campaigns() {
                   : 'text-slate-500 hover:bg-slate-100'
               }`}
             >
-              {label}
+              {labelKey.startsWith('campaigns.') ? t(labelKey) : labelKey}
             </button>
           ))}
         </div>
@@ -540,7 +545,7 @@ export default function Campaigns() {
                   : 'text-slate-500 hover:bg-slate-100'
               }`}
             >
-              {s === 'all' ? 'כל הסטטוסים' : STATUS_META[s].label}
+              {s === 'all' ? t('campaigns.allStatuses') : t(STATUS_META[s].labelKey)}
               <span className="mr-1 opacity-60">({statusCounts[s] ?? 0})</span>
             </button>
           ))}
@@ -554,16 +559,16 @@ export default function Campaigns() {
             <BarChart3 size={36} className="text-white" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-800 mb-2">עדיין אין קמפיינים</h2>
+            <h2 className="text-2xl font-black text-slate-800 mb-2">{t('campaigns.noCampaigns')}</h2>
             <p className="text-slate-400 text-sm max-w-sm">
-              הוסף קמפיין ראשון כדי להתחיל לעקוב אחר ביצועי הפרסום, CPL, ROAS ולידים שנוצרו.
+              {t('campaigns.noCampaignsDesc')}
             </p>
           </div>
           <button
             onClick={openNew}
             className="flex items-center gap-2 bg-black text-white px-6 py-3 rounded-xl font-bold hover:bg-neutral-800 transition-colors"
           >
-            <Plus size={18} /> צור קמפיין ראשון
+            <Plus size={18} /> {t('campaigns.createFirst')}
           </button>
         </div>
       )}
@@ -571,8 +576,8 @@ export default function Campaigns() {
       {/* ── No results ──────────────────────────────────────────────────── */}
       {!isEmpty && filtered.length === 0 && (
         <div className="text-center py-16 text-slate-400">
-          <p className="text-lg font-semibold">לא נמצאו קמפיינים</p>
-          <p className="text-sm mt-1">נסה לשנות את הפילטרים</p>
+          <p className="text-lg font-semibold">{t('campaigns.noResults')}</p>
+          <p className="text-sm mt-1">{t('campaigns.changeFilters')}</p>
         </div>
       )}
 

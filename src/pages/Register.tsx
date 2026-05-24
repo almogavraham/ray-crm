@@ -4,6 +4,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import type { Invite, UserProfile } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 interface RegisterProps {
   token: string;
@@ -11,6 +12,7 @@ interface RegisterProps {
 }
 
 export default function Register({ token, onSuccess }: RegisterProps) {
+  const { t, dir } = useLang();
   const [invite,    setInvite]    = useState<Invite | null>(null);
   const [notFound,  setNotFound]  = useState(false);
   const [firstName, setFirstName] = useState('');
@@ -34,8 +36,8 @@ export default function Register({ token, onSuccess }: RegisterProps) {
   const handle = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (password !== confirm) { setError('הסיסמאות אינן תואמות'); return; }
-    if (password.length < 6)  { setError('הסיסמה חייבת להכיל לפחות 6 תווים'); return; }
+    if (password !== confirm) { setError(t('register.errorPasswordMatch')); return; }
+    if (password.length < 6)  { setError(t('register.errorPasswordLength')); return; }
     if (!invite) return;
     setLoading(true);
     try {
@@ -56,31 +58,31 @@ export default function Register({ token, onSuccess }: RegisterProps) {
       setTimeout(onSuccess, 1500);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
-      if (code === 'auth/email-already-in-use') setError('אימייל זה כבר רשום במערכת');
-      else setError('שגיאה ביצירת החשבון. נסה שוב');
+      if (code === 'auth/email-already-in-use') setError(t('register.errorEmailInUse'));
+      else setError(t('register.errorGeneral'));
     } finally {
       setLoading(false);
     }
   };
 
   if (notFound) return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dir}>
       <div className="text-center">
         <div className="text-5xl mb-4">🔗</div>
-        <h2 className="text-white text-xl font-bold mb-2">קישור ההזמנה לא תקף</h2>
-        <p className="text-slate-400 text-sm">ייתכן שהקישור פג תוקפו או כבר שומש</p>
+        <h2 className="text-white text-xl font-bold mb-2">{t('register.title')}</h2>
+        <p className="text-slate-400 text-sm">{t('team.status.expired')}</p>
       </div>
     </div>
   );
 
   if (!invite) return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center" dir={dir}>
       <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dir}>
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-3 mb-10">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/40">
@@ -96,41 +98,41 @@ export default function Register({ token, onSuccess }: RegisterProps) {
           {done ? (
             <div className="text-center py-6">
               <CheckCircle2 size={48} className="text-emerald-400 mx-auto mb-4" />
-              <h2 className="text-white font-bold text-xl mb-1">ברוך הבא!</h2>
-              <p className="text-slate-400 text-sm">החשבון נוצר בהצלחה. מעביר אותך...</p>
+              <h2 className="text-white font-bold text-xl mb-1">{t('register.success')}</h2>
+              <p className="text-slate-400 text-sm">{t('register.successDesc')}</p>
             </div>
           ) : (
             <>
-              <h1 className="text-white font-bold text-xl mb-1">יצירת חשבון</h1>
-              <p className="text-slate-400 text-sm mb-1">הוזמנת להצטרף ל-RAY CRM</p>
+              <h1 className="text-white font-bold text-xl mb-1">{t('register.title')}</h1>
+              <p className="text-slate-400 text-sm mb-1">{t('register.accountDetails')}</p>
               <p className="text-indigo-400 text-xs font-medium mb-8">{invite.email}</p>
 
               <form onSubmit={handle} className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-400 text-xs font-medium mb-1.5">שם פרטי</label>
+                    <label className="block text-slate-400 text-xs font-medium mb-1.5">{t('register.firstName')}</label>
                     <div className="relative">
                       <User size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                       <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} required
                         className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                        placeholder="ישראל" />
+                        placeholder={t('register.firstNamePlaceholder')} />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-slate-400 text-xs font-medium mb-1.5">שם משפחה</label>
+                    <label className="block text-slate-400 text-xs font-medium mb-1.5">{t('register.lastName')}</label>
                     <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} required
                       className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                      placeholder="ישראלי" />
+                      placeholder={t('register.lastNamePlaceholder')} />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1.5">סיסמה</label>
+                  <label className="block text-slate-400 text-xs font-medium mb-1.5">{t('register.password')}</label>
                   <div className="relative">
                     <Lock size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                     <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required
                       className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-10 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                      placeholder="לפחות 6 תווים" dir="ltr" />
+                      placeholder={t('register.passwordPlaceholder')} dir="ltr" />
                     <button type="button" onClick={() => setShowPw(p => !p)} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
                       {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
@@ -138,12 +140,12 @@ export default function Register({ token, onSuccess }: RegisterProps) {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1.5">אימות סיסמה</label>
+                  <label className="block text-slate-400 text-xs font-medium mb-1.5">{t('register.confirmPassword')}</label>
                   <div className="relative">
                     <Lock size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                     <input type={showPw ? 'text' : 'password'} value={confirm} onChange={e => setConfirm(e.target.value)} required
                       className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                      placeholder="הכנס שוב את הסיסמה" dir="ltr" />
+                      placeholder={t('register.confirmPasswordPlaceholder')} dir="ltr" />
                   </div>
                 </div>
 
@@ -155,7 +157,7 @@ export default function Register({ token, onSuccess }: RegisterProps) {
 
                 <button type="submit" disabled={loading}
                   className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25 mt-2">
-                  {loading ? 'יוצר חשבון...' : 'יצירת חשבון'}
+                  {loading ? t('common.loading') : t('register.createAccount')}
                 </button>
               </form>
             </>

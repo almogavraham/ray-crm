@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { sendLeadEmail, isEmailJSConfigured } from '../lib/emailjs';
+import { useLang } from '../contexts/LangContext';
 
 interface EmailOption {
   id: string;
@@ -13,45 +14,49 @@ interface EmailOption {
   auto?: boolean;
 }
 
-const AUTO_OPTION: EmailOption = {
-  id: 'auto',
-  label: 'מייל חכם אוטומטי',
-  description: 'Claude מנתח את כל המידע ומחליט מה הכי מתאים',
-  emoji: '⚡',
-  auto: true,
-};
+function getAutoOption(t: (k: string) => string): EmailOption {
+  return {
+    id: 'auto',
+    label: t('emailModal.autoEmail'),
+    description: t('emailModal.autoDesc'),
+    emoji: t('emailModal.autoEmoji'),
+    auto: true,
+  };
+}
 
-const EMAIL_OPTIONS_BY_STATUS: Record<LeadStatus | 'default', EmailOption[]> = {
-  'חדש': [
-    { id: 'intro',   label: 'היכרות',       description: 'הצגת RAY Digital ופתיחת שיח', emoji: '👋' },
-    { id: 'product', label: 'הצגת שירותים', description: 'הסבר על שירותי השיווק שלנו', emoji: '📦' },
-    { id: 'meeting', label: 'תיאום פגישה',  description: 'הזמנה לשיחת היכרות',           emoji: '📅' },
-  ],
-  'בתהליך': [
-    { id: 'progress',     label: 'עדכון התקדמות',    description: 'עדכון על סטטוס הפרויקט',      emoji: '🚀' },
-    { id: 'content',      label: 'בקשת תוכן',        description: 'בקשת חומרים מהלקוח',         emoji: '📋' },
-    { id: 'satisfaction', label: 'בדיקת שביעות רצון', description: 'וידוא שהכל עובד חלק',       emoji: '✅' },
-  ],
-  'לקוח פעיל': [
-    { id: 'upsell',       label: 'הצעת שדרוג',  description: 'הצגת שירותים נוספים של RAY',      emoji: '⬆️' },
-    { id: 'satisfaction', label: 'שביעות רצון',  description: 'בדיקת חוויית הלקוח',             emoji: '😊' },
-    { id: 'renewal',      label: 'חידוש הסכם',   description: 'תזכורת לחידוש שיתוף הפעולה',    emoji: '🔄' },
-  ],
-  'רימרקטינג': [
-    { id: 'winback',      label: 'חזרה אלינו',   description: 'הצעה לחזור לעבוד יחד',           emoji: '💫' },
-    { id: 'special_offer',label: 'הצעה מיוחדת', description: 'הנחה או חבילה מיוחדת',            emoji: '🎁' },
-    { id: 'case_study',   label: 'סיפור הצלחה',  description: 'שיתוף תוצאות מלקוח נדל"ן דומה', emoji: '🏆' },
-  ],
-  'לא רלוונטי': [
-    { id: 'last_chance', label: 'ניסיון אחרון', description: 'הצעה של הזדמנות אחרונה', emoji: '🔔' },
-    { id: 'future',      label: 'מייל עתידי',   description: 'השארת דלת פתוחה לעתיד', emoji: '🌱' },
-  ],
-  'default': [
-    { id: 'intro',   label: 'היכרות',      description: 'הצגת RAY Digital', emoji: '👋' },
-    { id: 'followup',label: 'מעקב',        description: 'מייל מעקב כללי',   emoji: '📨' },
-    { id: 'meeting', label: 'תיאום פגישה', description: 'הזמנה לשיחה',       emoji: '📅' },
-  ],
-};
+function getEmailOptionsByStatus(t: (k: string) => string): Record<LeadStatus | 'default', EmailOption[]> {
+  return {
+    'חדש': [
+      { id: 'intro',   label: t('emailModal.opt.intro.label'),   description: t('emailModal.opt.intro.desc'),   emoji: '👋' },
+      { id: 'product', label: t('emailModal.opt.product.label'), description: t('emailModal.opt.product.desc'), emoji: '📦' },
+      { id: 'meeting', label: t('emailModal.opt.meeting.label'), description: t('emailModal.opt.meeting.desc'), emoji: '📅' },
+    ],
+    'בתהליך': [
+      { id: 'progress',     label: t('emailModal.opt.progress.label'),     description: t('emailModal.opt.progress.desc'),     emoji: '🚀' },
+      { id: 'content',      label: t('emailModal.opt.content.label'),      description: t('emailModal.opt.content.desc'),      emoji: '📋' },
+      { id: 'satisfaction', label: t('emailModal.opt.satisfaction.label'), description: t('emailModal.opt.satisfaction.desc'), emoji: '✅' },
+    ],
+    'לקוח פעיל': [
+      { id: 'upsell',       label: t('emailModal.opt.upsell.label'),       description: t('emailModal.opt.upsell.desc'),       emoji: '⬆️' },
+      { id: 'satisfaction', label: t('emailModal.opt.satisfaction.label'), description: t('emailModal.opt.satisfaction.desc'), emoji: '😊' },
+      { id: 'renewal',      label: t('emailModal.opt.renewal.label'),      description: t('emailModal.opt.renewal.desc'),      emoji: '🔄' },
+    ],
+    'רימרקטינג': [
+      { id: 'winback',       label: t('emailModal.opt.winback.label'),      description: t('emailModal.opt.winback.desc'),      emoji: '💫' },
+      { id: 'special_offer', label: t('emailModal.opt.specialOffer.label'), description: t('emailModal.opt.specialOffer.desc'), emoji: '🎁' },
+      { id: 'case_study',    label: t('emailModal.opt.caseStudy.label'),    description: t('emailModal.opt.caseStudy.desc'),    emoji: '🏆' },
+    ],
+    'לא רלוונטי': [
+      { id: 'last_chance', label: t('emailModal.opt.lastChance.label'), description: t('emailModal.opt.lastChance.desc'), emoji: '🔔' },
+      { id: 'future',      label: t('emailModal.opt.future.label'),     description: t('emailModal.opt.future.desc'),     emoji: '🌱' },
+    ],
+    'default': [
+      { id: 'intro',    label: t('emailModal.opt.intro.label'),   description: t('emailModal.opt.intro.desc'),    emoji: '👋' },
+      { id: 'followup', label: t('emailModal.opt.followup.label'), description: t('emailModal.opt.followup.desc'), emoji: '📨' },
+      { id: 'meeting',  label: t('emailModal.opt.meeting.label'),  description: t('emailModal.opt.meeting.desc'),  emoji: '📅' },
+    ],
+  };
+}
 
 /** Build a rich business context string from the workspace profile */
 function buildBusinessContext(workspace?: WorkspaceProfile): string {
@@ -182,6 +187,9 @@ interface EmailModalProps {
 }
 
 export default function EmailModal({ lead, onClose, workspace }: EmailModalProps) {
+  const { t } = useLang();
+  const AUTO_OPTION = getAutoOption(t);
+  const EMAIL_OPTIONS_BY_STATUS = getEmailOptionsByStatus(t);
   const [selectedOption, setSelectedOption]  = useState<EmailOption | null>(null);
   const [generatedEmail, setGeneratedEmail]  = useState('');
   const [loading, setLoading]                = useState(false);
@@ -283,8 +291,8 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20} /></button>
           <div className="flex items-center gap-3">
             <div className="text-right">
-              <div className="font-bold text-slate-800">מייל ל-{lead.company}</div>
-              <div className="text-xs text-slate-500">{lead.email} · ציון {lead.aiScore}/100 · נשלח מ-{bizName}</div>
+              <div className="font-bold text-slate-800">{t('emailModal.title')}{lead.company}</div>
+              <div className="text-xs text-slate-500">{lead.email} · {t('emailModal.score')} {lead.aiScore}/100 · {t('emailModal.sentFrom')}{bizName}</div>
             </div>
             <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center">
               <Mail size={18} className="text-white" />
@@ -300,13 +308,13 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
               onClick={() => setShowContext(v => !v)}
               className="w-full flex items-center justify-between text-xs text-slate-500 hover:text-slate-700 transition-colors"
             >
-              <span className="flex items-center gap-1">{showContext ? <ChevronUp size={12} /> : <ChevronDown size={12} />} הצג הקשר שנשלח ל-AI</span>
+              <span className="flex items-center gap-1">{showContext ? <ChevronUp size={12} /> : <ChevronDown size={12} />} {t('emailModal.showContext')}</span>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <ContextBadge label="סטטוס" value={lead.status} />
-                {daysSince !== null && <ContextBadge label="ימים מעדכון" value={String(daysSince)} />}
-                {recentNotes.length > 0 && <ContextBadge label="הערות" value={String(recentNotes.length)} />}
-                {openTasks.length > 0  && <ContextBadge label="משימות" value={String(openTasks.length)} />}
-                {lead.waitingContent   && <ContextBadge label="ממתין לתוכן" value="כן" />}
+                <ContextBadge label={t('emailModal.status')} value={lead.status} />
+                {daysSince !== null && <ContextBadge label={t('emailModal.daysSinceUpdate')} value={String(daysSince)} />}
+                {recentNotes.length > 0 && <ContextBadge label={t('emailModal.notes')} value={String(recentNotes.length)} />}
+                {openTasks.length > 0  && <ContextBadge label={t('emailModal.tasks')} value={String(openTasks.length)} />}
+                {lead.waitingContent   && <ContextBadge label={t('emailModal.waitingContent')} value="כן" />}
               </div>
             </button>
 
@@ -314,7 +322,7 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
               <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 text-right">
                 {recentNotes.length > 0 && (
                   <div>
-                    <p className="text-xs font-bold text-slate-600 mb-1">📝 הערות אחרונות:</p>
+                    <p className="text-xs font-bold text-slate-600 mb-1">📝 {t('emailModal.recentNotes')}</p>
                     {recentNotes.map(n => (
                       <p key={n.id} className="text-xs text-slate-500 leading-relaxed">• {n.text}</p>
                     ))}
@@ -322,7 +330,7 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
                 )}
                 {openTasks.length > 0 && (
                   <div>
-                    <p className="text-xs font-bold text-slate-600 mb-1">✅ משימות פתוחות:</p>
+                    <p className="text-xs font-bold text-slate-600 mb-1">✅ {t('emailModal.openTasks')}</p>
                     {openTasks.map(t => (
                       <p key={t.id} className="text-xs text-slate-500">• {t.description}</p>
                     ))}
@@ -330,13 +338,13 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
                 )}
                 {lead.solutions.length > 0 && (
                   <div>
-                    <p className="text-xs font-bold text-slate-600 mb-1">📦 שירותים:</p>
+                    <p className="text-xs font-bold text-slate-600 mb-1">📦 {t('emailModal.services')}</p>
                     <p className="text-xs text-slate-500">{lead.solutions.map(s => s.name).join(', ')}</p>
                   </div>
                 )}
                 {(lead.futureNotes ?? []).filter(Boolean).length > 0 && (
                   <div>
-                    <p className="text-xs font-bold text-slate-600 mb-1">🔮 תכניות עתידיות:</p>
+                    <p className="text-xs font-bold text-slate-600 mb-1">🔮 {t('emailModal.futurePlans')}</p>
                     <p className="text-xs text-slate-500">{lead.futureNotes.filter(Boolean).join(', ')}</p>
                   </div>
                 )}
@@ -347,7 +355,7 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
           {/* AUTO button — featured */}
           <div>
             <div className="flex items-center gap-2 mb-2 justify-end">
-              <span className="text-sm font-semibold text-slate-700">בחר סוג מייל</span>
+              <span className="text-sm font-semibold text-slate-700">{t('emailModal.selectEmailType')}</span>
               <Sparkles size={15} className="text-indigo-500" />
             </div>
             <button
@@ -364,18 +372,18 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
                   ? <Loader2 size={15} className="animate-spin text-indigo-500" />
                   : <span className="text-lg">⚡</span>
                 }
-                <span className="text-sm text-indigo-600 font-semibold">מייל חכם אוטומטי — Claude מחליט מה הכי מתאים</span>
+                <span className="text-sm text-indigo-600 font-semibold">{t('emailModal.autoEmail')}</span>
               </div>
               <div className="text-right">
-                <p className="text-xs font-black text-indigo-700">מומלץ</p>
-                <p className="text-xs text-indigo-400">מנתח הכל + כותב</p>
+                <p className="text-xs font-black text-indigo-700">{t('emailModal.recommended')}</p>
+                <p className="text-xs text-indigo-400">{t('emailModal.analysesAll')}</p>
               </div>
             </button>
 
             {/* Divider */}
             <div className="flex items-center gap-3 mb-3">
               <div className="flex-1 h-px bg-slate-100" />
-              <span className="text-xs text-slate-400">או בחר ידנית</span>
+              <span className="text-xs text-slate-400">{t('emailModal.orChooseManual')}</span>
               <div className="flex-1 h-px bg-slate-100" />
             </div>
 
@@ -404,11 +412,11 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
           {(generatedEmail || loading) && (
             <div className="space-y-2">
               <div className="flex items-center gap-2 justify-end">
-                <span className="text-sm font-semibold text-slate-700">טיוטת המייל</span>
+                <span className="text-sm font-semibold text-slate-700">{t('emailModal.draft')}</span>
                 {loading && <Loader2 size={14} className="animate-spin text-indigo-500" />}
               </div>
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-800 whitespace-pre-wrap leading-relaxed min-h-[120px] text-right">
-                {generatedEmail || <span className="text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin" />יוצר מייל מותאם אישית...</span>}
+                {generatedEmail || <span className="text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin" />{t('emailModal.generating')}</span>}
               </div>
 
               {generatedEmail && !loading && (
@@ -429,38 +437,38 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
                         {sendStatus === 'sent'    && <CheckCircle2 size={14} />}
                         {sendStatus === 'error'   && <AlertCircle size={14} />}
                         {sendStatus === 'idle'    && <Send size={14} />}
-                        {sendStatus === 'sending' ? 'שולח...' : sendStatus === 'sent' ? 'נשלח!' : sendStatus === 'error' ? 'שגיאה — נסה שוב' : 'שלח מהמייל שלי'}
+                        {sendStatus === 'sending' ? t('emailModal.sending') : sendStatus === 'sent' ? t('emailModal.sent') : sendStatus === 'error' ? t('emailModal.sendError') : t('emailModal.sendFromEmail')}
                       </button>
                     ) : (
                       <a href={mailtoLink()} className="flex items-center gap-1.5 px-4 py-2 bg-black hover:bg-neutral-800 text-white text-sm rounded-lg transition-colors">
-                        <ExternalLink size={14} />פתח בתוכנת מייל
+                        <ExternalLink size={14} />{t('emailModal.openInClient')}
                       </a>
                     )}
                     <button onClick={handleCopy} className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-600">
                       {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
-                      {copied ? 'הועתק!' : 'העתק'}
+                      {copied ? t('emailModal.copied') : t('emailModal.copy')}
                     </button>
                     {emailJSReady && (
-                      <a href={mailtoLink()} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-400" title="פתח בתוכנת מייל">
+                      <a href={mailtoLink()} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:bg-slate-50 text-sm rounded-lg transition-colors text-slate-400" title={t('emailModal.openInClient')}>
                         <ExternalLink size={14} />
                       </a>
                     )}
                     {/* Regenerate */}
                     {selectedOption && (
                       <button onClick={() => generateEmail(selectedOption)} className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:bg-slate-50 text-xs rounded-lg transition-colors text-slate-400">
-                        <Sparkles size={12} /> צור שוב
+                        <Sparkles size={12} /> {t('emailModal.regenerate')}
                       </button>
                     )}
                   </div>
 
                   {sendStatus === 'sent' && (
                     <div className="flex items-center gap-1.5 text-xs text-green-600 bg-green-50 px-3 py-2 rounded-lg">
-                      <CheckCircle2 size={13} />המייל נשלח בהצלחה ל-{lead.email}
+                      <CheckCircle2 size={13} />{t('emailModal.successSent')}{lead.email}
                     </div>
                   )}
                   {!emailJSReady && (
                     <div className="text-xs text-slate-400 text-right">
-                      💡 חבר Gmail כדי לשלוח ישירות — ראה הגדרות
+                      💡 {t('emailModal.gmailHint')}
                     </div>
                   )}
                 </div>

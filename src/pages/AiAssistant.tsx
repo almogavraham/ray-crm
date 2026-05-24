@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
+import { useLang } from '../contexts/LangContext';
 import {
   Send, Bot, User, Sparkles, Loader2, AlertCircle,
   Globe, Search, X, Zap,
@@ -440,6 +441,7 @@ function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boole
 
 /* ─── Searching / Thinking bubble ────────────────────────────────────────── */
 function ThinkingBubble({ label }: { label?: string }) {
+  const { t } = useLang();
   return (
     <div className="flex gap-3">
       <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600 flex items-center justify-center flex-shrink-0">
@@ -454,7 +456,7 @@ function ThinkingBubble({ label }: { label?: string }) {
         </div>
         {label
           ? <span className="text-xs text-indigo-300 flex items-center gap-1.5"><Search size={11} />{label}</span>
-          : <span className="text-xs text-slate-400">חושב ומעבד...</span>}
+          : <span className="text-xs text-slate-400">{t('ai.thinking')}</span>}
       </div>
     </div>
   );
@@ -464,6 +466,7 @@ function ThinkingBubble({ label }: { label?: string }) {
    MIRROR MODE PANEL
 ═══════════════════════════════════════════════════════════════════════════ */
 function MirrorModePanel({ currentUser }: { currentUser: string }) {
+  const { t } = useLang();
   const [styleExample, setStyleExample] = useState('');
   const [savedStyles,  setSavedStyles]  = useState<string[]>([]);
   const [context,      setContext]      = useState('');
@@ -533,18 +536,18 @@ function MirrorModePanel({ currentUser }: { currentUser: string }) {
           <Brain size={24} className="text-white" />
         </div>
         <h2 className="text-white font-bold text-lg">Mirror Mode</h2>
-        <p className="text-slate-400 text-sm mt-1">AI שלומד את סגנון הכתיבה שלך ומייצר הודעות בדיוק כמוך</p>
+        <p className="text-slate-400 text-sm mt-1">{t('ai.mirrorDesc')}</p>
       </div>
 
       {/* Saved examples */}
       <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
         <h3 className="text-white font-bold text-sm flex items-center gap-2">
-          <Sparkles size={13} className="text-violet-400" /> הסגנון שלי ({savedStyles.length}/5 דוגמאות)
+          <Sparkles size={13} className="text-violet-400" /> {t('ai.myStyle')} ({savedStyles.length}/5 {t('ai.examples')})
         </h3>
         {initLoading ? (
           <div className="text-center py-4"><Loader2 size={18} className="animate-spin text-slate-500 mx-auto" /></div>
         ) : savedStyles.length === 0 ? (
-          <p className="text-slate-500 text-xs text-center py-2">הוסף דוגמאות כתיבה שלך — ווטסאפ, מייל, פוסטים — כדי ש-AI ילמד את הסגנון</p>
+          <p className="text-slate-500 text-xs text-center py-2">{t('ai.mirrorHint')}</p>
         ) : (
           <div className="space-y-2">
             {savedStyles.map((s, i) => (
@@ -561,7 +564,7 @@ function MirrorModePanel({ currentUser }: { currentUser: string }) {
           <textarea
             value={styleExample}
             onChange={e => setStyleExample(e.target.value)}
-            placeholder="הדבק כאן הודעה שכתבת (ווטסאפ, מייל, תגובה) — ה-AI ילמד את הסגנון שלך..."
+            placeholder={t('ai.mirrorPlaceholder')}
             rows={3}
             className="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-500/60 resize-none text-right"
           />
@@ -570,18 +573,18 @@ function MirrorModePanel({ currentUser }: { currentUser: string }) {
             disabled={!styleExample.trim() || savedStyles.length >= 5}
             className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-sm font-bold py-2.5 rounded-xl transition-colors"
           >
-            {savedStyles.length >= 5 ? 'מקסימום 5 דוגמאות — מחק ישנות כדי להוסיף' : '+ שמור דוגמה'}
+            {savedStyles.length >= 5 ? t('ai.mirrorMaxExamples') : t('ai.mirrorSaveExample')}
           </button>
         </div>
       </div>
 
       {/* Generator */}
       <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
-        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Zap size={13} className="text-indigo-400" /> צור הודעה בסגנון שלך</h3>
+        <h3 className="text-white font-bold text-sm flex items-center gap-2"><Zap size={13} className="text-indigo-400" /> {t('ai.mirrorGenerate')}</h3>
         <textarea
           value={context}
           onChange={e => setContext(e.target.value)}
-          placeholder="מה אתה רוצה לכתוב? (למשל: הודעת מעקב ללקוח שלא ענה, פוסט על שירות חדש, הצעת מחיר...)"
+          placeholder={t('ai.mirrorContextPlaceholder')}
           rows={3}
           className="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/60 resize-none text-right"
         />
@@ -591,16 +594,16 @@ function MirrorModePanel({ currentUser }: { currentUser: string }) {
           className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
         >
           {genLoading ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
-          {genLoading ? 'מייצר בסגנון שלך...' : savedStyles.length === 0 ? 'הוסף דוגמאות תחילה' : 'צור הודעה'}
+          {genLoading ? t('ai.mirrorGenerating') : savedStyles.length === 0 ? t('ai.mirrorAddFirst') : t('ai.mirrorCreate')}
         </button>
         {generated && (
           <div className="bg-slate-900 border border-indigo-700/40 rounded-xl p-4 space-y-3">
             <p className="text-slate-200 text-sm leading-relaxed text-right whitespace-pre-wrap">{generated}</p>
             <div className="flex gap-2 justify-start">
               <button onClick={copyGenerated} className="flex items-center gap-1.5 text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">
-                <Copy size={11} /> {copied ? 'הועתק ✓' : 'העתק'}
+                <Copy size={11} /> {copied ? t('ai.copied') : t('ai.copyMessage')}
               </button>
-              <button onClick={() => { setGenerated(''); setContext(''); }} className="text-xs text-slate-500 px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">נקה</button>
+              <button onClick={() => { setGenerated(''); setContext(''); }} className="text-xs text-slate-500 px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">{t('common.clear')}</button>
             </div>
           </div>
         )}
@@ -613,6 +616,7 @@ function MirrorModePanel({ currentUser }: { currentUser: string }) {
    DNA MATCH PANEL
 ═══════════════════════════════════════════════════════════════════════════ */
 function DnaMatchPanel({ leads }: { leads: Lead[] }) {
+  const { t } = useLang();
   const [matching, setMatching] = useState(false);
   const [results,  setResults]  = useState<{ leadId: string; score: number; reasons: string }[]>([]);
   const [errMsg,   setErrMsg]   = useState<string | null>(null);
@@ -655,7 +659,7 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
 
   const scoreColor = (s: number) => s >= 75 ? 'text-emerald-400' : s >= 50 ? 'text-amber-400' : 'text-red-400';
   const scoreBar   = (s: number) => s >= 75 ? 'bg-emerald-500' : s >= 50 ? 'bg-amber-500' : 'bg-red-500';
-  const scoreLabel = (s: number) => s >= 75 ? 'פוטנציאל גבוה' : s >= 50 ? 'פוטנציאל בינוני' : 'פוטנציאל נמוך';
+  const scoreLabel = (s: number) => s >= 75 ? t('ai.dnaHigh') : s >= 50 ? t('ai.dnaMedium') : t('ai.dnaLow');
 
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -664,18 +668,18 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
           <Dna size={24} className="text-white" />
         </div>
         <h2 className="text-white font-bold text-lg">DNA Match</h2>
-        <p className="text-slate-400 text-sm mt-1">AI מנתח את הלידים שלך ומוצא מי הכי דומה ללקוחות שנסגרו בהצלחה</p>
+        <p className="text-slate-400 text-sm mt-1">{t('ai.dnaDesc')}</p>
       </div>
 
       <div className="bg-slate-800 border border-slate-700/60 rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between text-xs">
-          <span className="text-emerald-400 font-semibold">{wonLeads.length} לקוחות פעילים כ-DNA בסיס</span>
-          <span className="text-slate-400">{targetLeads.length} לידים לניתוח</span>
+          <span className="text-emerald-400 font-semibold">{wonLeads.length} {t('ai.dnaActiveClients')}</span>
+          <span className="text-slate-400">{targetLeads.length} {t('ai.dnaLeadsToAnalyze')}</span>
         </div>
         {wonLeads.length === 0 ? (
           <div className="text-center py-3">
-            <p className="text-slate-400 text-sm">אין לקוחות פעילים עדיין.</p>
-            <p className="text-slate-500 text-xs mt-1">DNA Match מתחיל לעבוד לאחר שיש לך לקוח פעיל אחד לפחות.</p>
+            <p className="text-slate-400 text-sm">{t('ai.dnaNoClients')}</p>
+            <p className="text-slate-500 text-xs mt-1">{t('ai.dnaNoClientsHint')}</p>
           </div>
         ) : (
           <button
@@ -684,7 +688,7 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
             className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
           >
             {matching ? <Loader2 size={14} className="animate-spin" /> : <Dna size={14} />}
-            {matching ? 'מנתח DNA...' : targetLeads.length === 0 ? 'אין לידים לניתוח' : 'הפעל DNA Match'}
+            {matching ? t('ai.dnaAnalyzing') : targetLeads.length === 0 ? t('ai.dnaNoLeads') : t('ai.dnaRun')}
           </button>
         )}
         {errMsg && <p className="text-red-400 text-xs text-center">{errMsg}</p>}
@@ -692,7 +696,7 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
 
       {results.length > 0 && (
         <div className="space-y-3">
-          <p className="text-slate-400 text-xs font-semibold px-1">תוצאות — מדורג מגבוה לנמוך</p>
+          <p className="text-slate-400 text-xs font-semibold px-1">{t('ai.dnaResults')}</p>
           {results.map(r => {
             const lead = leads.find(l => l.id === r.leadId);
             if (!lead) return null;
@@ -719,9 +723,9 @@ function DnaMatchPanel({ leads }: { leads: Lead[] }) {
                   <div className="px-4 pb-4 pt-0 border-t border-slate-700/50">
                     <p className="text-slate-300 text-xs leading-relaxed text-right mt-3">{r.reasons}</p>
                     <div className="mt-2 flex gap-2 flex-wrap justify-end">
-                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">תקציב: ₪{lead.budget.toLocaleString()}</span>
-                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">מקור: {lead.source}</span>
-                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">ציון AI: {lead.aiScore}%</span>
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">{t('overview.budget')}: ₪{lead.budget.toLocaleString()}</span>
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">{t('overview.source')}: {lead.source}</span>
+                      <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">AI {t('overview.score')}: {lead.aiScore}%</span>
                     </div>
                   </div>
                 )}
@@ -748,6 +752,7 @@ function HistoryPanel({
   onClose: () => void;
   loading: boolean;
 }) {
+  const { t } = useLang();
   const [selected, setSelected] = useState<Session | null>(null);
 
   const fmtDate = (iso: string) => {
@@ -768,11 +773,11 @@ function HistoryPanel({
             onClick={() => setSelected(null)}
             className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
           >
-            <ArrowRight size={14} /> חזור לרשימה
+            <ArrowRight size={14} /> {t('ai.backToList')}
           </button>
           <div className="text-right">
             <p className="text-white font-bold text-sm">{fmtDate(selected.startedAt)}</p>
-            <p className="text-slate-500 text-xs">{selected.messageCount} הודעות · {fmtTime(selected.startedAt)}</p>
+            <p className="text-slate-500 text-xs">{selected.messageCount} {t('ai.messages')} · {fmtTime(selected.startedAt)}</p>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
@@ -805,11 +810,11 @@ function HistoryPanel({
           onClick={onClose}
           className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
         >
-          <ArrowRight size={14} /> חזור לשיחה
+          <ArrowRight size={14} /> {t('ai.backToChat')}
         </button>
         <div className="flex items-center gap-2">
           <History size={14} className="text-indigo-400" />
-          <span className="text-white font-bold text-sm">היסטוריית שיחות</span>
+          <span className="text-white font-bold text-sm">{t('ai.sessionHistory')}</span>
         </div>
       </div>
 
@@ -818,17 +823,17 @@ function HistoryPanel({
         {/* Current session */}
         {currentAsSession && (
           <div>
-            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 mb-2">שיחה נוכחית</p>
+            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 mb-2">{t('ai.currentSession')}</p>
             <button
               onClick={() => setSelected(currentAsSession)}
               className="w-full text-right bg-slate-800 hover:bg-slate-700 border border-indigo-600/40 rounded-2xl p-4 transition-all"
             >
               <div className="flex items-start justify-between gap-3">
                 <span className="text-[10px] text-indigo-400 bg-indigo-900/40 border border-indigo-700/40 px-2 py-0.5 rounded-full flex-shrink-0">
-                  {currentAsSession.messageCount} הודעות
+                  {currentAsSession.messageCount} {t('ai.messages')}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-medium leading-snug line-clamp-2">{currentAsSession.preview || 'שיחה נוכחית'}</p>
+                  <p className="text-white text-sm font-medium leading-snug line-clamp-2">{currentAsSession.preview || t('ai.currentSession')}</p>
                   <p className="text-slate-500 text-xs mt-1">{fmtTime(currentAsSession.startedAt)}</p>
                 </div>
               </div>
@@ -840,20 +845,20 @@ function HistoryPanel({
         {sessionsLoading ? (
           <div className="text-center py-8">
             <Loader2 size={20} className="animate-spin text-slate-500 mx-auto" />
-            <p className="text-slate-500 text-xs mt-2">טוען היסטוריה...</p>
+            <p className="text-slate-500 text-xs mt-2">{t('ai.loadingHistory')}</p>
           </div>
         ) : isEmpty ? (
           <div className="text-center py-16">
             <History size={36} className="text-slate-700 mx-auto mb-4" />
-            <p className="text-slate-500 text-sm font-medium">אין היסטוריית שיחות עדיין</p>
+            <p className="text-slate-500 text-sm font-medium">{t('ai.noHistory')}</p>
             <p className="text-slate-600 text-xs mt-1.5 leading-relaxed">
-              כל שיחה תישמר אוטומטית<br />כאשר תלחץ על כפתור "נקה"
+              {t('ai.historyAutoSave')}
             </p>
           </div>
         ) : (
           <>
             {sessions.length > 0 && (
-              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 pt-2">שיחות קודמות ({sessions.length})</p>
+              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1 pt-2">{t('ai.pastSessions')} ({sessions.length})</p>
             )}
             {sessions.map(session => (
               <button
@@ -863,10 +868,10 @@ function HistoryPanel({
               >
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-[10px] text-slate-500 bg-slate-700/60 px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap">
-                    {session.messageCount} הודעות
+                    {session.messageCount} {t('ai.messages')}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm font-medium leading-snug line-clamp-2">{session.preview || 'שיחה'}</p>
+                    <p className="text-white text-sm font-medium leading-snug line-clamp-2">{session.preview || t('ai.chatTitle')}</p>
                     <p className="text-slate-500 text-xs mt-1">{fmtDate(session.startedAt)} · {fmtTime(session.startedAt)}</p>
                   </div>
                 </div>
@@ -887,6 +892,7 @@ export default function AiAssistant({
   onCreateTask, onUpdateLead, onAddNote, workspace,
 }: AiAssistantProps) {
 
+  const { t, dir } = useLang();
   const [messages,          setMessages]          = useState<Message[]>(loadLocalHistory);
   const [input,             setInput]             = useState('');
   const [loading,           setLoading]           = useState(false);
@@ -1386,7 +1392,7 @@ export default function AiAssistant({
   const isIdle = messages.length === 0 && !loading;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-180px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
+    <div dir={dir} className="flex flex-col h-[calc(100vh-180px)] md:h-[calc(100vh-120px)] bg-slate-900 md:rounded-2xl border-0 md:border border-slate-700/50 shadow-2xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 md:px-5 py-2.5 md:py-3.5 border-b border-slate-700/60 bg-gradient-to-l from-indigo-900/30 to-slate-900 flex-shrink-0 gap-2">
@@ -1395,14 +1401,14 @@ export default function AiAssistant({
           <button onClick={() => setShowHistory(v => !v)}
             className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg transition-colors flex-shrink-0 ${showHistory ? 'bg-indigo-800/60 text-indigo-300' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}>
             <History size={12} />
-            <span className="hidden sm:inline">{messages.length > 0 ? `${messages.length} הודעות` : 'היסטוריה'}</span>
+            <span className="hidden sm:inline">{messages.length > 0 ? `${messages.length} ${t('ai.messages')}` : t('ai.history')}</span>
           </button>
           {/* Clear — only when there are messages */}
           {messages.length > 0 && !showHistory && (
             <button onClick={clearChat}
               className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1.5 rounded-lg hover:bg-slate-800 flex-shrink-0">
               <Trash2 size={12} />
-              <span className="hidden sm:inline">נקה</span>
+              <span className="hidden sm:inline">{t('ai.clearHistory')}</span>
             </button>
           )}
           {/* Web search toggle */}
@@ -1413,18 +1419,18 @@ export default function AiAssistant({
                 : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-400'
             }`}>
             <Globe size={12} className={webSearchEnabled ? 'text-indigo-400' : 'text-slate-600'} />
-            <span className="hidden xs:inline sm:inline">{webSearchEnabled ? 'אינטרנט' : 'ללא'}</span>
+            <span className="hidden xs:inline sm:inline">{webSearchEnabled ? t('ai.webSearch') : t('common.off')}</span>
           </button>
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
           <div className="text-right hidden sm:block">
             <div className="font-bold text-white text-sm flex items-center gap-2 justify-end">
-              עוזר AI אישי
+              {t('ai.chatTitle')}
               <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             </div>
             <div className="text-[10px] text-slate-500">
-              claude-opus-4-6 · כלי CRM {webSearchEnabled && '· חיפוש אינטרנט'}
+              claude-opus-4-6 · {t('ai.crmTools')} {webSearchEnabled && `· ${t('ai.webSearch')}`}
             </div>
           </div>
           <div className="w-8 h-8 md:w-9 md:h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-900 flex items-center justify-center shadow-lg flex-shrink-0">
@@ -1436,7 +1442,7 @@ export default function AiAssistant({
       {/* ── AI Intelligence Tabs ────────────────────────────────────────────── */}
       <div className="flex gap-1 px-4 py-2 border-b border-slate-700/60 bg-slate-900/50 flex-shrink-0">
         {([
-          { key: 'chat'   as const, icon: <Bot size={12} />,    label: 'שיחה'        },
+          { key: 'chat'   as const, icon: <Bot size={12} />,    label: t('ai.chatTab')        },
           { key: 'mirror' as const, icon: <Brain size={12} />,  label: 'Mirror Mode' },
           { key: 'dna'    as const, icon: <Dna size={12} />,    label: 'DNA Match'   },
         ]).map(v => (
@@ -1460,7 +1466,7 @@ export default function AiAssistant({
       {currentSearches.length > 0 && loading && (
         <div className="flex items-center gap-2 px-5 py-2 bg-indigo-900/20 border-b border-indigo-700/20 flex-shrink-0 overflow-x-auto">
           <Globe size={12} className="text-indigo-400 flex-shrink-0" />
-          <span className="text-[11px] text-indigo-400 flex-shrink-0">מחפש:</span>
+          <span className="text-[11px] text-indigo-400 flex-shrink-0">{t('ai.searching')}:</span>
           {currentSearches.map((q, i) => (
             <span key={i} className="text-[11px] bg-indigo-800/50 text-indigo-200 px-2 py-0.5 rounded-full whitespace-nowrap border border-indigo-700/30">{q}</span>
           ))}
@@ -1500,20 +1506,20 @@ export default function AiAssistant({
               )}
             </div>
             <div>
-              <p className="text-white font-bold text-xl">שלום {currentUser.split(' ')[0]}! אני העוזר ה-AI שלך 👋</p>
+              <p className="text-white font-bold text-xl">{t('ai.welcomeGreeting').replace('{name}', currentUser.split(' ')[0])}</p>
               <p className="text-slate-400 text-sm mt-1.5">
                 {workspace?.name
-                  ? `אני מכיר את ${workspace.name}${workspace.industry ? ` — ${workspace.industry}` : ''}. מה עושים היום?`
-                  : 'אני יכול לנתח לידים, ליצור משימות, לעדכן סטטוסים ולחפש מידע באינטרנט'}
+                  ? t('ai.welcomeWorkspace').replace('{name}', workspace.name).replace('{industry}', workspace.industry ? ` — ${workspace.industry}` : '')
+                  : t('ai.welcomeDefault')}
               </p>
             </div>
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
               {[
-                { val: leads.length,   label: 'לידים במערכת' },
-                { val: hotLeads,       label: 'לידים פעילים' },
-                { val: openTasks,      label: 'משימות פתוחות' },
+                { val: leads.length,   label: t('ai.totalLeads') },
+                { val: hotLeads,       label: t('ai.activeLeads') },
+                { val: openTasks,      label: t('ai.openTasks') },
               ].map(s => (
                 <div key={s.label} className="bg-slate-800 rounded-xl p-3 border border-slate-700/50">
                   <div className="text-2xl font-bold text-indigo-400">{s.val}</div>
@@ -1525,10 +1531,10 @@ export default function AiAssistant({
             {/* Capability pills */}
             <div className="flex flex-wrap justify-center gap-2 text-[10px]">
               {[
-                { icon: <ListTodo size={10}/>, label: 'יצירת משימות', color: 'text-emerald-400 bg-emerald-900/30 border-emerald-700/40' },
-                { icon: <Tag size={10}/>,      label: 'עדכון סטטוסים', color: 'text-amber-400 bg-amber-900/30 border-amber-700/40' },
-                { icon: <StickyNote size={10}/>,label: 'הוספת הערות',  color: 'text-blue-400 bg-blue-900/30 border-blue-700/40' },
-                { icon: <Globe size={10}/>,    label: 'חיפוש אינטרנט', color: 'text-indigo-400 bg-indigo-900/30 border-indigo-700/40' },
+                { icon: <ListTodo size={10}/>, label: t('ai.capTasks'), color: 'text-emerald-400 bg-emerald-900/30 border-emerald-700/40' },
+                { icon: <Tag size={10}/>,      label: t('ai.capStatus'), color: 'text-amber-400 bg-amber-900/30 border-amber-700/40' },
+                { icon: <StickyNote size={10}/>,label: t('ai.capNotes'), color: 'text-blue-400 bg-blue-900/30 border-blue-700/40' },
+                { icon: <Globe size={10}/>,    label: t('ai.webSearch'), color: 'text-indigo-400 bg-indigo-900/30 border-indigo-700/40' },
               ].map((c, i) => (
                 <span key={i} className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border font-medium ${c.color}`}>
                   {c.icon} {c.label}
@@ -1540,7 +1546,7 @@ export default function AiAssistant({
             {team.length > 1 && (
               <div className="text-xs text-slate-500 flex items-center gap-1.5">
                 <User size={11} className="text-slate-600" />
-                צוות: {team.map(m => m.name.split(' ')[0]).join(', ')}
+                {t('ai.team')}: {team.map(m => m.name.split(' ')[0]).join(', ')}
               </div>
             )}
 
@@ -1587,7 +1593,7 @@ export default function AiAssistant({
           <div className="flex items-start gap-3 bg-red-900/30 border border-red-700/40 rounded-xl px-4 py-3 text-sm">
             <AlertCircle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <div className="text-red-300 font-medium">שגיאה</div>
+              <div className="text-red-300 font-medium">{t('common.error')}</div>
               <div className="text-red-400/80 text-xs mt-0.5">{error}</div>
               {(error.includes('עמוסים') || error.includes('מכסת')) && (
                 <button
@@ -1595,7 +1601,7 @@ export default function AiAssistant({
                   disabled={loading}
                   className="mt-2 text-xs bg-red-800/60 hover:bg-red-700/60 text-red-200 px-3 py-1 rounded-lg transition-colors"
                 >
-                  נסה שנית
+                  {t('common.retry')}
                 </button>
               )}
             </div>
@@ -1625,15 +1631,15 @@ export default function AiAssistant({
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              voiceRecording ? 'מקליט... דבר עכשיו' :
-              webSearchEnabled ? 'שאל כל שאלה, בקש פעולה, או חפש מידע...' :
-              'שאל שאלה, בקש ליצור משימה, לעדכן ליד...'
+              voiceRecording ? t('ai.voiceRecording') :
+              webSearchEnabled ? t('ai.placeholderWeb') :
+              t('ai.placeholderDefault')
             }
             rows={1}
             className="flex-1 resize-none bg-transparent text-sm focus:outline-none text-right text-slate-200 placeholder-slate-500 max-h-32"
             style={{ direction: 'rtl' }}
           />
-          <button onClick={toggleVoice} title={voiceRecording ? 'עצור' : 'הקלטה קולית'}
+          <button onClick={toggleVoice} title={voiceRecording ? t('common.stop') : t('ai.voiceInput')}
             className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all active:scale-95 ${
               voiceRecording ? 'bg-red-500 hover:bg-red-400 animate-pulse' : 'text-slate-500 hover:text-white hover:bg-slate-700'
             }`}>
@@ -1650,15 +1656,15 @@ export default function AiAssistant({
           <div className="flex items-center gap-2">
             {voiceRecording ? (
               <span className="text-[10px] text-red-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> מקליט
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> {t('ai.recording')}
               </span>
             ) : (
               <span className="text-[10px] text-indigo-500 flex items-center gap-1">
-                <Zap size={9} /> סוכן AI מחובר לנתוני CRM
+                <Zap size={9} /> {t('ai.agentConnected')}
               </span>
             )}
           </div>
-          <p className="text-[10px] text-slate-600">Enter לשליחה · Shift+Enter שורה חדשה</p>
+          <p className="text-[10px] text-slate-600">{t('ai.inputHint')}</p>
         </div>
       </div>}
     </div>

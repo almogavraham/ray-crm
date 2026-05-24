@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { Zap, Mail, AlertCircle, CheckCircle2, ArrowRight, ExternalLink } from 'lucide-react';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { useLang } from '../contexts/LangContext';
 
 interface ForgotPasswordProps {
   onBack: () => void;
 }
 
 export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
+  const { t, dir } = useLang();
   const [email,       setEmail]       = useState('');
   const [error,       setError]       = useState('');
   const [loading,     setLoading]     = useState(false);
@@ -27,15 +29,15 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
       console.error('Password reset error:', err);
       const code = (err as { code?: string }).code ?? '';
       if (code === 'auth/user-not-found') {
-        setError('האימייל שהוזן אינו קיים במערכת');
+        setError(t('forgotPassword.errorNotFound'));
       } else if (code === 'auth/invalid-email') {
-        setError('כתובת המייל אינה תקינה');
+        setError(t('forgotPassword.errorInvalidEmail'));
       } else if (code === 'auth/too-many-requests') {
-        setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
+        setError(t('forgotPassword.errorTooManyRequests'));
       } else if (code === 'auth/configuration-not-found') {
         setConfigError(true);
       } else {
-        setError(`שגיאה: ${code || 'לא ידועה'}. נסה שוב`);
+        setError(t('forgotPassword.errorGeneral'));
       }
     } finally {
       setLoading(false);
@@ -43,7 +45,7 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dir}>
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-10">
@@ -63,27 +65,27 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
               <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-5">
                 <CheckCircle2 size={36} className="text-emerald-400" />
               </div>
-              <h2 className="text-white font-bold text-xl mb-2">המייל נשלח!</h2>
+              <h2 className="text-white font-bold text-xl mb-2">{t('forgotPassword.sentTitle')}</h2>
               <p className="text-slate-400 text-sm mb-2">
-                שלחנו קישור לאיפוס סיסמה אל
+                {t('forgotPassword.sentDesc')}
               </p>
               <p className="text-indigo-400 font-semibold text-sm mb-5">{email}</p>
               <div className="bg-slate-800 rounded-xl p-4 text-right mb-6 space-y-2">
-                <p className="text-white text-xs font-bold">📧 מה לעשות עכשיו:</p>
+                <p className="text-white text-xs font-bold">📧 {t('forgotPassword.sentInstructions')}</p>
                 <p className="text-slate-400 text-xs leading-relaxed">
-                  1. פתח את תיבת הדואר שלך
+                  1. {t('forgotPassword.sentStep1')}
                 </p>
                 <p className="text-slate-400 text-xs leading-relaxed">
-                  2. חפש מייל מ-<span className="text-indigo-400 font-mono">noreply@chex-crm.firebaseapp.com</span>
+                  2. {t('forgotPassword.sentStep2')} <span className="text-indigo-400 font-mono">noreply@chex-crm.firebaseapp.com</span>
                 </p>
                 <p className="text-slate-400 text-xs leading-relaxed">
-                  3. לחץ על הקישור "Reset your password"
+                  3. {t('forgotPassword.sentStep3')}
                 </p>
                 <p className="text-slate-400 text-xs leading-relaxed">
-                  4. קבע סיסמה חדשה בדף שייפתח
+                  4. {t('forgotPassword.sentStep4')}
                 </p>
                 <p className="text-amber-400 text-xs leading-relaxed mt-2">
-                  ⚠️ לא קיבלת? בדוק את תיקיית הספאם / Junk
+                  ⚠️ {t('forgotPassword.sentSpamHint')}
                 </p>
               </div>
               <button
@@ -91,7 +93,7 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                 className="flex items-center gap-2 text-slate-400 hover:text-white text-sm transition-colors mx-auto"
               >
                 <ArrowRight size={14} />
-                חזרה לדף הכניסה
+                {t('forgotPassword.backToLogin')}
               </button>
             </div>
           ) : (
@@ -102,17 +104,17 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                 className="flex items-center gap-1.5 text-slate-500 hover:text-slate-300 text-sm transition-colors mb-6"
               >
                 <ArrowRight size={14} />
-                חזרה
+                {t('forgotPassword.back')}
               </button>
 
-              <h1 className="text-white font-bold text-xl mb-1">שכחתי סיסמה</h1>
+              <h1 className="text-white font-bold text-xl mb-1">{t('forgotPassword.title')}</h1>
               <p className="text-slate-400 text-sm mb-8">
-                הכנס את כתובת המייל שלך ונשלח לך קישור לאיפוס הסיסמה
+                {t('forgotPassword.desc')}
               </p>
 
               <form onSubmit={handle} className="space-y-5">
                 <div>
-                  <label className="block text-slate-400 text-sm font-medium mb-2">אימייל</label>
+                  <label className="block text-slate-400 text-sm font-medium mb-2">{t('forgotPassword.email')}</label>
                   <div className="relative">
                     <Mail size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                     <input
@@ -140,17 +142,17 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                     <div className="flex items-start gap-2">
                       <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
                       <div>
-                        <p className="text-amber-300 font-bold text-sm mb-1">נדרשת הגדרה ב-Firebase Console</p>
+                        <p className="text-amber-300 font-bold text-sm mb-1">{t('forgotPassword.configTitle')}</p>
                         <p className="text-amber-200/70 text-xs leading-relaxed">
-                          תבנית המייל לאיפוס סיסמה לא הופעלה בפרויקט Firebase שלך.
+                          {t('forgotPassword.configDesc')}
                         </p>
                       </div>
                     </div>
                     <div className="bg-slate-800 rounded-lg p-3 text-xs text-slate-300 space-y-1.5">
-                      <p className="font-bold text-white">תיקון בשני שלבים:</p>
-                      <p>1. לחץ על הקישור למטה → Firebase Console</p>
-                      <p>2. לחץ על <span className="text-indigo-400 font-mono">Templates</span> → <span className="text-indigo-400 font-mono">Password reset</span> → ✏️ Edit → <span className="text-indigo-400 font-mono">Save</span></p>
-                      <p>3. חזור לכאן ונסה שוב</p>
+                      <p className="font-bold text-white">{t('forgotPassword.configFixTitle')}</p>
+                      <p>1. {t('forgotPassword.configStep1')}</p>
+                      <p>2. {t('forgotPassword.configStep2')}</p>
+                      <p>3. {t('forgotPassword.configStep3')}</p>
                     </div>
                     <a
                       href="https://console.firebase.google.com/project/chex-crm/authentication/emails"
@@ -159,14 +161,14 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                       className="flex items-center gap-2 justify-center bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs px-4 py-2.5 rounded-xl transition-colors"
                     >
                       <ExternalLink size={13} />
-                      פתח Firebase Console → Email Templates
+                      {t('forgotPassword.configOpenConsole')}
                     </a>
                     <button
                       type="button"
                       onClick={() => setConfigError(false)}
                       className="w-full text-slate-400 hover:text-white text-xs py-1 transition-colors"
                     >
-                      נסה שוב
+                      {t('forgotPassword.tryAgain')}
                     </button>
                   </div>
                 )}
@@ -177,7 +179,7 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                     disabled={loading}
                     className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25"
                   >
-                    {loading ? 'שולח...' : 'שלח קישור לאיפוס'}
+                    {loading ? t('forgotPassword.sending') : t('forgotPassword.sendLink')}
                   </button>
                 )}
               </form>

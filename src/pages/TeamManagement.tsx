@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { TeamMember, Lead } from '../types';
 import StatusBadge from '../components/StatusBadge';
+import { useLang } from '../contexts/LangContext';
 
 const APP_URL = 'https://ray-crm.vercel.app';
 
@@ -38,6 +39,7 @@ export default function TeamManagement({
   onInvite,
   onRemoveMember,
 }: TeamManagementProps) {
+  const { t } = useLang();
   const [activeTab, setActiveTab] = useState<TabKey>('members');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<'מנהל' | 'סוכן'>('סוכן');
@@ -162,20 +164,20 @@ export default function TeamManagement({
   const memberLeads = (name: string) => leads.filter(l => l.assignedTo === name);
 
   const tabs: { key: TabKey; label: string }[] = [
-    { key: 'members', label: 'חברי צוות' },
-    { key: 'invites', label: `הזמנות (${pendingInvites.length})` },
-    { key: 'stats', label: 'סטטיסטיקות' },
-    { key: 'assignment', label: 'שיוך לידים' },
+    { key: 'members', label: t('teamMgmt.tab.members') },
+    { key: 'invites', label: `${t('teamMgmt.tab.invites')} (${pendingInvites.length})` },
+    { key: 'stats', label: t('teamMgmt.tab.stats') },
+    { key: 'assignment', label: t('teamMgmt.tab.assignment') },
   ];
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <span className="text-slate-500 text-sm">{team.length} חברי צוות</span>
+        <span className="text-slate-500 text-sm">{team.length} {t('teamMgmt.membersCount')}</span>
         <div className="flex items-center gap-2">
           <Users size={18} className="text-indigo-600" />
-          <h1 className="text-xl font-bold text-slate-800">ניהול צוות</h1>
+          <h1 className="text-xl font-bold text-slate-800">{t('teamMgmt.title')}</h1>
         </div>
       </div>
 
@@ -202,7 +204,7 @@ export default function TeamManagement({
           {/* Invite Form */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <div className="flex items-center justify-end gap-2 mb-4">
-              <h3 className="font-semibold text-slate-700">הזמן משתמש חדש</h3>
+              <h3 className="font-semibold text-slate-700">{t('teamMgmt.inviteNew')}</h3>
               <UserPlus size={18} className="text-indigo-600" />
             </div>
 
@@ -225,7 +227,7 @@ export default function TeamManagement({
                 ) : (
                   <Mail size={14} />
                 )}
-                {inviteStatus === 'sent' ? 'נשלח!' : inviteStatus === 'loading' ? 'שולח...' : 'שלח הזמנה'}
+                {inviteStatus === 'sent' ? t('teamMgmt.sent') : inviteStatus === 'loading' ? t('teamMgmt.sending') : t('teamMgmt.sendInvite')}
               </button>
 
               <div className="flex rounded-lg overflow-hidden border border-slate-200 flex-shrink-0">
@@ -240,14 +242,14 @@ export default function TeamManagement({
                     }`}
                   >
                     {role === 'מנהל' && <Shield size={12} />}
-                    {role}
+                    {role === 'מנהל' ? t('teamMgmt.roleManager') : t('teamMgmt.roleAgent')}
                   </button>
                 ))}
               </div>
 
               <input
                 type="email"
-                placeholder="כתובת אימייל..."
+                placeholder={t('teamMgmt.emailPlaceholder')}
                 value={inviteEmail}
                 onChange={e => { setInviteEmail(e.target.value); setInviteStatus('idle'); setInviteError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleInvite()}
@@ -259,7 +261,7 @@ export default function TeamManagement({
             {!emailJSReady && (
               <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-4 py-3 flex items-start gap-2 text-right">
                 <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                <span>Gmail לא מחובר — ההזמנות יישמרו במערכת אך לא יישלחו מהמייל שלך. חבר Gmail בהגדרות כדי לשלוח מיילים.</span>
+                <span>{t('teamMgmt.gmailNotConnected')}</span>
               </div>
             )}
 
@@ -273,7 +275,7 @@ export default function TeamManagement({
             {inviteStatus === 'sent' && (
               <div className="mt-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg px-4 py-3 flex items-center gap-2 text-right">
                 <CheckCircle2 size={16} />
-                <span>ההזמנה נשלחה בהצלחה! הסוכן יקבל מייל עם קישור להצטרפות.</span>
+                <span>{t('teamMgmt.inviteSentSuccess')}</span>
               </div>
             )}
           </div>
@@ -281,7 +283,7 @@ export default function TeamManagement({
           {/* Team Members List */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-end gap-2 bg-slate-50">
-              <h3 className="font-semibold text-slate-700">חברי הצוות</h3>
+              <h3 className="font-semibold text-slate-700">{t('teamMgmt.teamMembers')}</h3>
               <Users size={16} className="text-slate-400" />
             </div>
             <div className="divide-y divide-slate-50">
@@ -295,7 +297,7 @@ export default function TeamManagement({
                         <button
                           onClick={() => setConfirmRemoveMember(member)}
                           className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                          title="הסר מהצוות"
+                          title={t('teamMgmt.removeFromTeam')}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -303,7 +305,7 @@ export default function TeamManagement({
                       {member.isCurrentUser ? (
                         <span className="bg-amber-100 text-amber-700 text-xs px-3 py-1 rounded-full font-semibold flex items-center gap-1">
                           <Shield size={11} />
-                          מנהל
+                          {t('teamMgmt.roleManager')}
                         </span>
                       ) : (
                         <div className="flex rounded-lg overflow-hidden border border-slate-200 text-xs">
@@ -317,7 +319,7 @@ export default function TeamManagement({
                                   : 'bg-white text-slate-500 hover:bg-slate-50'
                               }`}
                             >
-                              {role}
+                              {role === 'מנהל' ? t('teamMgmt.roleManager') : t('teamMgmt.roleAgent')}
                             </button>
                           ))}
                         </div>
@@ -328,15 +330,15 @@ export default function TeamManagement({
                     <div className="flex items-center gap-4 text-xs text-slate-500">
                       <div className="text-center">
                         <div className="font-bold text-slate-800 text-base">{stats.active}</div>
-                        <div>פעילים</div>
+                        <div>{t('teamMgmt.activeClients')}</div>
                       </div>
                       <div className="text-center">
                         <div className="font-bold text-slate-800 text-base">{stats.total}</div>
-                        <div>סה"כ לידים</div>
+                        <div>{t('teamMgmt.totalLeads')}</div>
                       </div>
                       <div className="text-center">
                         <div className="font-bold text-indigo-600 text-base">{stats.conversion}%</div>
-                        <div>המרה</div>
+                        <div>{t('teamMgmt.conversion')}</div>
                       </div>
                     </div>
 
@@ -347,7 +349,7 @@ export default function TeamManagement({
                           <span className="font-semibold text-slate-800">
                             {member.name}
                             {member.isCurrentUser && (
-                              <span className="text-slate-400 font-normal text-xs mr-1">(אתה)</span>
+                              <span className="text-slate-400 font-normal text-xs mr-1">{t('teamMgmt.you')}</span>
                             )}
                           </span>
                         </div>
@@ -370,14 +372,14 @@ export default function TeamManagement({
         <div className="space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-end gap-2 bg-slate-50">
-              <h3 className="font-semibold text-slate-700">הזמנות ממתינות</h3>
+              <h3 className="font-semibold text-slate-700">{t('teamMgmt.pendingInvites')}</h3>
               <Clock size={16} className="text-slate-400" />
             </div>
 
             {pendingInvites.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
                 <Mail size={32} className="mx-auto mb-3 opacity-30" />
-                <div className="text-sm">אין הזמנות פתוחות</div>
+                <div className="text-sm">{t('teamMgmt.noOpenInvites')}</div>
               </div>
             ) : (
               <div className="divide-y divide-slate-50">
@@ -396,7 +398,7 @@ export default function TeamManagement({
                           onClick={() => handleRevoke(invite)}
                           disabled={isRevoking}
                           className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                          title="בטל הזמנה"
+                          title={t('teamMgmt.cancelInvite')}
                         >
                           {isRevoking ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                         </button>
@@ -404,7 +406,7 @@ export default function TeamManagement({
                           onClick={() => handleResend(invite)}
                           disabled={isResending}
                           className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
-                          title="שלח מחדש"
+                          title={t('teamMgmt.resend')}
                         >
                           {isResending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                         </button>
@@ -417,20 +419,20 @@ export default function TeamManagement({
                             ? 'bg-red-100 text-red-600'
                             : 'bg-green-100 text-green-700'
                         }`}>
-                          {isExpired ? 'פג תוקף' : 'ממתין'}
+                          {isExpired ? t('teamMgmt.expired') : t('teamMgmt.pending')}
                         </span>
                         <span className="text-slate-400 text-xs">
-                          {daysSince === 0 ? 'היום' : `לפני ${daysSince} ימים`}
+                          {daysSince === 0 ? t('teamMgmt.today') : `${daysSince} ${t('teamMgmt.days')}`}
                         </span>
                         <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">
-                          {invite.role}
+                          {invite.role === 'מנהל' ? t('teamMgmt.roleManager') : t('teamMgmt.roleAgent')}
                         </span>
                       </div>
 
                       {/* Email */}
                       <div className="text-right">
                         <div className="font-medium text-slate-800 text-sm" dir="ltr">{invite.email}</div>
-                        <div className="text-xs text-slate-400">הוזמן ע"י {invite.invitedBy}</div>
+                        <div className="text-xs text-slate-400">{t('teamMgmt.invitedBy')} {invite.invitedBy}</div>
                       </div>
                     </div>
                   );
@@ -469,14 +471,14 @@ export default function TeamManagement({
                         <div className="font-bold text-slate-800">
                           {member.name}
                           {member.isCurrentUser && (
-                            <span className="text-slate-400 font-normal text-xs mr-2">(אתה)</span>
+                            <span className="text-slate-400 font-normal text-xs mr-2">{t('teamMgmt.you')}</span>
                           )}
                         </div>
                         <div className="text-xs text-slate-400">{member.email}</div>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium mt-1 inline-block ${
                           member.role === 'מנהל' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-50 text-indigo-700'
                         }`}>
-                          {member.role}
+                          {member.role === 'מנהל' ? t('teamMgmt.roleManager') : t('teamMgmt.roleAgent')}
                         </span>
                       </div>
                     </div>
@@ -485,23 +487,23 @@ export default function TeamManagement({
                     <div className="flex items-center gap-6 text-center">
                       <div>
                         <div className="text-2xl font-bold text-slate-800">{stats.total}</div>
-                        <div className="text-xs text-slate-500">סה"כ לידים</div>
+                        <div className="text-xs text-slate-500">{t('teamMgmt.totalLeads')}</div>
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-green-600">{stats.active}</div>
-                        <div className="text-xs text-slate-500">לקוחות פעילים</div>
+                        <div className="text-xs text-slate-500">{t('teamMgmt.activeClients')}</div>
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-orange-500">{stats.onboarding}</div>
-                        <div className="text-xs text-slate-500">בתהליך</div>
+                        <div className="text-xs text-slate-500">{t('teamMgmt.inProgress')}</div>
                       </div>
                       <div>
                         <div className={`text-2xl font-bold ${scoreColor}`}>{stats.avgScore}%</div>
-                        <div className="text-xs text-slate-500">ציון AI</div>
+                        <div className="text-xs text-slate-500">{t('teamMgmt.aiScore')}</div>
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-indigo-600">{stats.conversion}%</div>
-                        <div className="text-xs text-slate-500">המרה</div>
+                        <div className="text-xs text-slate-500">{t('teamMgmt.conversion')}</div>
                       </div>
                     </div>
                   </div>
@@ -511,7 +513,7 @@ export default function TeamManagement({
                     <div>
                       <div className="flex justify-between text-xs text-slate-500 mb-1">
                         <span>{stats.conversion}%</span>
-                        <span>שיעור המרה</span>
+                        <span>{t('teamMgmt.conversionRate')}</span>
                       </div>
                       <div className="h-2 bg-slate-100 rounded-full">
                         <div
@@ -523,7 +525,7 @@ export default function TeamManagement({
                     <div>
                       <div className="flex justify-between text-xs text-slate-500 mb-1">
                         <span>{stats.avgScore}%</span>
-                        <span>ציון AI ממוצע</span>
+                        <span>{t('teamMgmt.aiScore')}</span>
                       </div>
                       <div className="h-2 bg-slate-100 rounded-full">
                         <div
@@ -552,19 +554,19 @@ export default function TeamManagement({
                 <Trash2 size={18} className="text-red-600" />
               </div>
               <div>
-                <h3 className="font-bold text-slate-800">הסרת חבר צוות</h3>
-                <p className="text-sm text-slate-500">פעולה זו אינה ניתנת לביטול</p>
+                <h3 className="font-bold text-slate-800">{t('teamMgmt.removeConfirmTitle')}</h3>
+                <p className="text-sm text-slate-500">{t('teamMgmt.removeConfirmDesc')}</p>
               </div>
             </div>
             <p className="text-sm text-slate-600 mb-6">
-              האם להסיר את <span className="font-semibold text-slate-800">{confirmRemoveMember.name}</span> ({confirmRemoveMember.email}) מהצוות?
+              {t('teamMgmt.removeConfirmMsg')} <span className="font-semibold text-slate-800">{confirmRemoveMember.name}</span> ({confirmRemoveMember.email}) {t('teamMgmt.removeConfirmFrom')}
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirmRemoveMember(null)}
                 className="flex-1 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors"
               >
-                ביטול
+                {t('teamMgmt.cancel')}
               </button>
               <button
                 onClick={() => handleRemoveMember(confirmRemoveMember)}
@@ -576,7 +578,7 @@ export default function TeamManagement({
                 ) : (
                   <Trash2 size={14} />
                 )}
-                הסר מהצוות
+                {t('teamMgmt.remove')}
               </button>
             </div>
           </div>
@@ -593,15 +595,15 @@ export default function TeamManagement({
               <div key={member.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-indigo-700">{memberLeadList.length} לידים</span>
+                    <span className="text-sm font-bold text-indigo-700">{memberLeadList.length} {t('teamMgmt.totalLeads')}</span>
                     <span className="text-xs text-slate-400">|</span>
-                    <span className="text-xs text-green-600 font-medium">{stats.active} פעילים</span>
-                    <span className="text-xs text-orange-500 font-medium">{stats.onboarding} בתהליך</span>
+                    <span className="text-xs text-green-600 font-medium">{stats.active} {t('teamMgmt.activeClients')}</span>
+                    <span className="text-xs text-orange-500 font-medium">{stats.onboarding} {t('teamMgmt.inProgress')}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-right">
                       <span className="font-semibold text-slate-700">{member.name}</span>
-                      <div className="text-xs text-slate-400">{member.role}</div>
+                      <div className="text-xs text-slate-400">{member.role === 'מנהל' ? t('teamMgmt.roleManager') : t('teamMgmt.roleAgent')}</div>
                     </div>
                     <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm">
                       {member.name[0].toUpperCase()}
@@ -609,7 +611,7 @@ export default function TeamManagement({
                   </div>
                 </div>
                 {memberLeadList.length === 0 ? (
-                  <div className="py-6 text-center text-slate-400 text-sm">אין לידים משויכים</div>
+                  <div className="py-6 text-center text-slate-400 text-sm">{t('teamMgmt.noAssignedLeads')}</div>
                 ) : (
                   <div className="divide-y divide-slate-50">
                     {memberLeadList.slice(0, 6).map(lead => (
@@ -633,7 +635,7 @@ export default function TeamManagement({
                     ))}
                     {memberLeadList.length > 6 && (
                       <div className="px-5 py-2 text-xs text-slate-400 text-center bg-slate-50">
-                        +{memberLeadList.length - 6} לידים נוספים
+                        +{memberLeadList.length - 6} {t('teamMgmt.moreLeads')}
                       </div>
                     )}
                   </div>

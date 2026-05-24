@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useLang } from '../contexts/LangContext';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend,
@@ -123,6 +124,7 @@ const tooltipStyle = {
 interface OverviewProps { leads: Lead[]; onLeadClick: (lead: Lead) => void; }
 
 export default function Overview({ leads, onLeadClick }: OverviewProps) {
+  const { t, dir } = useLang();
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [tab,       setTab]       = useState<ReportTab>('overview');
   const [sortCol,   setSortCol]   = useState<'company'|'budget'|'aiScore'|'status'|'lastUpdate'>('aiScore');
@@ -249,15 +251,15 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
   /* ─── render ─────────────────────────────────────────────────────────────── */
   return (
-    <div className="space-y-5" dir="rtl">
+    <div className="space-y-5" dir={dir}>
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-black text-slate-900 flex items-center gap-2">
-            <BarChart2 size={20} className="text-indigo-500" /> דוחות ואנליטיקה
+            <BarChart2 size={20} className="text-indigo-500" /> {t('overview.reportTitle')}
           </h1>
-          <p className="text-sm text-slate-400 mt-0.5">{filtered.length} לידים בטווח הנבחר</p>
+          <p className="text-sm text-slate-400 mt-0.5">{filtered.length} {t('overview.leadsInRange')}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -268,7 +270,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                 className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
                   timeRange===k ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50'
                 }`}>
-                {k==='7'?'שבוע':k==='30'?'חודש':k==='90'?'רבעון':'הכל'}
+                {k==='7'?t('overview.week'):k==='30'?t('overview.month'):k==='90'?t('overview.quarter'):t('overview.all')}
               </button>
             ))}
           </div>
@@ -277,15 +279,15 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           <div className="flex gap-1.5 flex-wrap">
             <button onClick={()=>exportLeads(filtered)}
               className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
-              <Download size={12}/> לידים CSV
+              <Download size={12}/> {t('overview.exportLeadsCSV')}
             </button>
             <button onClick={()=>exportRevenue(filtered)}
               className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
-              <FileText size={12}/> מכירות CSV
+              <FileText size={12}/> {t('overview.exportRevenueCSV')}
             </button>
             <button onClick={()=>exportTeam(filtered)}
               className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
-              <Download size={12}/> צוות CSV
+              <Download size={12}/> {t('overview.exportTeamCSV')}
             </button>
           </div>
         </div>
@@ -295,10 +297,10 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
       <div className="overflow-x-auto pb-1">
       <div className="flex gap-1 bg-slate-100 rounded-2xl p-1 w-fit">
         {([
-          { key:'overview', label:'סקירה כללית',  icon: PieChartIcon },
-          { key:'leads',    label:'טבלת לידים',   icon: TableIcon },
-          { key:'revenue',  label:'מכירות',        icon: TrendingUp },
-          { key:'team',     label:'ביצועי צוות',  icon: Users },
+          { key:'overview', label:t('overview.tabOverview'),  icon: PieChartIcon },
+          { key:'leads',    label:t('overview.tabLeads'),   icon: TableIcon },
+          { key:'revenue',  label:t('overview.tabRevenue'),        icon: TrendingUp },
+          { key:'team',     label:t('overview.tabTeam'),  icon: Users },
         ] as {key:ReportTab;label:string;icon:React.ElementType}[]).map(t => (
           <button key={t.key} onClick={()=>setTab(t.key)}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
@@ -315,10 +317,10 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
         <>
           {/* KPI cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard icon={Users}     label="סה״כ לידים"       value={filtered.length}              color="#6366f1" sub={`${kpi.conv}% המרה לפעיל`}/>
-            <KpiCard icon={Target}    label="לקוחות פעילים"    value={kpi.active.length}             color="#22c55e" sub={`ממוצע ${fmtMoney(kpi.avgDeal)}/חודש`}/>
-            <KpiCard icon={DollarSign} label="הכנסה חודשית"   value={fmtMoney(kpi.revenue)}         color="#10b981" sub={`פייפליין: ${fmtMoney(kpi.pipeVal)}`}/>
-            <KpiCard icon={Brain}     label="ציון AI ממוצע"    value={`${kpi.avgScore}%`}            color="#8b5cf6" sub={`${filtered.filter(l=>l.aiScore>=75).length} לידים חמים`}/>
+            <KpiCard icon={Users}     label={t('overview.totalLeads')}       value={filtered.length}              color="#6366f1" sub={`${kpi.conv}% ${t('overview.conversionRate')}`}/>
+            <KpiCard icon={Target}    label={t('overview.activeClients')}    value={kpi.active.length}             color="#22c55e" sub={`${fmtMoney(kpi.avgDeal)}/חודש`}/>
+            <KpiCard icon={DollarSign} label={t('overview.monthlyRevenue')}   value={fmtMoney(kpi.revenue)}         color="#10b981" sub={`${fmtMoney(kpi.pipeVal)}`}/>
+            <KpiCard icon={Brain}     label={t('overview.avgAiScore')}    value={`${kpi.avgScore}%`}            color="#8b5cf6" sub={`${filtered.filter(l=>l.aiScore>=75).length} ${t('overview.hotLeads')}`}/>
           </div>
 
           {/* Monthly trend */}
@@ -329,7 +331,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"/>לקוחות</span>
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-violet-400 inline-block"/>הכנסות (K₪)</span>
               </div>
-              <h3 className="font-bold text-slate-800">מגמה חודשית — 6 חודשים</h3>
+              <h3 className="font-bold text-slate-800">{t('overview.monthlyTrend')}</h3>
             </div>
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
@@ -358,7 +360,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Status donut */}
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">התפלגות סטטוס</h3>
+              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.statusDistribution')}</h3>
               <div className="flex items-center gap-3">
                 <div className="space-y-2 flex-1">
                   {statusData.map(d=>(
@@ -389,7 +391,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
             {/* Funnel */}
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">משפך מכירות</h3>
+              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.salesFunnel')}</h3>
               <div className="flex items-end gap-2 h-28">
                 {funnel.map((s,i)=>{
                   const max = Math.max(...funnel.map(f=>f.value),1);
@@ -412,7 +414,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
             {/* Source bar */}
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">לידים לפי מקור</h3>
+              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.leadsBySource')}</h3>
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={sourceStats.slice(0,5)} layout="vertical" margin={{right:0,left:0}}>
                   <XAxis type="number" tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
@@ -427,11 +429,11 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           {/* Smart Insights */}
           <div className="bg-gradient-to-bl from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100 p-5">
             <div className="flex items-center gap-2 mb-4 justify-end">
-              <h3 className="font-bold text-slate-800">תובנות חכמות</h3>
+              <h3 className="font-bold text-slate-800">{t('overview.smartInsights')}</h3>
               <Sparkles size={15} className="text-indigo-500"/>
             </div>
             {insights.length===0 ? (
-              <p className="text-slate-400 text-sm text-right">אין מספיק נתונים לתובנות</p>
+              <p className="text-slate-400 text-sm text-right">{t('overview.noInsights')}</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {insights.map((ins,i)=>(
@@ -454,7 +456,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
             <div className="flex items-center gap-2">
               <button onClick={()=>exportLeads(sortedLeads)}
                 className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                <Download size={12}/> ייצא CSV ({sortedLeads.length})
+                <Download size={12}/> {t('overview.exportCSV')} ({sortedLeads.length})
               </button>
             </div>
             <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -474,11 +476,11 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
               <thead>
                 <tr className="border-b border-slate-100 text-right">
                   {([
-                    {col:'company',   label:'חברה'},
-                    {col:'status',    label:'סטטוס'},
-                    {col:'budget',    label:'תקציב'},
-                    {col:'aiScore',   label:'ציון AI'},
-                    {col:'lastUpdate',label:'עדכון אחרון'},
+                    {col:'company',   label:t('overview.company')},
+                    {col:'status',    label:t('common.status')},
+                    {col:'budget',    label:t('dashboard.budget')},
+                    {col:'aiScore',   label:t('dashboard.score')},
+                    {col:'lastUpdate',label:t('dashboard.lastUpdate')},
                   ] as {col:typeof sortCol;label:string}[]).map(h=>(
                     <th key={h.col}
                       onClick={()=>toggleSort(h.col)}
@@ -486,9 +488,9 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                       {h.label}<SortIcon col={h.col}/>
                     </th>
                   ))}
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">מקור</th>
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">אחראי</th>
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">ימים ללא מגע</th>
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.source')}</th>
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.responsible')}</th>
+                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.daysSinceContact')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -518,14 +520,14 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                       <td className="px-4 py-3 text-xs text-slate-500">{lead.assignedTo||'—'}</td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-bold ${stale>=14?'text-red-500':stale>=7?'text-amber-500':'text-emerald-500'}`}>
-                          {stale} ימים
+                          {stale} {t('overview.days')}
                         </span>
                       </td>
                     </tr>
                   );
                 })}
                 {sortedLeads.length===0 && (
-                  <tr><td colSpan={8} className="text-center py-12 text-slate-400 text-sm">אין לידים בסינון זה</td></tr>
+                  <tr><td colSpan={8} className="text-center py-12 text-slate-400 text-sm">{t('overview.noLeadsFilter')}</td></tr>
                 )}
               </tbody>
             </table>
@@ -537,10 +539,10 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
       {tab==='revenue' && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard icon={DollarSign} label="הכנסה חודשית"    value={fmtMoney(kpi.revenue)}     color="#22c55e" sub={`${kpi.active.length} לקוחות פעילים`}/>
-            <KpiCard icon={TrendingUp} label="פייפליין פוטנציאל" value={fmtMoney(kpi.pipeVal)} color="#6366f1" sub={`${kpi.pipeline.length} לידים בפייפליין`}/>
-            <KpiCard icon={Star}       label="ערך לקוח ממוצע"  value={fmtMoney(kpi.avgDeal)}     color="#f59e0b" sub="הכנסה חודשית ממוצעת"/>
-            <KpiCard icon={Zap}        label="שיעור המרה"       value={`${kpi.conv}%`}            color="#8b5cf6" sub="לידים → לקוח פעיל"/>
+            <KpiCard icon={DollarSign} label={t('overview.monthlyRevenue')}    value={fmtMoney(kpi.revenue)}     color="#22c55e" sub={`${kpi.active.length} ${t('overview.activeClients')}`}/>
+            <KpiCard icon={TrendingUp} label={t('overview.pipelinePotential')} value={fmtMoney(kpi.pipeVal)} color="#6366f1" sub={`${kpi.pipeline.length} ${t('overview.totalLeads')}`}/>
+            <KpiCard icon={Star}       label={t('overview.avgClientValue')}  value={fmtMoney(kpi.avgDeal)}     color="#f59e0b" sub={t('overview.avgMonthly')}/>
+            <KpiCard icon={Zap}        label={t('overview.conversionRate')}       value={`${kpi.conv}%`}            color="#8b5cf6" sub={t('overview.leadsToClient')}/>
           </div>
 
           {/* Revenue by source */}
@@ -550,7 +552,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                 className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-semibold">
                 <Download size={11}/> CSV
               </button>
-              <h3 className="font-bold text-slate-800">ביצועי מכירות לפי מקור</h3>
+              <h3 className="font-bold text-slate-800">{t('overview.salesBySource')}</h3>
             </div>
             <div className="space-y-3">
               {sourceStats.map(s=>{
@@ -578,7 +580,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
           {/* Monthly revenue chart */}
           <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-5 text-right">מגמת הכנסות חודשית (K₪)</h3>
+            <h3 className="font-bold text-slate-800 mb-5 text-right">{t('overview.monthlyRevenueChart')}</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
@@ -596,7 +598,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
           {/* Top revenue leads */}
           <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-4 text-right">לקוחות פעילים — לפי ערך</h3>
+            <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.topClients')}</h3>
             <div className="space-y-2">
               {[...kpi.active].sort((a,b)=>(b.budget??0)-(a.budget??0)).slice(0,10).map((lead,i)=>{
                 const max = kpi.active[0]?.budget ?? 1;
@@ -631,29 +633,29 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           <div className="flex justify-end">
             <button onClick={()=>exportTeam(filtered)}
               className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
-              <Download size={12}/> ייצא דוח צוות CSV
+              <Download size={12}/> {t('overview.exportTeamReport')}
             </button>
           </div>
 
           {teamStats.length===0 ? (
             <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 shadow-sm">
               <Users size={32} className="mx-auto mb-3 opacity-30"/>
-              <p>אין נתוני צוות — וודא שלידים משויכים לאחראי</p>
+              <p>{t('overview.noTeamData')}</p>
             </div>
           ) : (
             <>
               {/* Team KPIs */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <KpiCard icon={Users}   label="חברי צוות פעילים" value={teamStats.length}                                    color="#6366f1"/>
-                <KpiCard icon={Target}  label="סה״כ לקוחות"       value={teamStats.reduce((s,t)=>s+t.active,0)}              color="#22c55e"/>
-                <KpiCard icon={Award}   label="המרה ממוצעת"        value={`${teamStats.length?Math.round(teamStats.reduce((s,t)=>s+t.conv,0)/teamStats.length):0}%`} color="#f59e0b"/>
-                <KpiCard icon={DollarSign} label="הכנסה כוללת"    value={fmtMoney(teamStats.reduce((s,t)=>s+t.rev,0))}       color="#8b5cf6"/>
+                <KpiCard icon={Users}   label={t('overview.teamActiveMembers')} value={teamStats.length}                                    color="#6366f1"/>
+                <KpiCard icon={Target}  label={t('overview.teamTotalClients')}       value={teamStats.reduce((s,t)=>s+t.active,0)}              color="#22c55e"/>
+                <KpiCard icon={Award}   label={t('overview.teamAvgConversion')}        value={`${teamStats.length?Math.round(teamStats.reduce((s,t)=>s+t.conv,0)/teamStats.length):0}%`} color="#f59e0b"/>
+                <KpiCard icon={DollarSign} label={t('overview.teamTotalRevenue')}    value={fmtMoney(teamStats.reduce((s,t)=>s+t.rev,0))}       color="#8b5cf6"/>
               </div>
 
               {/* Leaderboard */}
               <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
                 <h3 className="font-bold text-slate-800 mb-5 text-right flex items-center gap-2 justify-end">
-                  <Award size={16} className="text-amber-500"/>לידרבורד ביצועים
+                  <Award size={16} className="text-amber-500"/>{t('overview.leaderboard')}
                 </h3>
                 <div className="space-y-3">
                   {teamStats.map((agent,i)=>{
@@ -679,15 +681,15 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                         <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
                           <div className="bg-white rounded-lg p-2 border border-slate-100">
                             <div className="font-black text-slate-800 text-lg">{agent.total}</div>
-                            <div className="text-slate-400">סה"כ לידים</div>
+                            <div className="text-slate-400">{t('overview.totalLeadsLabel')}</div>
                           </div>
                           <div className="bg-white rounded-lg p-2 border border-slate-100">
                             <div className="font-black text-emerald-600 text-lg">{agent.active}</div>
-                            <div className="text-slate-400">לקוחות פעילים</div>
+                            <div className="text-slate-400">{t('overview.activeClientsLabel')}</div>
                           </div>
                           <div className="bg-white rounded-lg p-2 border border-slate-100">
                             <div className="font-black text-indigo-600 text-lg">{agent.conv}%</div>
-                            <div className="text-slate-400">שיעור המרה</div>
+                            <div className="text-slate-400">{t('overview.conversionRateLabel')}</div>
                           </div>
                         </div>
                         <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -702,7 +704,7 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
 
               {/* Team performance chart */}
               <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-                <h3 className="font-bold text-slate-800 mb-5 text-right">לידים לפי חבר צוות</h3>
+                <h3 className="font-bold text-slate-800 mb-5 text-right">{t('overview.teamByMember')}</h3>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={teamStats} margin={{top:0,right:0,left:-20,bottom:0}}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
@@ -711,8 +713,8 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
                     <Tooltip {...tooltipStyle}/>
                     <Legend iconType="circle" iconSize={7}
                       formatter={v=><span style={{fontSize:11,color:'#64748b'}}>{v}</span>}/>
-                    <Bar dataKey="total"  name="סה״כ לידים"    fill="#e0e7ff" radius={[4,4,0,0]} maxBarSize={32}/>
-                    <Bar dataKey="active" name="לקוחות פעילים" fill="#6366f1" radius={[4,4,0,0]} maxBarSize={32}/>
+                    <Bar dataKey="total"  name={t('overview.totalLeadsLabel')}    fill="#e0e7ff" radius={[4,4,0,0]} maxBarSize={32}/>
+                    <Bar dataKey="active" name={t('overview.activeClientsLabel')} fill="#6366f1" radius={[4,4,0,0]} maxBarSize={32}/>
                   </BarChart>
                 </ResponsiveContainer>
               </div>

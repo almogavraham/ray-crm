@@ -6,6 +6,7 @@ import {
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { WorkspaceProfile } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 interface Props {
   workspace: WorkspaceProfile;
@@ -14,12 +15,12 @@ interface Props {
 
 type Step = 'industry' | 'team' | 'prompt' | 'ai' | 'logo';
 
-const STEPS: { key: Step; label: string; icon: React.ReactNode }[] = [
-  { key: 'industry', label: 'תחום',    icon: <Building2 size={13} /> },
-  { key: 'team',     label: 'צוות',    icon: <Users     size={13} /> },
-  { key: 'prompt',   label: 'על העסק', icon: <Lightbulb size={13} /> },
-  { key: 'ai',       label: 'עוזר AI', icon: <Brain     size={13} /> },
-  { key: 'logo',     label: 'לוגו',     icon: <Package    size={13} /> },
+const STEPS: { key: Step; labelKey: string; icon: React.ReactNode }[] = [
+  { key: 'industry', labelKey: 'onboarding.step.industry', icon: <Building2 size={13} /> },
+  { key: 'team',     labelKey: 'onboarding.step.team',     icon: <Users     size={13} /> },
+  { key: 'prompt',   labelKey: 'onboarding.step.about',    icon: <Lightbulb size={13} /> },
+  { key: 'ai',       labelKey: 'onboarding.step.ai',       icon: <Brain     size={13} /> },
+  { key: 'logo',     labelKey: 'onboarding.step.logo',     icon: <Package   size={13} /> },
 ];
 
 const INDUSTRIES = [
@@ -39,14 +40,15 @@ const INDUSTRIES = [
 ];
 
 const TEAM_SIZES = [
-  { label: '1', sub: 'סולו — רק אני' },
-  { label: '2–5', sub: 'צוות קטן' },
-  { label: '6–10', sub: 'צוות בינוני' },
-  { label: '11–25', sub: 'ארגון גדל' },
-  { label: '25+', sub: 'ארגון גדול' },
+  { label: '1', subKey: 'onboarding.soloTeam' },
+  { label: '2–5', subKey: 'onboarding.smallTeam' },
+  { label: '6–10', subKey: 'onboarding.mediumTeam' },
+  { label: '11–25', subKey: 'onboarding.growingOrg' },
+  { label: '25+', subKey: 'onboarding.largeOrg' },
 ];
 
 export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
+  const { t, dir } = useLang();
   const [step,               setStep]               = useState<Step>('industry');
   const [industry,           setIndustry]           = useState(workspace.industry ?? '');
   const [isBusiness,         setIsBusiness]         = useState(workspace.isBusiness ?? false);
@@ -83,7 +85,7 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
   const handleLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2_000_000) { alert('גודל הקובץ חייב להיות עד 2MB'); return; }
+    if (file.size > 2_000_000) { alert(t('onboarding.logoSizeError')); return; }
     const reader = new FileReader();
     reader.onload = ev => setLogoUrl(ev.target?.result as string);
     reader.readAsDataURL(file);
@@ -114,8 +116,8 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
       await updateDoc(doc(db, 'workspaces', workspace.id), update);
       onComplete();
     } catch (err) {
-      console.error('שגיאה בשמירת ה-onboarding:', err);
-      alert('שגיאה בשמירת הנתונים. נסה שנית.');
+      console.error('onboarding save error:', err);
+      alert(t('onboarding.saveError'));
     } finally {
       setSaving(false);
     }
@@ -136,7 +138,7 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
   };
 
   return (
-    <FullScreen>
+    <FullScreen dir={dir}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3 mb-8">
         <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/30">
@@ -144,10 +146,10 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
         </div>
         <div className="flex-1">
           <p className="text-white font-black text-lg leading-tight">{workspace.name}</p>
-          <p className="text-slate-500 text-xs">הגדרת סביבת העבודה</p>
+          <p className="text-slate-500 text-xs">{t('onboarding.title')}</p>
         </div>
         <button onClick={finish} className="text-slate-600 hover:text-slate-400 text-xs transition-colors">
-          דלג
+          {t('onboarding.skip')}
         </button>
       </div>
 
@@ -157,7 +159,7 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
           <div key={s.key} className="flex-1 flex flex-col items-center gap-1.5">
             <div className={`w-full h-1.5 rounded-full transition-all duration-300 ${i <= stepIndex ? 'bg-indigo-500' : 'bg-slate-800'}`} />
             <span className={`text-[10px] font-medium transition-colors flex items-center gap-1 ${i <= stepIndex ? 'text-indigo-400' : 'text-slate-600'}`}>
-              {s.icon}{s.label}
+              {s.icon}{t(s.labelKey)}
             </span>
           </div>
         ))}
@@ -169,8 +171,8 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
       {step === 'industry' && (
         <div className="space-y-6">
           <div>
-            <h2 className="text-white font-black text-xl">באיזה תחום העסק שלך?</h2>
-            <p className="text-slate-400 text-sm mt-1">נשתמש במידע כדי לאפיין את המערכת לתחום שלך</p>
+            <h2 className="text-white font-black text-xl">{t('onboarding.industryTitle')}</h2>
+            <p className="text-slate-400 text-sm mt-1">{t('onboarding.industryDesc')}</p>
           </div>
 
           {/* Industry grid */}
@@ -194,9 +196,9 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
               <div>
                 <p className="text-white font-semibold text-sm flex items-center gap-1.5">
                   <Briefcase size={14} className="text-indigo-400" />
-                  האם אתה עסק עם מוצרים / שירותים?
+                  {t('onboarding.isBusiness')}
                 </p>
-                <p className="text-slate-500 text-xs mt-0.5">אם כן, הפתרונות שלך יוצגו בכל ליד</p>
+                <p className="text-slate-500 text-xs mt-0.5">{t('onboarding.isBusiness')}</p>
               </div>
               {/* Toggle */}
               <button type="button" onClick={() => setIsBusiness(p => !p)}
@@ -212,7 +214,7 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
             {/* Solutions input — shown only if isBusiness */}
             {isBusiness && (
               <div className="space-y-3 pt-1 border-t border-slate-700/60">
-                <p className="text-slate-400 text-xs font-medium">מה הפתרונות / שירותים שאתה מציע?</p>
+                <p className="text-slate-400 text-xs font-medium">{t('onboarding.solutions')}</p>
 
                 {/* Existing solutions */}
                 {solutions.length > 0 && (
@@ -237,17 +239,17 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
                     value={solutionInput}
                     onChange={e => setSolutionInput(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addSolution())}
-                    placeholder='למשל: "ניהול קמפיינים", "אתר אינטרנט"...'
+                    placeholder={t('onboarding.solutionPlaceholder')}
                     className="flex-1 bg-slate-800 border border-slate-600 text-white placeholder-slate-600 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                   />
                   <button type="button" onClick={addSolution}
                     disabled={!solutionInput.trim()}
                     className="flex items-center gap-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold transition-colors">
                     <Plus size={14} />
-                    הוסף
+                    {t('onboarding.addSolution')}
                   </button>
                 </div>
-                <p className="text-slate-600 text-xs">לחץ Enter או "הוסף" אחרי כל פתרון</p>
+                <p className="text-slate-600 text-xs">{t('onboarding.solutionHint')}</p>
               </div>
             )}
           </div>
@@ -260,12 +262,12 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
       {step === 'team' && (
         <div className="space-y-5">
           <div>
-            <h2 className="text-white font-black text-xl">כמה משתמשים יעבדו במערכת?</h2>
-            <p className="text-slate-400 text-sm mt-1">נתאים את חבילת הצוות ואת ממשק הניהול</p>
+            <h2 className="text-white font-black text-xl">{t('onboarding.teamTitle')}</h2>
+            <p className="text-slate-400 text-sm mt-1">{t('onboarding.teamDesc')}</p>
           </div>
 
           <div className="space-y-2.5">
-            {TEAM_SIZES.map(({ label, sub }) => (
+            {TEAM_SIZES.map(({ label, subKey }) => (
               <button key={label} type="button"
                 onClick={() => setTeamSize(label)}
                 className={`w-full flex items-center justify-between px-5 py-3.5 rounded-xl border-2 transition-all ${
@@ -277,7 +279,7 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
                   {label}
                 </span>
                 <span className={`text-sm ${teamSize === label ? 'text-indigo-400' : 'text-slate-500'}`}>
-                  {sub}
+                  {t(subKey)}
                 </span>
               </button>
             ))}
@@ -291,10 +293,8 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
       {step === 'prompt' && (
         <div className="space-y-5">
           <div>
-            <h2 className="text-white font-black text-xl">ספר לנו על העסק שלך</h2>
-            <p className="text-slate-400 text-sm mt-1">
-              ה-AI ישתמש במידע הזה כדי להתאים לך המלצות, הודעות פולואפ ותוכן שיווקי
-            </p>
+            <h2 className="text-white font-black text-xl">{t('onboarding.aboutTitle')}</h2>
+            <p className="text-slate-400 text-sm mt-1">{t('onboarding.aboutDesc')}</p>
           </div>
 
           <div className="relative">
@@ -304,16 +304,16 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
               onChange={e => setPrompt(e.target.value)}
               rows={8}
               className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-4 py-3 text-sm focus:outline-none focus:border-indigo-500 resize-none transition-colors leading-relaxed"
-              placeholder={`למשל:\nאנחנו סוכנות שיווק דיגיטלי המתמחה בניהול קמפיינים בפייסבוק ואינסטגרם לעסקים קטנים ובינוניים בישראל.\n\nהלקוחות שלנו הם בעיקר בתחום הנדל"ן, קוסמטיקה ואוכל.\n\nאנחנו עובדים עם תקציבים של 2,000–20,000 ₪ בחודש.\n\nהצוות שלנו: 3 אנשים.`}
+              placeholder={t('onboarding.promptPlaceholder')}
             />
           </div>
 
           <div className="bg-indigo-950/40 border border-indigo-500/20 rounded-xl p-3.5">
             <p className="text-indigo-300 text-xs font-semibold mb-1 flex items-center gap-1.5">
-              <Sparkles size={11} /> טיפ לתוצאות טובות יותר
+              <Sparkles size={11} /> {t('onboarding.tipTitle')}
             </p>
             <p className="text-slate-400 text-xs leading-relaxed">
-              כלול: מה העסק עושה, מי הלקוחות האידיאליים, מה גודל העסקאות הטיפוסיות, ומה הערך המרכזי שאתה מציע.
+              {t('onboarding.tipDesc')}
             </p>
           </div>
 
@@ -326,12 +326,12 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
             )}
             {teamSize && (
               <span className="bg-slate-800 border border-slate-700 text-slate-300 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-                <Users size={10} className="text-indigo-400" /> {teamSize} משתמשים
+                <Users size={10} className="text-indigo-400" /> {teamSize} {t('onboarding.step.team')}
               </span>
             )}
             {isBusiness && solutions.length > 0 && (
               <span className="bg-slate-800 border border-slate-700 text-slate-300 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-                <Package size={10} className="text-indigo-400" /> {solutions.length} פתרונות
+                <Package size={10} className="text-indigo-400" /> {solutions.length} {t('onboarding.solutions')}
               </span>
             )}
           </div>
@@ -348,74 +348,78 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
                 <Brain size={14} className="text-white" />
               </div>
-              <h2 className="text-white font-black text-xl">אפיון עוזר ה-AI</h2>
+              <h2 className="text-white font-black text-xl">{t('onboarding.aiTitle')}</h2>
             </div>
-            <p className="text-slate-400 text-sm mt-1 mr-9">
-              ענה על השאלות הבאות — העוזר ישתמש במידע כדי להיות מומחה בתחום שלך
-            </p>
+            <p className="text-slate-400 text-sm mt-1 mr-9">{t('onboarding.aiDesc')}</p>
           </div>
 
           <div className="space-y-4">
             {/* Ideal client */}
             <AiField
-              label="מי הלקוח האידיאלי שלך?"
-              placeholder="למשל: בעלי עסקים קטנים בתחום הנדל&quot;ן עם תקציב 5,000–20,000 ₪ לחודש"
+              label={t('onboarding.idealClient')}
+              placeholder={t('onboarding.idealClientPlaceholder')}
               value={idealClient}
               onChange={setIdealClient}
             />
 
             {/* Pain points */}
             <AiField
-              label="איזו בעיה אתה פותר ללקוח?"
-              placeholder="למשל: הלקוחות שלנו מתקשים להביא לידים איכותיים ולהמיר אותם לעסקאות"
+              label={t('onboarding.painPoints')}
+              placeholder={t('onboarding.painPointsPlaceholder')}
               value={painPoints}
               onChange={setPainPoints}
             />
 
             {/* Unique value */}
             <AiField
-              label="מה מייחד אותך מהמתחרים?"
-              placeholder="למשל: אנחנו מתמחים ב-AI Marketing ומציעים תוצאות תוך 30 יום עם ערבות"
+              label={t('onboarding.uniqueValue')}
+              placeholder={t('onboarding.uniqueValuePlaceholder')}
               value={uniqueValue}
               onChange={setUniqueValue}
             />
 
             {/* Sales process */}
             <AiField
-              label="איך נראה תהליך המכירה שלך?"
-              placeholder="למשל: שיחת היכרות 30 דק' → הצעת מחיר → פגישת המשך → חתימה → קיקאוף"
+              label={t('onboarding.salesProcess')}
+              placeholder={t('onboarding.salesProcessPlaceholder')}
               value={salesProcess}
               onChange={setSalesProcess}
             />
 
             {/* Avg deal */}
             <AiField
-              label="מה גודל העסקה הממוצעת?"
-              placeholder='למשל: 3,000–15,000 ₪ לחודש, לרוב חוזה שנתי'
+              label={t('onboarding.avgDealSize')}
+              placeholder={t('onboarding.avgDealSizePlaceholder')}
               value={avgDealSize}
               onChange={setAvgDealSize}
             />
 
             {/* Common objections */}
             <AiField
-              label="מה ההתנגדויות הנפוצות מלידים?"
-              placeholder='למשל: "יקר מדי", "ניסינו כבר ולא עבד", "אני צריך לחשוב על זה"'
+              label={t('onboarding.commonObjections')}
+              placeholder={t('onboarding.commonObjectionsPlaceholder')}
               value={commonObjections}
               onChange={setCommonObjections}
             />
 
             {/* Tone */}
             <div>
-              <label className="block text-slate-400 text-xs font-semibold mb-2">טון תקשורת של העוזר</label>
+              <label className="block text-slate-400 text-xs font-semibold mb-2">{t('onboarding.tone')}</label>
               <div className="grid grid-cols-3 gap-2">
-                {['מקצועי ורשמי', 'מקצועי וידידותי', 'קליל ונינוח'].map(t => (
-                  <button key={t} type="button" onClick={() => setTone(t)}
+                {(
+                  [
+                    { value: 'מקצועי ורשמי',    labelKey: 'onboarding.toneFormal'       },
+                    { value: 'מקצועי וידידותי', labelKey: 'onboarding.toneProfessional' },
+                    { value: 'קליל ונינוח',     labelKey: 'onboarding.toneCasual'       },
+                  ] as { value: string; labelKey: string }[]
+                ).map(opt => (
+                  <button key={opt.value} type="button" onClick={() => setTone(opt.value)}
                     className={`py-2 rounded-xl text-xs font-semibold border transition-all ${
-                      tone === t
+                      tone === opt.value
                         ? 'border-indigo-500 bg-indigo-900/40 text-white'
                         : 'border-slate-700 bg-slate-800/40 text-slate-400 hover:border-slate-600 hover:text-white'
                     }`}>
-                    {t}
+                    {t(opt.labelKey)}
                   </button>
                 ))}
               </div>
@@ -424,10 +428,10 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
 
           <div className="bg-violet-950/40 border border-violet-500/20 rounded-xl p-3.5">
             <p className="text-violet-300 text-xs font-semibold mb-1 flex items-center gap-1.5">
-              <Brain size={11} /> איך זה עובד?
+              <Brain size={11} /> {t('onboarding.howItWorksTitle')}
             </p>
             <p className="text-slate-400 text-xs leading-relaxed">
-              העוזר AI שלך ילמד את המידע הזה ויהפוך למומחה בתחום שלך — יתן המלצות מדויקות לכל ליד, יעזור בכתיבת הודעות פולואפ, ויציע אסטרטגיות מכירה מותאמות.
+              {t('onboarding.howItWorksDesc')}
             </p>
           </div>
         </div>
@@ -439,8 +443,8 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
       {step === 'logo' && (
         <div className="space-y-5">
           <div>
-            <h2 className="text-white font-black text-xl">לוגו העסק</h2>
-            <p className="text-slate-400 text-sm mt-1">יופיע בממשק ובהצעות המחיר — אפשר לדלג ולהוסיף מאוחר</p>
+            <h2 className="text-white font-black text-xl">{t('onboarding.logoTitle')}</h2>
+            <p className="text-slate-400 text-sm mt-1">{t('onboarding.logoDesc')}</p>
           </div>
 
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoFile} />
@@ -461,43 +465,43 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
                 <Upload size={22} className="text-slate-500 group-hover:text-indigo-400 transition-colors" />
               </div>
               <div className="text-center">
-                <p className="text-slate-300 font-semibold text-sm">לחץ להעלאת לוגו</p>
-                <p className="text-slate-600 text-xs mt-0.5">PNG, JPG עד 2MB</p>
+                <p className="text-slate-300 font-semibold text-sm">{t('onboarding.uploadLogo')}</p>
+                <p className="text-slate-600 text-xs mt-0.5">{t('onboarding.logoSizeHint')}</p>
               </div>
             </button>
           )}
 
           {/* Final summary */}
           <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4 space-y-2">
-            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-2">סיכום סביבת העבודה</p>
+            <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-2">{t('onboarding.title')}</p>
             {industry && (
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
-                תחום: {industry}
+                {t('settings.industry')}: {industry}
               </div>
             )}
             {teamSize && (
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
-                {teamSize} משתמשים
+                {teamSize} {t('onboarding.step.team')}
               </div>
             )}
             {isBusiness && solutions.length > 0 && (
               <div className="flex items-start gap-2 text-sm text-slate-300">
                 <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span>פתרונות: {solutions.join(', ')}</span>
+                <span>{t('onboarding.solutions')}: {solutions.join(', ')}</span>
               </div>
             )}
             {prompt && (
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
-                תיאור עסק ({prompt.length} תווים)
+                {t('settings.businessDesc')} ({prompt.length})
               </div>
             )}
             {logoUrl && (
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
-                לוגו הועלה
+                {t('onboarding.uploadLogo')}
               </div>
             )}
           </div>
@@ -509,16 +513,16 @@ export default function WorkspaceOnboarding({ workspace, onComplete }: Props) {
         {step !== 'industry' && (
           <button type="button" onClick={back}
             className="flex items-center gap-1.5 px-4 py-3 text-slate-400 hover:text-white border border-slate-700 hover:border-slate-600 rounded-xl text-sm transition-all">
-            <ArrowLeft size={14} /> חזרה
+            <ArrowLeft size={14} /> {t('onboarding.back')}
           </button>
         )}
         <button type="button" onClick={next} disabled={saving}
           className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-indigo-500/20">
           {saving
-            ? 'שומר...'
+            ? t('onboarding.saving')
             : step === 'logo'
-              ? '🚀 סיים והתחל'
-              : (<>המשך <ArrowRight size={14} /></>)
+              ? `🚀 ${t('onboarding.finish')}`
+              : (<>{t('onboarding.next')} <ArrowRight size={14} /></>)
           }
         </button>
       </div>
@@ -543,9 +547,9 @@ function AiField({ label, placeholder, value, onChange }: {
   );
 }
 
-function FullScreen({ children }: { children: React.ReactNode }) {
+function FullScreen({ children, dir: dirProp }: { children: React.ReactNode; dir?: string }) {
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dirProp ?? 'rtl'}>
       <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
         {children}
       </div>

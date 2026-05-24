@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { translations } from '../i18n/translations';
 
@@ -17,28 +17,37 @@ function getInitialLang(): Lang {
   try {
     const stored = localStorage.getItem('ray-lang');
     if (stored === 'he' || stored === 'en') return stored;
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
   return 'he';
 }
 
+/** Apply lang/dir globally to the document root */
+function applyDocumentLang(lang: Lang) {
+  const dir = lang === 'he' ? 'rtl' : 'ltr';
+  document.documentElement.lang = lang;
+  document.documentElement.dir  = dir;
+  document.body.dir              = dir;
+}
+
 export function LangProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(getInitialLang);
+  const [lang, setLangState] = useState<Lang>(() => {
+    const initial = getInitialLang();
+    applyDocumentLang(initial);   // apply synchronously on first render
+    return initial;
+  });
 
   const setLang = useCallback((newLang: Lang) => {
+    applyDocumentLang(newLang);
     setLangState(newLang);
-    try {
-      localStorage.setItem('ray-lang', newLang);
-    } catch {
-      // ignore
-    }
+    try { localStorage.setItem('ray-lang', newLang); } catch { /* ignore */ }
   }, []);
 
+  // Keep document in sync if lang state ever changes externally
+  useEffect(() => { applyDocumentLang(lang); }, [lang]);
+
   const t = useCallback(
-    (key: string): string => {
-      return translations[lang][key] ?? translations['he'][key] ?? key;
-    },
+    (key: string): string =>
+      translations[lang][key] ?? translations['he'][key] ?? key,
     [lang],
   );
 

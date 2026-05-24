@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Plus, Package, AlertTriangle } from 'lucide-react';
 import type { Lead, LeadStatus, LeadSource, Solution } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 interface NewLeadModalProps {
   onClose: () => void;
@@ -22,6 +23,7 @@ export default function NewLeadModal({
   currentUser = '',
   existingLeads = [],
 }: NewLeadModalProps) {
+  const { t, dir } = useLang();
   const [form, setForm] = useState({
     company:     '',
     contactName: '',
@@ -105,13 +107,13 @@ export default function NewLeadModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto" dir="rtl">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl max-h-[95vh] sm:max-h-[90vh] overflow-y-auto" dir={dir}>
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl z-10">
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X size={20} />
           </button>
-          <h2 className="text-lg font-bold text-slate-800">ליד חדש</h2>
+          <h2 className="text-lg font-bold text-slate-800">{t('newLead.title')}</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
@@ -122,11 +124,11 @@ export default function NewLeadModal({
               <div className="flex items-start gap-2">
                 <AlertTriangle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm font-bold text-amber-800">ליד כפול — כבר קיים במערכת</p>
+                  <p className="text-sm font-bold text-amber-800">{t('newLead.duplicateWarning')}</p>
                   <p className="text-xs text-amber-700 mt-0.5">
                     <span className="font-semibold">{duplicate.company}</span>
                     {duplicate.email && ` (${duplicate.email})`}
-                    {' '}— סטטוס: {duplicate.status}
+                    {' '}— {t('newLead.status')}: {duplicate.status}
                   </p>
                 </div>
               </div>
@@ -136,14 +138,14 @@ export default function NewLeadModal({
                   onClick={() => setForceAdd(true)}
                   className="flex-1 text-xs font-semibold px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
                 >
-                  הוסף בכל זאת
+                  {t('newLead.addAnyway')}
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
                   className="flex-1 text-xs font-medium px-3 py-2 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 transition-colors"
                 >
-                  ביטול
+                  {t('newLead.cancel')}
                 </button>
               </div>
             </div>
@@ -153,38 +155,38 @@ export default function NewLeadModal({
           {duplicate && forceAdd && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-2.5 flex items-center gap-2 text-right">
               <AlertTriangle size={13} className="text-blue-500 flex-shrink-0" />
-              <p className="text-xs text-blue-700 font-medium">יווצר ליד נוסף — גם אם קיים ליד דומה</p>
+              <p className="text-xs text-blue-700 font-medium">{t('newLead.addAnyway')}</p>
             </div>
           )}
 
           {/* Fields */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">שם חברה / לקוח *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.company')}</label>
             <input
               type="text" required
               value={form.company}
               onChange={e => handleCompanyChange(e.target.value)}
               className={inp}
-              placeholder="לדוגמה: מגדלי שפירא..."
+              placeholder={t('newLead.companyPlaceholder')}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">שם איש קשר</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.contact')}</label>
             <input type="text" value={form.contactName}
               onChange={e => setForm(f => ({ ...f, contactName: e.target.value }))}
-              className={inp} placeholder="שם מלא..." />
+              className={inp} placeholder={t('newLead.contactPlaceholder')} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">טלפון</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.phone')}</label>
               <input type="tel" value={form.phone}
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
                 className={inp} placeholder="050-0000000" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">מייל</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.email')}</label>
               <input
                 type="email"
                 value={form.email}
@@ -197,7 +199,7 @@ export default function NewLeadModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">סטטוס</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.status')}</label>
               <select value={form.status}
                 onChange={e => setForm(f => ({ ...f, status: e.target.value as LeadStatus }))}
                 className={inp}>
@@ -205,7 +207,7 @@ export default function NewLeadModal({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">מקור</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{t('newLead.source')}</label>
               <select value={form.source}
                 onChange={e => setForm(f => ({ ...f, source: e.target.value as LeadSource }))}
                 className={inp}>
@@ -219,7 +221,7 @@ export default function NewLeadModal({
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-1.5">
                 <Package size={14} className="text-indigo-500" />
-                באיזה פתרון מתעניין הליד?
+                {t('newLead.solutions')}
               </label>
               <div className="flex flex-wrap gap-2">
                 {workspaceSolutions.map(sol => {
@@ -248,14 +250,14 @@ export default function NewLeadModal({
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose}
               className="flex-1 border border-slate-200 text-slate-600 py-2.5 rounded-xl font-medium text-sm hover:bg-slate-50 transition-colors">
-              ביטול
+              {t('newLead.cancel')}
             </button>
             <button
               type="submit"
               disabled={!!(duplicate && !forceAdd)}
               className="flex-1 bg-black hover:bg-neutral-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-colors"
             >
-              <Plus size={16} />הוסף ליד
+              <Plus size={16} />{t('newLead.add')}
             </button>
           </div>
         </form>

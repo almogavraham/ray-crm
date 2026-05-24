@@ -12,11 +12,12 @@ import { SOLUTIONS } from '../data/mockData';
 import StatusBadge from './StatusBadge';
 import EmailModal from './EmailModal';
 import { getApiKey } from '../lib/apiKey';
+import { useLang } from '../contexts/LangContext';
 
-const PRIORITY_OPTS: { value: TaskPriority; label: string; active: string; idle: string }[] = [
-  { value: 'high',   label: '🔴 דחוף',   active: 'bg-red-500 text-white ring-2 ring-red-300',    idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
-  { value: 'medium', label: '🟠 בינוני', active: 'bg-amber-500 text-white ring-2 ring-amber-300', idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
-  { value: 'low',    label: '🔵 נמוך',   active: 'bg-blue-500 text-white ring-2 ring-blue-300',   idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
+const PRIORITY_OPTS: { value: 'high' | 'medium' | 'low'; label: string; active: string; idle: string }[] = [
+  { value: 'high',   label: '🔴', active: 'bg-red-500 text-white ring-2 ring-red-300',    idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
+  { value: 'medium', label: '🟠', active: 'bg-amber-500 text-white ring-2 ring-amber-300', idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
+  { value: 'low',    label: '🔵', active: 'bg-blue-500 text-white ring-2 ring-blue-300',   idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
 ];
 
 function formatPhoneForWhatsApp(phone: string): string {
@@ -61,6 +62,7 @@ interface LeadModalProps {
 }
 
 export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, onToast }: LeadModalProps) {
+  const { t, dir } = useLang();
   // Solutions list: workspace-specific (from wizard) or fallback to hardcoded
   const solutionsList = (workspace?.businessSolutions?.length ?? 0) > 0
     ? (workspace!.businessSolutions!)
@@ -86,7 +88,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
   const toggleNoteVoice = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { alert('הדפדפן שלך אינו תומך בהקלטה קולית'); return; }
+    if (!SR) { alert(t('leadModal.browserNoSpeech')); return; }
     if (noteRecording) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (noteRecogRef.current as any)?.stop();
@@ -169,7 +171,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
   const runAiResearch = async () => {
     const apiKey = getApiKey();
     if (!apiKey) {
-      setAiInsightError('מפתח API חסר. פתח .env והחלף את VITE_ANTHROPIC_API_KEY במפתח שלך (sk-ant-...).');
+      setAiInsightError(t('leadModal.aiApiKeyMissing'));
       setShowInsight(true);
       return;
     }
@@ -183,8 +185,8 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
-      const bizName     = workspace?.name      ?? 'העסק שלנו';
-      const bizIndustry = workspace?.industry   ?? 'שיווק דיגיטלי';
+      const bizName     = workspace?.name      ?? 'Our Business';
+      const bizIndustry = workspace?.industry   ?? '';
       const bizServices = solutionsList.join(', ');
       const aiProfile   = workspace?.aiProfile;
 
@@ -282,7 +284,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
       }
     } catch (err) {
       console.error('AI research failed:', err);
-      setAiInsightError('לא הצלחתי לחפש מידע על החברה. נסה שוב.');
+      setAiInsightError(t('leadModal.aiSearchError'));
       // Fallback: just update score
       const scoreMap: Record<string, number> = {
         'לקוח פעיל': 85, 'בתהליך': 65,
@@ -305,11 +307,11 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
   const scoreColor = data.aiScore >= 75 ? '#22c55e' : data.aiScore >= 50 ? '#f97316' : '#818cf8';
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
-    { key: 'details',  label: 'פרטים',  icon: <Building2 size={13} /> },
-    { key: 'tasks',    label: 'משימות', icon: <ListChecks size={13} />, badge: data.tasks.filter(t => !t.completed).length },
-    { key: 'notes',    label: 'הערות',  icon: <FileText size={13} />,  badge: data.notes.length },
-    { key: 'activity', label: 'פעילות', icon: <Activity size={13} /> },
-    { key: 'agents',   label: 'סוכנים ⚡', icon: <Sparkles size={13} /> },
+    { key: 'details',  label: t('leadModal.tab.details'),  icon: <Building2 size={13} /> },
+    { key: 'tasks',    label: t('leadModal.tab.tasks'),    icon: <ListChecks size={13} />, badge: data.tasks.filter(t => !t.completed).length },
+    { key: 'notes',    label: t('leadModal.tab.notes'),    icon: <FileText size={13} />,  badge: data.notes.length },
+    { key: 'activity', label: t('leadModal.tab.activity'), icon: <Activity size={13} /> },
+    { key: 'agents',   label: `${t('leadModal.tab.agents')} ⚡`, icon: <Sparkles size={13} /> },
   ];
 
   return (
@@ -386,7 +388,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   onClick={() => setShowEmail(true)}
                   className="flex items-center gap-1.5 bg-neutral-800 hover:bg-black text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg"
                 >
-                  <Mail size={13} />מייל חכם ✨
+                  <Mail size={13} />{t('leadModal.sendEmail')} ✨
                 </button>
               )}
 
@@ -395,7 +397,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   onClick={() => window.open(`tel:${data.phone}`, '_blank')}
                   className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
                 >
-                  <Phone size={13} />התקשר
+                  <Phone size={13} />{t('leadModal.call')}
                 </button>
               )}
 
@@ -406,9 +408,9 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all mr-auto"
               >
                 {aiScoring ? (
-                  <><Loader2 size={13} className="animate-spin" />חוקר...</>
+                  <><Loader2 size={13} className="animate-spin" />{t('leadModal.aiScoring')}</>
                 ) : (
-                  <><Brain size={13} />ניתוח AI</>
+                  <><Brain size={13} />{t('leadModal.aiScore')}</>
                 )}
               </button>
             </div>
@@ -425,9 +427,9 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   </button>
                   <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300">
                     {aiScoring ? (
-                      <><Loader2 size={12} className="animate-spin" /><Globe size={12} />חוקר את {data.company}...</>
+                      <><Loader2 size={12} className="animate-spin" /><Globe size={12} />{t('leadModal.aiScoring')} {data.company}...</>
                     ) : (
-                      <><Globe size={12} />מחקר AI — {data.company}</>
+                      <><Globe size={12} />{t('leadModal.aiScore')} — {data.company}</>
                     )}
                   </div>
                 </div>
@@ -452,7 +454,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     </>
                   ) : (
                     <div className="flex items-center gap-2 text-slate-500">
-                      <Loader2 size={12} className="animate-spin" />מחפש מידע באינטרנט...
+                      <Loader2 size={12} className="animate-spin" />{t('ai.searching')}...
                     </div>
                   )}
                 </div>
@@ -495,7 +497,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   {/* Solutions */}
                   <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
                     <h3 className="text-xs font-bold text-slate-400 mb-3 text-right uppercase tracking-wider flex items-center gap-1.5 justify-end">
-                      פתרונות <Zap size={11} className="text-orange-400" />
+                      {t('leadModal.solutions')} <Zap size={11} className="text-orange-400" />
                     </h3>
                     <div className="space-y-2">
                       {solutionsList.map(sol => {
@@ -521,7 +523,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   {/* Budget / custom left field */}
                   {(() => {
                     const clf      = workspace?.cardLeftField;
-                    const label    = clf?.label    ?? 'תקציב שיווק';
+                    const label    = clf?.label    ?? t('leadModal.budgetFallback');
                     const prefix   = clf?.prefix   ?? '₪';
                     const quickOpts = clf?.quickOptions?.length
                       ? clf.quickOptions
@@ -574,7 +576,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
                   <div className="flex items-center justify-between mb-3">
                     <StatusBadge status={data.status} />
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">שינוי סטטוס</span>
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('common.status')}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5 justify-end">
                     {ALL_STATUSES.map(s => (
@@ -607,7 +609,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   }`}>
                     {data.waitingContent && <div className="w-2 h-2 bg-white rounded-full" />}
                   </div>
-                  <span className="text-xs font-semibold">ממתין לתוכן מהלקוח</span>
+                  <span className="text-xs font-semibold">{t('leadModal.waitingContent')}</span>
                 </div>
 
                 {/* Stats row */}
@@ -618,15 +620,15 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                         ? `${workspace?.cardLeftField?.prefix ?? '₪'}${(data.budget / 1000).toFixed(0)}K`
                         : '—'}
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">{workspace?.cardLeftField?.label ?? 'תקציב'}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{workspace?.cardLeftField?.label ?? t('leadModal.budgetShortFallback')}</div>
                   </div>
                   <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
                     <div className="text-xl font-bold text-white">{data.solutions.length}</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">שירותים</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{t('leadModal.solutions')}</div>
                   </div>
                   <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
                     <div className="text-xl font-bold text-white">{data.tasks.filter(t => !t.completed).length}</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">משימות פתוחות</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{t('deals.openTasks')}</div>
                   </div>
                 </div>
 
@@ -639,7 +641,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                       : 'bg-white hover:bg-neutral-100 text-black shadow-sm hover:shadow-md'
                   }`}
                 >
-                  {saved ? <><CheckCircle2 size={16} />נשמר!</> : <><Save size={16} />שמור שינויים</>}
+                  {saved ? <><CheckCircle2 size={16} />{t('common.saved') || t('leadModal.save')}</> : <><Save size={16} />{t('leadModal.save')}</>}
                 </button>
 
                 {/* Delete button */}
@@ -661,7 +663,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     }`}
                   >
                     <Trash2 size={14} />
-                    {deleteConfirm ? 'לחץ שוב לאישור מחיקה' : 'מחק ליד'}
+                    {deleteConfirm ? t('leadModal.confirmDelete') : t('leadModal.delete')}
                   </button>
                 )}
               </>
@@ -672,16 +674,16 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded-lg">
-                    {completedTasks}/{data.tasks.length} הושלמו
+                    {completedTasks}/{data.tasks.length} {t('leadModal.completed')}
                   </span>
-                  <h3 className="text-sm font-bold text-slate-200">משימות הליד</h3>
+                  <h3 className="text-sm font-bold text-slate-200">{t('leadModal.tasks')}</h3>
                 </div>
 
                 {/* Add task form */}
                 <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 space-y-3">
                   <input
                     type="text"
-                    placeholder="תיאור המשימה..."
+                    placeholder={t('leadModal.taskDesc') + '...'}
                     value={newTaskDesc}
                     onChange={e => setNewTaskDesc(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && addTask()}
@@ -696,7 +698,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                           newTaskPriority === opt.value ? opt.active : opt.idle
                         }`}
                       >
-                        {opt.label}
+                        {opt.label} {opt.value === 'high' ? t('tasks.high') : opt.value === 'low' ? t('tasks.low') : t('tasks.medium')}
                       </button>
                     ))}
                   </div>
@@ -706,7 +708,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                       disabled={!newTaskDesc.trim() || !newTaskDate}
                       className="flex items-center gap-1.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
                     >
-                      <Plus size={13} />הוסף
+                      <Plus size={13} />{t('leadModal.addTask')}
                     </button>
                     <input type="time" value={newTaskTime} onChange={e => setNewTaskTime(e.target.value)}
                       className="bg-slate-700/80 border border-slate-600/50 text-white px-2 py-2 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 w-24" />
@@ -719,7 +721,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 {data.tasks.length === 0 ? (
                   <div className="text-center text-slate-500 text-sm py-10 bg-slate-800/40 rounded-xl border border-slate-700/30">
                     <div className="text-3xl mb-2">📋</div>
-                    אין משימות — הוסף משימה למעלה
+                    {t('leadModal.noTasks')}
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -742,7 +744,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                                 task.priority === 'low'  ? 'bg-blue-900/60 text-blue-400' :
                                 'bg-amber-900/60 text-amber-400'
                               }`}>
-                                {task.priority === 'high' ? 'דחוף' : task.priority === 'low' ? 'נמוך' : 'בינוני'}
+                                {task.priority === 'high' ? t('tasks.high') : task.priority === 'low' ? t('tasks.low') : t('tasks.medium')}
                               </span>
                             )}
                             <span>{task.time}</span>
@@ -766,16 +768,16 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   <div className="flex gap-2">
                     <button onClick={addNote} disabled={!newNote.trim()}
                       className="bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors">
-                      הוסף
+                      {t('leadModal.addNote')}
                     </button>
                     <div className="flex-1 relative">
-                      <input type="text" placeholder="כתוב הערה..." value={newNote}
+                      <input type="text" placeholder={t('leadModal.notes') + '...'} value={newNote}
                         onChange={e => setNewNote(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && addNote()}
                         className="w-full bg-slate-700/80 border border-slate-600/50 text-white placeholder-slate-500 pr-3 pl-10 py-2.5 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                       <button
                         onClick={toggleNoteVoice}
-                        title={noteRecording ? 'עצור הקלטה' : 'הקלט הערה קולית'}
+                        title={noteRecording ? t('leadModal.stopRecording') : t('leadModal.startRecording')}
                         className={`absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all ${
                           noteRecording
                             ? 'bg-red-500 text-white animate-pulse'
@@ -789,14 +791,14 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   {noteRecording && (
                     <div className="mt-2 flex items-center gap-2 text-xs text-red-400">
                       <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                      מקליט... דבר עכשיו בעברית
+                      {t('ai.voiceRecording')}
                     </div>
                   )}
                 </div>
                 {data.notes.length === 0 ? (
                   <div className="text-center text-slate-500 text-sm py-10 bg-slate-800/40 rounded-xl border border-slate-700/30">
                     <div className="text-3xl mb-2">💬</div>
-                    אין הערות עדיין
+                    {t('leadModal.noNotes')}
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -830,20 +832,20 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
             {activeTab === 'activity' && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 justify-end">
-                  <span className="text-sm font-bold text-slate-200">היסטוריית פעילות</span>
+                  <span className="text-sm font-bold text-slate-200">{t('leadModal.tab.activity')}</span>
                   <Activity size={15} className="text-indigo-400" />
                 </div>
                 {data.notes.length === 0 && data.tasks.length === 0 ? (
                   <div className="text-center text-slate-500 text-sm py-10 bg-slate-800/40 rounded-xl border border-slate-700/30">
                     <div className="text-3xl mb-2">📊</div>
-                    אין פעילות עדיין
+                    {t('deals.noActivity')}
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {[
                       ...data.notes.map(n => ({ type: 'note', text: n.text, time: n.timestamp, author: n.author, completed: undefined })),
                       ...data.tasks.map(t => ({ type: 'task', text: t.description, time: `${t.date} ${t.time}`, author: 'Almog Avraham', completed: t.completed })),
-                      { type: 'update', text: `עדכון אחרון: ${data.lastUpdate}`, time: data.lastUpdate, author: 'מערכת', completed: undefined },
+                      { type: 'update', text: `${t('leadModal.lastUpdateActivity')}: ${data.lastUpdate}`, time: data.lastUpdate, author: t('leadModal.systemAuthor'), completed: undefined },
                     ]
                       .sort((a, b) => b.time.localeCompare(a.time))
                       .map((item, i) => (
@@ -879,7 +881,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
             </div>
             <div className="flex items-center gap-1.5 text-xs text-slate-500">
               <ChevronDown size={11} />
-              עודכן {data.lastUpdate}
+              {t('leadModal.lastUpdate')} {data.lastUpdate}
             </div>
           </div>
         </div>

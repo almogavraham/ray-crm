@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useLang } from '../contexts/LangContext';
 import {
   ArrowRight, CheckCircle2, Clock, DollarSign, Calendar,
   TrendingUp, Users, AlertTriangle, X, Plus, FileText,
@@ -97,9 +98,9 @@ function calcHealth(lead: Lead, proj: Project | undefined, fallbackContractEnd?:
 }
 
 function healthMeta(score: number) {
-  if (score >= 70) return { label: 'תקין',       bg: 'bg-emerald-500', ring: 'ring-emerald-200', text: 'text-emerald-700', lightBg: 'bg-emerald-50' };
-  if (score >= 40) return { label: 'דורש טיפול', bg: 'bg-amber-500',   ring: 'ring-amber-200',   text: 'text-amber-700',   lightBg: 'bg-amber-50'   };
-  return               { label: 'קריטי',        bg: 'bg-red-500',     ring: 'ring-red-200',     text: 'text-red-600',     lightBg: 'bg-red-50'     };
+  if (score >= 70) return { labelKey: 'deals.healthOk',       bg: 'bg-emerald-500', ring: 'ring-emerald-200', text: 'text-emerald-700', lightBg: 'bg-emerald-50' };
+  if (score >= 40) return { labelKey: 'deals.healthWarning',  bg: 'bg-amber-500',   ring: 'ring-amber-200',   text: 'text-amber-700',   lightBg: 'bg-amber-50'   };
+  return               { labelKey: 'deals.healthCritical',  bg: 'bg-red-500',     ring: 'ring-red-200',     text: 'text-red-600',     lightBg: 'bg-red-50'     };
 }
 
 const fmt    = (n: number) => `₪${n.toLocaleString('he-IL')}`;
@@ -136,6 +137,7 @@ interface WgInsight { title: string; idea: string; emoji: string; }
 function OverviewTab({ lead, project, onSave, currentUser }: {
   lead: Lead; project: Project; onSave: (p: Project) => void; currentUser: string;
 }) {
+  const { t } = useLang();
   const [editingContract, setEditingContract] = useState(false);
   const [form, setForm] = useState(project);
   const [newLog, setNewLog] = useState('');
@@ -248,22 +250,22 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
       <div className={`${hm.lightBg} rounded-2xl p-5 ring-1 ${hm.ring}`}>
         <div className="flex items-center justify-between mb-3">
           <span className={`text-2xl font-black ${hm.text}`}>{score}%</span>
-          <div className="text-right"><p className="font-bold text-slate-800">ציון בריאות</p><p className={`text-sm font-semibold ${hm.text}`}>{hm.label}</p></div>
+          <div className="text-right"><p className="font-bold text-slate-800">{t('deals.healthScore')}</p><p className={`text-sm font-semibold ${hm.text}`}>{t(hm.labelKey)}</p></div>
         </div>
         <div className="h-2 bg-white/60 rounded-full"><div className={`h-2 rounded-full ${hm.bg} transition-all duration-700`} style={{ width: `${score}%` }} /></div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          {overdueT.length > 0 && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">⚠ {overdueT.length} משימות באיחור</span>}
-          {project.contractEnd && daysTo(project.contractEnd) <= 30 && daysTo(project.contractEnd) >= 0 && <span className="bg-amber-100 text-amber-700 font-semibold px-2 py-1 rounded-lg">📅 חידוש בעוד {daysTo(project.contractEnd)} ימים</span>}
-          {(project.payments ?? []).some(p => p.status === 'overdue') && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">💳 תשלום באיחור</span>}
+          {overdueT.length > 0 && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">⚠ {overdueT.length} {t('deals.overdueTasksCount')}</span>}
+          {project.contractEnd && daysTo(project.contractEnd) <= 30 && daysTo(project.contractEnd) >= 0 && <span className="bg-amber-100 text-amber-700 font-semibold px-2 py-1 rounded-lg">📅 {t('deals.renewalInDays').replace('{n}', String(daysTo(project.contractEnd)))}</span>}
+          {(project.payments ?? []).some(p => p.status === 'overdue') && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">💳 {t('deals.paymentOverdue')}</span>}
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: 'הכנסה כוללת', value: fmtK(totalPaid), icon: <DollarSign size={15} className="text-emerald-600" />, bg: 'bg-emerald-50' },
-          { label: 'משימות פתוחות', value: lead.tasks.filter(t => !t.completed).length, icon: <Clock size={15} className="text-blue-600" />, bg: 'bg-blue-50' },
-          { label: 'פתרונות', value: `${(project.solutions ?? []).filter(s => s.status === 'approved').length}/${(project.solutions ?? []).length}`, icon: <Package size={15} className="text-violet-600" />, bg: 'bg-violet-50' },
+          { label: t('deals.totalRevenue'), value: fmtK(totalPaid), icon: <DollarSign size={15} className="text-emerald-600" />, bg: 'bg-emerald-50' },
+          { label: t('deals.openTasksLabel'), value: lead.tasks.filter(task => !task.completed).length, icon: <Clock size={15} className="text-blue-600" />, bg: 'bg-blue-50' },
+          { label: t('deals.solutions'), value: `${(project.solutions ?? []).filter(s => s.status === 'approved').length}/${(project.solutions ?? []).length}`, icon: <Package size={15} className="text-violet-600" />, bg: 'bg-violet-50' },
         ].map(s => (
           <div key={s.label} className="bg-white border border-slate-200 rounded-xl p-3 text-center shadow-sm">
             <div className={`w-8 h-8 ${s.bg} rounded-xl flex items-center justify-center mx-auto mb-1.5`}>{s.icon}</div>
@@ -275,11 +277,11 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
 
       {/* Monthly goals */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-        <h3 className="font-bold text-slate-800 mb-4 text-right flex items-center justify-end gap-2"><Target size={15} className="text-indigo-500" /> יעדי {fmtMonth(cm)}</h3>
+        <h3 className="font-bold text-slate-800 mb-4 text-right flex items-center justify-end gap-2"><Target size={15} className="text-indigo-500" /> {t('deals.monthlyGoals')} {fmtMonth(cm)}</h3>
         <div className="space-y-4">
           {[
-            { key: 'leadsTarget' as keyof ClientGoal, label: 'לידים', actual: cmLeads, target: goal?.leadsTarget ?? 0, color: 'bg-indigo-500' },
-            { key: 'spendBudget' as keyof ClientGoal, label: 'תקציב מדיה (₪)', actual: cmSpend, target: goal?.spendBudget ?? 0, color: 'bg-amber-500', isCurrency: true },
+            { key: 'leadsTarget' as keyof ClientGoal, label: t('deals.leadsLabel'), actual: cmLeads, target: goal?.leadsTarget ?? 0, color: 'bg-indigo-500' },
+            { key: 'spendBudget' as keyof ClientGoal, label: t('deals.mediaBudget'), actual: cmSpend, target: goal?.spendBudget ?? 0, color: 'bg-amber-500', isCurrency: true },
           ].map(g => {
             const pct = g.target > 0 ? Math.min((g.actual / g.target) * 100, 100) : 0;
             return (
@@ -309,38 +311,38 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <button onClick={() => editingContract ? saveContract() : setEditingContract(true)} className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors ${editingContract ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-            {editingContract ? <><Check size={12} /> שמור</> : <><Edit2 size={12} /> ערוך</>}
+            {editingContract ? <><Check size={12} /> {t('common.save')}</> : <><Edit2 size={12} /> {t('common.edit')}</>}
           </button>
-          <h3 className="font-bold text-slate-800">פרטי חוזה</h3>
+          <h3 className="font-bold text-slate-800">{t('deals.contractDetails')}</h3>
         </div>
         {editingContract ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-xs text-slate-500 mb-1 block">תחילת חוזה</label><input type="date" value={form.contractStart || ''} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-              <div><label className="text-xs text-slate-500 mb-1 block">סיום חוזה</label><input type="date" value={form.contractEnd || ''} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+              <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.contractStart')}</label><input type="date" value={form.contractStart || ''} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+              <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.contractEnd')}</label><input type="date" value={form.contractEnd || ''} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             </div>
-            <div><label className="text-xs text-slate-500 mb-1 block">ריטיינר חודשי (₪)</label><input type="number" min={0} value={form.monthlyRetainer || ''} onChange={e => setForm(p => ({ ...p, monthlyRetainer: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">הצעד הבא</label><input type="text" value={form.nextStep || ''} onChange={e => setForm(p => ({ ...p, nextStep: e.target.value }))} placeholder="מה הצעד הבא?" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">הזדמנות אפסל</label><textarea value={form.upsellNote || ''} onChange={e => setForm(p => ({ ...p, upsellNote: e.target.value }))} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-2 block">שביעות רצון</label>
+            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.monthlyRetainer')}</label><input type="number" min={0} value={form.monthlyRetainer || ''} onChange={e => setForm(p => ({ ...p, monthlyRetainer: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.nextStep')}</label><input type="text" value={form.nextStep || ''} onChange={e => setForm(p => ({ ...p, nextStep: e.target.value }))} placeholder={t('deals.nextStepPlaceholder')} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.upsell')}</label><textarea value={form.upsellNote || ''} onChange={e => setForm(p => ({ ...p, upsellNote: e.target.value }))} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+            <div><label className="text-xs text-slate-500 mb-2 block">{t('deals.satisfaction')}</label>
               <div className="flex gap-1 justify-end">{[1,2,3,4,5].map(n => <button key={n} onClick={() => setForm(p => ({ ...p, satisfactionScore: n }))} className={`text-xl transition-all ${(form.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</button>)}</div>
             </div>
           </div>
         ) : (
           <div className="space-y-2 text-sm text-right">
             {[
-              { label: 'תחילת חוזה', value: project.contractStart ? fmtD(project.contractStart) : '—' },
-              { label: 'סיום חוזה', value: project.contractEnd ? `${fmtD(project.contractEnd)} (${daysTo(project.contractEnd)} ימים)` : '—' },
-              { label: 'ריטיינר', value: project.monthlyRetainer ? fmt(project.monthlyRetainer) : '—' },
+              { label: t('deals.contractStart'), value: project.contractStart ? fmtD(project.contractStart) : '—' },
+              { label: t('deals.contractEnd'), value: project.contractEnd ? `${fmtD(project.contractEnd)} (${daysTo(project.contractEnd)} ${t('overview.days')})` : '—' },
+              { label: t('deals.retainerLabel'), value: project.monthlyRetainer ? fmt(project.monthlyRetainer) : '—' },
             ].map(r => (
               <div key={r.label} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
                 <span className="text-slate-700 font-medium">{r.value}</span>
                 <span className="text-slate-400 text-xs">{r.label}</span>
               </div>
             ))}
-            {project.nextStep && <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-indigo-600 mb-1">→ הצעד הבא</p><p className="text-sm text-indigo-800">{project.nextStep}</p></div>}
-            {project.upsellNote && <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-violet-600 mb-1">🚀 אפסל</p><p className="text-sm text-violet-800">{project.upsellNote}</p></div>}
-            {(project.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(project.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</span>)}</div><span className="text-xs text-slate-400">שביעות רצון</span></div>}
+            {project.nextStep && <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-indigo-600 mb-1">→ {t('deals.nextStep')}</p><p className="text-sm text-indigo-800">{project.nextStep}</p></div>}
+            {project.upsellNote && <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-violet-600 mb-1">🚀 {t('deals.upsell')}</p><p className="text-sm text-violet-800">{project.upsellNote}</p></div>}
+            {(project.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(project.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</span>)}</div><span className="text-xs text-slate-400">{t('deals.satisfaction')}</span></div>}
           </div>
         )}
       </div>
@@ -348,17 +350,17 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
       {/* Quick Links */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
-          <button onClick={() => setAddingLink(true)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors"><Plus size={12} /> הוסף</button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Link2 size={14} className="text-slate-400" /> קישורים מהירים</h3>
+          <button onClick={() => setAddingLink(true)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors"><Plus size={12} /> {t('common.add')}</button>
+          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Link2 size={14} className="text-slate-400" /> {t('deals.quickLinks')}</h3>
         </div>
         {addingLink && (
           <div className="bg-slate-50 rounded-xl p-3 mb-3 space-y-2">
             <input value={linkForm.title} onChange={e => setLinkForm(p => ({ ...p, title: e.target.value }))} placeholder="כותרת (Google Drive, Notion...)" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
             <input value={linkForm.url} onChange={e => setLinkForm(p => ({ ...p, url: e.target.value }))} placeholder="https://..." className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-left" dir="ltr" />
-            <div className="flex gap-2 justify-end"><button onClick={() => setAddingLink(false)} className="text-xs text-slate-500 px-3 py-1.5 rounded-lg hover:bg-slate-200">ביטול</button><button onClick={addLink} className="text-xs font-bold text-white bg-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-500">הוסף</button></div>
+            <div className="flex gap-2 justify-end"><button onClick={() => setAddingLink(false)} className="text-xs text-slate-500 px-3 py-1.5 rounded-lg hover:bg-slate-200">{t('common.cancel')}</button><button onClick={addLink} className="text-xs font-bold text-white bg-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-500">{t('common.add')}</button></div>
           </div>
         )}
-        {(project.links ?? []).length === 0 && !addingLink && <p className="text-center text-slate-300 text-sm py-4">הוסף קישורים ל-Drive, Notion, Docs...</p>}
+        {(project.links ?? []).length === 0 && !addingLink && <p className="text-center text-slate-300 text-sm py-4">{t('deals.addLinksHint')}</p>}
         <div className="space-y-2">
           {(project.links ?? []).map(link => (
             <div key={link.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5 group">
@@ -380,16 +382,16 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
             className="flex items-center gap-1.5 text-xs font-bold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
           >
             {eqLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full" /> : <Brain size={12} />}
-            ניתוח EQ
+            {t('deals.eqAnalysis')}
           </button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2">לוג פעילות</h3>
+          <h3 className="font-bold text-slate-800 flex items-center gap-2">{t('deals.activityLog')}</h3>
         </div>
 
         {/* EQ Result */}
         {eqOpen && (
           <div className={`mb-4 rounded-xl border p-3.5 ${eqResult?.sentiment === 'positive' ? 'bg-emerald-50 border-emerald-200' : eqResult?.sentiment === 'at-risk' ? 'bg-red-50 border-red-200' : eqResult?.sentiment === 'negative' ? 'bg-orange-50 border-orange-200' : 'bg-amber-50 border-amber-200'}`}>
             {eqLoading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-500"><span className="animate-spin w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full inline-block" /> מנתח רגשות...</div>
+              <div className="flex items-center gap-2 text-sm text-slate-500"><span className="animate-spin w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full inline-block" /> {t('deals.analyzingSentiment')}</div>
             ) : eqResult ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -397,7 +399,7 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
                   <div className="flex items-center gap-2 text-right"><span className="text-xl">{eqResult.emoji}</span><span className="font-bold text-slate-800 text-sm">{eqResult.summary}</span></div>
                 </div>
                 <div className="bg-white/70 rounded-lg p-2.5 text-right">
-                  <p className="text-xs font-bold text-violet-700 mb-1">→ המלצה</p>
+                  <p className="text-xs font-bold text-violet-700 mb-1">→ {t('deals.recommendation')}</p>
                   <p className="text-sm text-slate-700">{eqResult.action}</p>
                 </div>
               </div>
@@ -406,14 +408,14 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
         )}
 
         <div className="flex gap-2 mb-4">
-          <button onClick={addLog} disabled={!newLog.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">הוסף</button>
-          <input value={newLog} onChange={e => setNewLog(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLog()} placeholder="מה קרה עם הלקוח?" className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
+          <button onClick={addLog} disabled={!newLog.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">{t('common.add')}</button>
+          <input value={newLog} onChange={e => setNewLog(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLog()} placeholder={t('deals.activityPlaceholder')} className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
           <select value={logType} onChange={e => setLogType(e.target.value as ActivityType)} className="border border-slate-200 rounded-xl px-2 py-2 text-xs text-slate-600 bg-white focus:outline-none">
-            {(Object.keys(ACT_TYPE) as ActivityType[]).map(t => <option key={t} value={t}>{ACT_TYPE[t].label}</option>)}
+            {(Object.keys(ACT_TYPE) as ActivityType[]).map(actKey => <option key={actKey} value={actKey}>{ACT_TYPE[actKey].label}</option>)}
           </select>
         </div>
         <div className="space-y-2">
-          {recentLog.length === 0 && <p className="text-center text-slate-300 py-4 text-sm">אין פעילות עדיין</p>}
+          {recentLog.length === 0 && <p className="text-center text-slate-300 py-4 text-sm">{t('deals.noActivity')}</p>}
           {recentLog.map(e => { const at = ACT_TYPE[e.type]; const Icon = at.icon; return (
             <div key={e.id} className="flex gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition-colors">
               <div className="text-right flex-1 min-w-0"><p className="text-sm text-slate-700 leading-snug">{e.text}</p><div className="flex items-center justify-end gap-2 mt-1"><span className="text-xs text-slate-300">{ago(e.timestamp)}</span><span className="text-xs text-slate-400">{e.author}</span></div></div>
@@ -434,12 +436,12 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
             {wgLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full" /> : <Heart size={12} />}
             White Glove
           </button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Sparkles size={14} className="text-rose-400" /> מגע אישי</h3>
+          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Sparkles size={14} className="text-rose-400" /> {t('deals.personalTouch')}</h3>
         </div>
-        <p className="text-xs text-slate-400 text-right mb-3">AI מזהה הזדמנויות לחיזוק הקשר האישי עם הלקוח</p>
+        <p className="text-xs text-slate-400 text-right mb-3">{t('deals.personalTouchDesc')}</p>
         {wgOpen && (
           wgLoading ? (
-            <div className="flex items-center gap-2 text-sm text-slate-500 justify-end py-3"><span className="animate-spin w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full inline-block" /> מחפש הזדמנויות...</div>
+            <div className="flex items-center gap-2 text-sm text-slate-500 justify-end py-3"><span className="animate-spin w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full inline-block" /> {t('deals.searchingOpportunities')}</div>
           ) : wgInsights && wgInsights.length > 0 ? (
             <div className="space-y-2">
               {wgInsights.map((ins, i) => (
@@ -451,11 +453,11 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
                   <p className="text-sm text-slate-700 leading-relaxed">{ins.idea}</p>
                 </div>
               ))}
-              <button onClick={() => setWgOpen(false)} className="text-xs text-slate-400 hover:text-slate-600 w-full text-center pt-1">סגור</button>
+              <button onClick={() => setWgOpen(false)} className="text-xs text-slate-400 hover:text-slate-600 w-full text-center pt-1">{t('common.close')}</button>
             </div>
           ) : null
         )}
-        {!wgOpen && <div className="text-center py-2 text-slate-300 text-xs">לחץ "White Glove" לקבלת רעיונות לחיזוק הקשר</div>}
+        {!wgOpen && <div className="text-center py-2 text-slate-300 text-xs">{t('deals.whiteGloveHint')}</div>}
       </div>
     </div>
   );

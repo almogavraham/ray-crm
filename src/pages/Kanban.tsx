@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useLang } from '../contexts/LangContext';
 import {
   Search, Phone, Mail, Star, AlertCircle, CheckSquare,
   Calendar, Zap, Share2, Megaphone, Globe, Users,
@@ -59,6 +60,7 @@ interface KanbanProps {
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }: KanbanProps) {
+  const { t, dir } = useLang();
   const [search,     setSearch]     = useState('');
   const [sortKey,    setSortKey]    = useState<SortKey>('aiScore');
   const [filterSrc,  setFilterSrc]  = useState('');
@@ -117,14 +119,14 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
 
   /* ── render ────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex flex-col h-[calc(100vh-128px)] md:h-[calc(100vh-60px)] -mx-4 md:-mx-6 -mb-4 md:-mb-6 px-0" dir="rtl">
+    <div className="flex flex-col h-[calc(100vh-128px)] md:h-[calc(100vh-60px)] -mx-4 md:-mx-6 -mb-4 md:-mb-6 px-0" dir={dir}>
 
       {/* ── Toolbar ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 sm:px-6 py-3 bg-white border-b border-slate-200 flex-wrap">
 
         {/* Title + stats */}
         <div className="flex items-center gap-3">
-          <h1 className="text-base font-black text-slate-900">פייפליין מכירות</h1>
+          <h1 className="text-base font-black text-slate-900">{t('kanban.salesPipeline')}</h1>
           <div className="hidden sm:flex items-center gap-2">
             <span className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-1 rounded-full font-semibold">
               {leads.length} לידים
@@ -150,7 +152,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           <Search size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
           <input
             value={search} onChange={e=>setSearch(e.target.value)}
-            placeholder="חיפוש לידים..."
+            placeholder={t('kanban.searchLeads')}
             className="bg-slate-50 border border-slate-200 rounded-xl pr-8 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 w-28 sm:w-44 transition-all"
           />
           {search && (
@@ -165,10 +167,10 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           <ChevronDown size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
           <select value={sortKey} onChange={e=>setSortKey(e.target.value as SortKey)}
             className="bg-slate-50 border border-slate-200 rounded-xl pr-3 pl-7 py-2 text-xs font-semibold text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-300 appearance-none cursor-pointer">
-            <option value="aiScore">מיון: ציון AI</option>
-            <option value="budget">מיון: תקציב</option>
-            <option value="company">מיון: שם</option>
-            <option value="lastUpdate">מיון: עדכון</option>
+            <option value="aiScore">{t('kanban.sortAiScore')}</option>
+            <option value="budget">{t('kanban.sortBudget')}</option>
+            <option value="company">{t('kanban.sortName')}</option>
+            <option value="lastUpdate">{t('kanban.sortUpdate')}</option>
           </select>
         </div>
 
@@ -177,14 +179,14 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
             hasFilter||showFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
           }`}>
-          <Filter size={12}/> סינון {hasFilter && `(${[search?1:0,filterSrc?1:0].reduce((a,b)=>a+b,0)})`}
+          <Filter size={12}/> {t('kanban.filter')} {hasFilter && `(${[search?1:0,filterSrc?1:0].reduce((a,b)=>a+b,0)})`}
         </button>
 
         {/* Agents shortcut */}
         {onPageChange && (
           <button onClick={()=>onPageChange('agents')}
             className="hidden sm:flex items-center gap-1.5 bg-gradient-to-l from-indigo-600 to-violet-600 hover:opacity-90 text-white px-3 py-2 rounded-xl text-xs font-bold transition-all shadow-sm">
-            <Sparkles size={12}/> Workflow AI
+            <Sparkles size={12}/> {t('kanban.workflowAI')}
           </button>
         )}
       </div>
@@ -192,10 +194,10 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
       {/* Filter panel */}
       {showFilter && (
         <div className="px-4 sm:px-6 py-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center gap-3 flex-wrap">
-          <span className="text-xs font-bold text-slate-500">מקור:</span>
+          <span className="text-xs font-bold text-slate-500">{t('kanban.filterSource')}</span>
           <button onClick={()=>setFilterSrc('')}
             className={`text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors ${!filterSrc?'bg-indigo-600 text-white':'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}`}>
-            הכל
+            {t('common.all')}
           </button>
           {allSources.map(s=>(
             <button key={s} onClick={()=>setFilterSrc(filterSrc===s?'':s)}
@@ -206,7 +208,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           {hasFilter && (
             <button onClick={()=>{setSearch('');setFilterSrc('');}}
               className="mr-auto text-xs text-red-500 hover:text-red-700 font-semibold flex items-center gap-1">
-              <X size={11}/> נקה סינון
+              <X size={11}/> {t('kanban.clearFilter')}
             </button>
           )}
         </div>
@@ -236,7 +238,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
       <div className="md:hidden flex-1 overflow-y-auto p-3 space-y-2">
         {getCol(mobileCol).length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border-2 border-dashed border-slate-200">
-            <p className="text-sm text-slate-400">אין לידים בשלב זה</p>
+            <p className="text-sm text-slate-400">{t('kanban.noLeadsStage')}</p>
           </div>
         ) : getCol(mobileCol).map(lead => (
           <KanbanCard key={lead.id} lead={lead} theme={COL_THEME[mobileCol]}
@@ -284,7 +286,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
                     {col.filter(l=>l.tasks.some(t=>!t.completed && new Date(t.date+'T00:00:00')<new Date())).length > 0 && (
                       <span className="text-[10px] text-red-500 font-bold flex items-center gap-0.5">
                         <AlertCircle size={9}/>
-                        {col.filter(l=>l.tasks.some(t=>!t.completed && new Date(t.date+'T00:00:00')<new Date())).length} איחור
+                        {col.filter(l=>l.tasks.some(t=>!t.completed && new Date(t.date+'T00:00:00')<new Date())).length} {t('kanban.overdue')}
                       </span>
                     )}
                   </div>
@@ -306,7 +308,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
                       isDrop ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-transparent'
                     }`}>
                       <ArrowUpRight size={20} className={isDrop?'text-indigo-400':'text-slate-300'}/>
-                      <p className="text-xs text-slate-400 mt-2">{isDrop?'שחרר כאן':'אין לידים'}</p>
+                      <p className="text-xs text-slate-400 mt-2">{isDrop ? t('kanban.dropHere') : t('kanban.noLeads')}</p>
                     </div>
                   ) : (
                     col.map(lead => (
@@ -322,7 +324,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
                   {/* Bottom drop zone when column has cards */}
                   {isDrop && col.length>0 && (
                     <div className="h-16 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 flex items-center justify-center">
-                      <p className="text-xs text-indigo-400 font-semibold">שחרר כאן</p>
+                      <p className="text-xs text-indigo-400 font-semibold">{t('kanban.dropHere')}</p>
                     </div>
                   )}
                 </div>

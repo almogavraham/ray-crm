@@ -6,6 +6,7 @@ import {
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { WorkspaceProfile, WorkspacePlan } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 interface BillingPageProps {
   workspace: WorkspaceProfile;
@@ -46,40 +47,43 @@ const VAT_RATE = 0.17;
 const PLANS = [
   {
     key: 'trial' as WorkspacePlan,
-    name: 'ניסיון חינם',
+    nameKey: 'billing.plan.trial.name',
     price: 0,
-    period: '14 יום',
-    desc: 'כל התכונות, ללא הגבלה',
+    periodKey: 'billing.trialLeft',
+    descKey: 'billing.plan.trial.desc',
     highlight: false,
     icon: Zap,
-    features: ['כל התכונות', 'עד 3 משתמשים', 'תמיכה בסיסית', 'אחסון 1GB'],
-    cta: 'תוכנית נוכחית',
+    featureKeys: ['billing.feat.allFeatures', 'billing.feat.users3', 'billing.feat.basicSupport', 'billing.feat.storage1'],
+    ctaKey: 'billing.plan.trial.cta',
   },
   {
     key: 'pro' as WorkspacePlan,
+    nameKey: null,
     name: 'Pro',
     price: 89,
-    period: 'חודש',
-    desc: 'לעסקים שרוצים לצמוח',
+    periodKey: 'billing.perMonth',
+    descKey: 'billing.plan.pro.desc',
     highlight: true,
     icon: Star,
-    features: ['כל התכונות', 'עד 10 משתמשים', 'תמיכה מועדפת', 'אחסון 10GB', 'דוחות מתקדמים', 'אינטגרציות API'],
-    cta: 'שדרג ל-Pro',
+    featureKeys: ['billing.feat.allFeatures', 'billing.feat.users10', 'billing.feat.prioritySupport', 'billing.feat.storage10', 'billing.feat.advancedReports', 'billing.feat.apiIntegrations'],
+    ctaKey: 'billing.plan.pro.cta',
   },
   {
     key: 'enterprise' as WorkspacePlan,
+    nameKey: null,
     name: 'Enterprise',
     price: 199,
-    period: 'חודש',
-    desc: 'לחברות וצוותים גדולים',
+    periodKey: 'billing.perMonth',
+    descKey: 'billing.plan.enterprise.desc',
     highlight: false,
     icon: Building2,
-    features: ['כל התכונות', 'משתמשים ללא הגבלה', 'SLA מובטח', 'אחסון 100GB', 'מנהל חשבון ייעודי', 'התאמה מלאה'],
-    cta: 'שדרג ל-Enterprise',
+    featureKeys: ['billing.feat.allFeatures', 'billing.feat.usersUnlimited', 'billing.feat.sla', 'billing.feat.storage100', 'billing.feat.accountManager', 'billing.feat.customization'],
+    ctaKey: 'billing.plan.enterprise.cta',
   },
 ];
 
 export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProps) {
+  const { t, dir } = useLang();
   const [selectedPlan, setSelectedPlan] = useState<'pro' | 'enterprise' | null>(null);
   const [paymentStep, setPaymentStep] = useState<'form' | 'processing' | 'success'>('form');
 
@@ -113,14 +117,14 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const handlePay = async () => {
     setFormError('');
 
-    if (!cardName.trim()) { setFormError('נא להזין שם בעל הכרטיס'); return; }
-    if (!email.trim()) { setFormError('נא להזין כתובת אימייל'); return; }
+    if (!cardName.trim()) { setFormError(t('billing.err.cardName')); return; }
+    if (!email.trim()) { setFormError(t('billing.err.email')); return; }
     const rawDigits = cardNumber.replace(/\D/g, '');
-    if (rawDigits.length < 13) { setFormError('מספר כרטיס אינו תקין'); return; }
-    if (!luhn(rawDigits)) { setFormError('מספר כרטיס אינו תקין (Luhn)'); return; }
+    if (rawDigits.length < 13) { setFormError(t('billing.err.cardInvalid')); return; }
+    if (!luhn(rawDigits)) { setFormError(t('billing.err.cardLuhn')); return; }
     const [mm, yy] = expiry.split('/');
-    if (!mm || !yy || mm.length !== 2 || yy.length !== 2) { setFormError('תאריך תפוגה אינו תקין'); return; }
-    if (cvv.length < 3) { setFormError('CVV אינו תקין'); return; }
+    if (!mm || !yy || mm.length !== 2 || yy.length !== 2) { setFormError(t('billing.err.expiry')); return; }
+    if (cvv.length < 3) { setFormError(t('billing.err.cvv')); return; }
 
     setPaymentStep('processing');
 
@@ -153,13 +157,13 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const brand = detectBrand(cardNumber);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white" dir="rtl">
+    <div className="min-h-screen bg-slate-900 text-white" dir={dir}>
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
 
         {/* ── Page header ──────────────────────────────────────────────────── */}
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-white mb-1">מנוי ותשלום</h1>
-          <p className="text-slate-400 text-sm">נהל את התוכנית ואמצעי התשלום שלך</p>
+          <h1 className="text-xl md:text-2xl font-bold text-white mb-1">{t('billing.title')}</h1>
+          <p className="text-slate-400 text-sm">{t('billing.subtitle')}</p>
         </div>
 
         {/* ── Current plan banner ───────────────────────────────────────────── */}
@@ -181,30 +185,36 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               {(workspace.plan === 'basic') && <Zap size={20} className="text-slate-400" />}
             </div>
             <div>
-              <p className="font-semibold text-white">{currentPlanObj.name}</p>
+              <p className="font-semibold text-white">
+                {currentPlanObj.nameKey ? t(currentPlanObj.nameKey) : currentPlanObj.name}
+              </p>
               {workspace.plan === 'trial' ? (
                 <p className="text-sm text-amber-400">
-                  {trialDays > 0 ? `נותרו ${trialDays} ימי ניסיון` : 'תקופת הניסיון הסתיימה'}
+                  {trialDays > 0 ? `${trialDays} ${t('billing.trialLeft')}` : t('billing.trialEnded')}
                 </p>
               ) : (
-                <p className="text-sm text-slate-400">תוכנית פעילה</p>
+                <p className="text-sm text-slate-400">{t('billing.activePlan')}</p>
               )}
             </div>
           </div>
           {workspace.plan === 'trial' && (
             <div className="text-amber-400 text-sm font-medium">
-              שדרג כדי לשמר את הנתונים שלך
+              {t('billing.upgradeData')}
             </div>
           )}
         </div>
 
         {/* ── Plan cards ───────────────────────────────────────────────────── */}
         <div>
-          <h2 className="text-lg font-semibold text-white mb-4">בחר תוכנית</h2>
+          <h2 className="text-lg font-semibold text-white mb-4">{t('billing.choosePlan')}</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {PLANS.map(plan => {
               const Icon = plan.icon;
               const isCurrent = workspace.plan === plan.key;
+              const planName = plan.nameKey ? t(plan.nameKey) : plan.name ?? '';
+              const planDesc = t(plan.descKey);
+              const planCta = t(plan.ctaKey);
+              const planPeriod = t(plan.periodKey);
               return (
                 <div
                   key={plan.key}
@@ -223,7 +233,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                   {plan.highlight && (
                     <div className="absolute -top-3 right-1/2 translate-x-1/2">
                       <span className="bg-indigo-600 text-white text-[11px] font-bold px-3 py-1 rounded-full">
-                        הכי פופולרי
+                        {t('billing.mostPopular')}
                       </span>
                     </div>
                   )}
@@ -234,33 +244,33 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     }`}>
                       <Icon size={16} className={plan.highlight ? 'text-indigo-400' : 'text-slate-400'} />
                     </div>
-                    <span className="font-bold text-white">{plan.name}</span>
+                    <span className="font-bold text-white">{planName}</span>
                     {isCurrent && (
                       <span className="mr-auto text-[11px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
-                        פעיל
+                        {t('billing.current')}
                       </span>
                     )}
                   </div>
 
-                  <p className="text-slate-400 text-xs mb-4">{plan.desc}</p>
+                  <p className="text-slate-400 text-xs mb-4">{planDesc}</p>
 
                   <div className="flex items-baseline gap-1 mb-5">
                     {plan.price === 0 ? (
-                      <span className="text-3xl font-black text-white">חינם</span>
+                      <span className="text-3xl font-black text-white">{t('billing.free')}</span>
                     ) : (
                       <>
                         <span className="text-slate-400 text-sm">₪</span>
                         <span className="text-3xl font-black text-white">{plan.price}</span>
-                        <span className="text-slate-400 text-sm">/{plan.period}</span>
+                        <span className="text-slate-400 text-sm">/{planPeriod}</span>
                       </>
                     )}
                   </div>
 
                   <ul className="space-y-2 flex-1 mb-5">
-                    {plan.features.map(f => (
-                      <li key={f} className="flex items-center gap-2 text-sm text-slate-300">
+                    {plan.featureKeys.map(fk => (
+                      <li key={fk} className="flex items-center gap-2 text-sm text-slate-300">
                         <Check size={13} className={plan.highlight ? 'text-indigo-400' : 'text-green-400'} />
-                        {f}
+                        {t(fk)}
                       </li>
                     ))}
                   </ul>
@@ -282,7 +292,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                           : 'bg-slate-700 hover:bg-slate-600 text-white'
                     }`}
                   >
-                    {isCurrent ? 'תוכנית נוכחית' : plan.cta}
+                    {isCurrent ? t('billing.currentPlanLabel') : planCta}
                   </button>
                 </div>
               );
@@ -294,21 +304,21 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
         <div className="rounded-2xl border border-slate-700 bg-slate-800 p-6">
           <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
             <CreditCard size={18} className="text-slate-400" />
-            היסטוריית חיובים
+            {t('billing.history')}
           </h2>
           <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
             <div className="w-12 h-12 rounded-2xl bg-slate-700 flex items-center justify-center">
               <CreditCard size={22} className="text-slate-500" />
             </div>
-            <p className="text-slate-400 text-sm">אין חיובים להצגה</p>
-            <p className="text-slate-600 text-xs">החיובים שלך יופיעו כאן לאחר הרכישה הראשונה</p>
+            <p className="text-slate-400 text-sm">{t('billing.noHistory')}</p>
+            <p className="text-slate-600 text-xs">{t('billing.noHistoryDesc')}</p>
           </div>
         </div>
       </div>
 
       {/* ── Payment modal ─────────────────────────────────────────────────── */}
       {selectedPlan && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm" dir="rtl">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm" dir={dir}>
           <div className="bg-slate-800 rounded-t-2xl sm:rounded-2xl border border-slate-700 w-full sm:max-w-md shadow-2xl overflow-hidden max-h-[95vh] overflow-y-auto">
 
             {/* Modal header */}
@@ -318,7 +328,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               </button>
               <div className="flex items-center gap-2">
                 <Lock size={14} className="text-green-400" />
-                <span className="font-semibold text-white">תשלום מאובטח</span>
+                <span className="font-semibold text-white">{t('billing.payment.title')}</span>
               </div>
             </div>
 
@@ -328,15 +338,15 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
                   <CheckCircle2 size={36} className="text-green-400" />
                 </div>
-                <h3 className="text-xl font-bold text-white">התשלום התקבל!</h3>
+                <h3 className="text-xl font-bold text-white">{t('billing.payment.success')}</h3>
                 <p className="text-slate-400 text-sm">
-                  הצטרפת בהצלחה לתוכנית {chosenPlanObj?.name}. תהנה מכל התכונות!
+                  {t('billing.payment.successDesc')} {chosenPlanObj?.nameKey ? t(chosenPlanObj.nameKey) : chosenPlanObj?.name}
                 </p>
                 <button
                   onClick={closeModal}
                   className="mt-2 bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 px-8 rounded-xl transition-all"
                 >
-                  סגור
+                  {t('billing.payment.close')}
                 </button>
               </div>
             )}
@@ -347,8 +357,8 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center">
                   <RefreshCw size={30} className="text-indigo-400 animate-spin" />
                 </div>
-                <h3 className="text-lg font-bold text-white">מעבד תשלום...</h3>
-                <p className="text-slate-400 text-sm">אנא המתן, מאמת את פרטי הכרטיס</p>
+                <h3 className="text-lg font-bold text-white">{t('billing.payment.processing')}</h3>
+                <p className="text-slate-400 text-sm">{t('billing.payment.processingDesc')}</p>
               </div>
             )}
 
@@ -358,19 +368,21 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 {/* Plan summary */}
                 <div className="bg-slate-700/50 rounded-xl p-4 flex items-center justify-between">
                   <div>
-                    <p className="font-semibold text-white">{chosenPlanObj.name}</p>
-                    <p className="text-slate-400 text-xs">{chosenPlanObj.desc}</p>
+                    <p className="font-semibold text-white">
+                      {chosenPlanObj.nameKey ? t(chosenPlanObj.nameKey) : chosenPlanObj.name}
+                    </p>
+                    <p className="text-slate-400 text-xs">{t(chosenPlanObj.descKey)}</p>
                   </div>
                   <div className="text-left">
                     <span className="text-xl font-black text-white">₪{chosenPlanObj.price}</span>
-                    <span className="text-slate-400 text-xs">/{chosenPlanObj.period}</span>
+                    <span className="text-slate-400 text-xs">/{t(chosenPlanObj.periodKey)}</span>
                   </div>
                 </div>
 
                 {/* Card number */}
                 <div>
                   <label className="block text-sm text-slate-300 mb-1.5 font-medium">
-                    מספר כרטיס
+                    {t('billing.payment.cardNumber')}
                     {brand && <span className="mr-2 text-xs text-indigo-400 font-normal">{brand}</span>}
                   </label>
                   <div className="relative">
@@ -391,7 +403,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 {/* Expiry + CVV */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">תוקף (MM/YY)</label>
+                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.expiry')}</label>
                     <input
                       type="text"
                       inputMode="numeric"
@@ -404,7 +416,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">CVV</label>
+                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.cvv')}</label>
                     <input
                       type="text"
                       inputMode="numeric"
@@ -420,10 +432,10 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
 
                 {/* Cardholder name */}
                 <div>
-                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">שם בעל הכרטיס</label>
+                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.cardName')}</label>
                   <input
                     type="text"
-                    placeholder="ישראל ישראלי"
+                    placeholder="John Smith"
                     value={cardName}
                     onChange={e => setCardName(e.target.value)}
                     className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
@@ -432,7 +444,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
 
                 {/* Email */}
                 <div>
-                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">אימייל לקבלה</label>
+                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.email')}</label>
                   <input
                     type="email"
                     placeholder="example@domain.com"
@@ -446,15 +458,15 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 {/* Price breakdown */}
                 <div className="bg-slate-700/40 rounded-xl p-4 space-y-2 text-sm">
                   <div className="flex justify-between text-slate-400">
-                    <span>מחיר בסיס</span>
+                    <span>{t('billing.payment.subtotal')}</span>
                     <span>₪{chosenPlanObj.price.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>מע"מ (17%)</span>
+                    <span>{t('billing.payment.vat')}</span>
                     <span>₪{vatAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-white font-bold pt-2 border-t border-slate-600">
-                    <span>סה"כ לתשלום</span>
+                    <span>{t('billing.payment.total')}</span>
                     <span>₪{totalAmount.toFixed(2)}</span>
                   </div>
                 </div>
@@ -473,11 +485,11 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                   className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3.5 rounded-xl transition-all text-base shadow-[0_0_20px_rgba(34,197,94,0.3)] flex items-center justify-center gap-2"
                 >
                   <Lock size={15} />
-                  שלם עכשיו — ₪{totalAmount.toFixed(2)}
+                  {t('billing.payment.pay')} — ₪{totalAmount.toFixed(2)}
                 </button>
 
                 <p className="text-center text-xs text-slate-500">
-                  התשלום מאובטח ומוצפן. ניתן לבטל בכל עת.
+                  {t('billing.payment.secureNote')}
                 </p>
               </div>
             )}

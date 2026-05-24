@@ -10,6 +10,7 @@ import {
 import { getApiKey, getOpenAiKey } from '../lib/apiKey';
 import { db } from '../lib/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { useLang } from '../contexts/LangContext';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ClientBrief {
@@ -126,21 +127,23 @@ function isImage(mime: string): boolean { return mime.startsWith('image/'); }
 /* ─── CopyBtn ────────────────────────────────────────────────────────────── */
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const { t } = useLang();
   return (
     <button onClick={() => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${copied ? 'border-green-400 bg-green-50 text-green-600' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-500'}`}>
       {copied ? <Check size={11} /> : <Copy size={11} />}
-      {copied ? 'הועתק!' : 'העתק'}
+      {copied ? t('content.copied') : t('content.copy')}
     </button>
   );
 }
 
 /* ─── SectionOutput ──────────────────────────────────────────────────────── */
 function SectionOutput({ content, loading }: { content: string; loading: boolean }) {
+  const { t } = useLang();
   if (!content && loading) return (
     <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400">
       <Loader2 size={28} className="animate-spin text-black" />
-      <span className="text-sm font-medium">מייצר תוכן...</span>
+      <span className="text-sm font-medium">{t('content.creatingContent')}</span>
     </div>
   );
   if (!content) return null;
@@ -161,7 +164,7 @@ function SectionOutput({ content, loading }: { content: string; loading: boolean
           </div>
         );
       }).filter(Boolean)}
-      {loading && <div className="flex items-center gap-2 text-slate-400 text-xs pb-2"><Loader2 size={12} className="animate-spin" /><span>ממשיך לייצר...</span></div>}
+      {loading && <div className="flex items-center gap-2 text-slate-400 text-xs pb-2"><Loader2 size={12} className="animate-spin" /><span>{t('content.stillGenerating')}</span></div>}
     </div>
   );
 }
@@ -170,6 +173,7 @@ function SectionOutput({ content, loading }: { content: string; loading: boolean
 interface ImgState { url?: string; loading: boolean; error?: string }
 function VisualsOutput({ content, sectionLoading }: { content: string; sectionLoading: boolean }) {
   const [images, setImages] = useState<Record<number, ImgState>>({});
+  const { t } = useLang();
   const openaiKey = getOpenAiKey();
   const blocks = useMemo(() => {
     if (!content) return [];
@@ -204,7 +208,7 @@ function VisualsOutput({ content, sectionLoading }: { content: string; sectionLo
       setImages(prev => ({ ...prev, [idx]: { loading: false, error: err instanceof Error ? err.message : String(err) } }));
     }
   };
-  if (!content && sectionLoading) return <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400"><Loader2 size={28} className="animate-spin text-black" /><span className="text-sm font-medium">מייצר תוכן...</span></div>;
+  if (!content && sectionLoading) return <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400"><Loader2 size={28} className="animate-spin text-black" /><span className="text-sm font-medium">{t('content.creatingContent')}</span></div>;
   if (!content) return null;
   return (
     <div className="space-y-3" dir="rtl">
@@ -216,20 +220,20 @@ function VisualsOutput({ content, sectionLoading }: { content: string; sectionLo
             {isImageBlock && !sectionLoading && (
               <div className="border-t border-slate-100 pt-4">
                 {!openaiKey ? (
-                  <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-right">💡 הוסף <strong>VITE_OPENAI_API_KEY</strong> ל-Vercel לייצור תמונות</div>
+                  <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-right">💡 {t('content.addOpenAIKey')}</div>
                 ) : images[idx]?.url ? (
                   <div className="space-y-3">
                     <img src={images[idx].url} alt="DALL-E" className="w-full rounded-xl border border-slate-200 shadow-sm" />
                     <div className="flex gap-2">
-                      <a href={images[idx].url} target="_blank" rel="noreferrer" download className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-neutral-800"><Download size={12} /> הורד</a>
-                      <button onClick={() => generate(idx, promptText)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 text-xs rounded-lg hover:bg-slate-50"><RefreshCw size={12} /> צור מחדש</button>
+                      <a href={images[idx].url} target="_blank" rel="noreferrer" download className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-neutral-800"><Download size={12} /> {t('content.download')}</a>
+                      <button onClick={() => generate(idx, promptText)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 text-xs rounded-lg hover:bg-slate-50"><RefreshCw size={12} /> {t('content.regenerate')}</button>
                     </div>
                   </div>
                 ) : images[idx]?.error ? (
-                  <div className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-right">⚠️ {images[idx].error} <button onClick={() => generate(idx, promptText)} className="underline ml-2">נסה שוב</button></div>
+                  <div className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-right">⚠️ {images[idx].error} <button onClick={() => generate(idx, promptText)} className="underline ml-2">{t('common.retry')}</button></div>
                 ) : (
                   <button onClick={() => generate(idx, promptText)} disabled={images[idx]?.loading} className="flex items-center gap-2 px-4 py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl">
-                    {images[idx]?.loading ? <><Loader2 size={13} className="animate-spin" /> מייצר...</> : <><Image size={13} /> צור תמונה עם DALL-E 3</>}
+                    {images[idx]?.loading ? <><Loader2 size={13} className="animate-spin" /> {t('content.generating')}</> : <><Image size={13} /> {t('content.generateCreative')}</>}
                   </button>
                 )}
               </div>
@@ -238,7 +242,7 @@ function VisualsOutput({ content, sectionLoading }: { content: string; sectionLo
           </div>
         </div>
       ))}
-      {sectionLoading && <div className="flex items-center gap-2 text-slate-400 text-xs pb-2"><Loader2 size={12} className="animate-spin" /><span>ממשיך לייצר...</span></div>}
+      {sectionLoading && <div className="flex items-center gap-2 text-slate-400 text-xs pb-2"><Loader2 size={12} className="animate-spin" /><span>{t('content.stillGenerating')}</span></div>}
     </div>
   );
 }
@@ -251,6 +255,7 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
   analyzing: boolean;
 }) {
   const [preview, setPreview] = useState(false);
+  const { t } = useLang();
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm">
       <div className="flex items-start gap-2">
@@ -267,7 +272,7 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
           <p className="text-xs font-semibold text-slate-700 truncate text-right">{file.name}</p>
           <p className="text-[10px] text-slate-400 text-right">{formatBytes(file.size)}</p>
           {file.analysis && (
-            <p className="text-[10px] text-emerald-600 mt-0.5 text-right">✓ נותח על ידי AI</p>
+            <p className="text-[10px] text-emerald-600 mt-0.5 text-right">{t('content.analyzedByAI')}</p>
           )}
         </div>
         <div className="flex flex-col gap-1">
@@ -285,11 +290,11 @@ function FileCard({ file, onDelete, onAnalyze, analyzing }: {
       {!file.analysis ? (
         <button onClick={onAnalyze} disabled={analyzing}
           className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 border border-dashed border-indigo-300 text-indigo-600 text-[10px] font-semibold rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-50">
-          {analyzing ? <><Loader2 size={10} className="animate-spin" /> מנתח...</> : <><Bot size={10} /> נתח עם AI</>}
+          {analyzing ? <><Loader2 size={10} className="animate-spin" /> {t('content.analyzing')}</> : <><Bot size={10} /> {t('content.analyzing')}</>}
         </button>
       ) : (
         <details className="mt-2">
-          <summary className="text-[10px] text-indigo-600 cursor-pointer hover:text-indigo-800 text-right">הצג ניתוח AI ▾</summary>
+          <summary className="text-[10px] text-indigo-600 cursor-pointer hover:text-indigo-800 text-right">{t('content.showAnalysis')}</summary>
           <p className="text-[10px] text-slate-600 mt-1 leading-relaxed bg-slate-50 rounded-lg p-2 text-right">{file.analysis}</p>
         </details>
       )}
@@ -312,6 +317,7 @@ function ProjectCard({ project, onSelect, onDelete }: {
   onDelete: () => void;
 }) {
   const analyzedCount = project.files.filter(f => f.analysis).length;
+  const { t } = useLang();
   return (
     <div onClick={onSelect}
       className="p-4 border-2 border-slate-100 hover:border-indigo-300 hover:bg-indigo-50/40 rounded-xl cursor-pointer transition-all group relative">
@@ -329,7 +335,7 @@ function ProjectCard({ project, onSelect, onDelete }: {
         {analyzedCount > 0 && (
           <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{analyzedCount} AI</span>
         )}
-        <span className="text-[10px] text-slate-400">{project.files.length} קבצים</span>
+        <span className="text-[10px] text-slate-400">{project.files.length} {t('content.filesCount')}</span>
       </div>
     </div>
   );
@@ -631,12 +637,14 @@ export default function ContentHub() {
   const inp = 'w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-right bg-white placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-all';
   const lbl = 'block text-[11px] font-bold text-slate-400 mb-1.5 uppercase tracking-widest text-right';
 
+  const { t, dir } = useLang();
+
   type ViewMode = 'clients' | 'project' | 'generate';
   const viewMode: ViewMode = !selectedClient ? 'clients' : !selectedProject ? 'project' : 'generate';
 
   /* ── Render ────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex flex-col md:flex-row gap-4 md:gap-5" dir="rtl">
+    <div className="flex flex-col md:flex-row gap-4 md:gap-5" dir={dir}>
 
       {/* ════════════════ LEFT SIDEBAR ════════════════ */}
       <div className="w-full md:w-80 md:flex-shrink-0">
@@ -649,7 +657,7 @@ export default function ContentHub() {
             </div>
             <div className="flex-1">
               <div className="text-white font-bold text-sm">Creative Hub</div>
-              <div className="text-white/40 text-xs">מנוע קריאייטיב AI</div>
+              <div className="text-white/40 text-xs">{t('content.creativeEngine')}</div>
             </div>
           </div>
 
@@ -658,16 +666,16 @@ export default function ContentHub() {
             <div className="flex items-center justify-between">
               <button onClick={() => setShowNewClient(v => !v)}
                 className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
-                <Plus size={12} /> לקוח חדש
+                <Plus size={12} /> {t('content.newClient')}
               </button>
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">לקוח</span>
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{t('content.clientLabel')}</span>
             </div>
             {showNewClient && (
               <div className="flex gap-1.5">
-                <button onClick={createClient} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700">צור</button>
+                <button onClick={createClient} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700">{t('common.create')}</button>
                 <input autoFocus value={newClientName} onChange={e => setNewClientName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && createClient()}
-                  placeholder="שם הלקוח..." className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300" />
+                  placeholder={t('content.clientName')} className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300" />
               </div>
             )}
             {clients.length > 3 && (
@@ -679,7 +687,7 @@ export default function ContentHub() {
             )}
             <div className="space-y-1 max-h-36 overflow-y-auto">
               {filteredClients.length === 0 && (
-                <p className="text-xs text-slate-400 text-center py-2">אין לקוחות — צור לקוח חדש</p>
+                <p className="text-xs text-slate-400 text-center py-2">{t('content.noClientsCreate')}</p>
               )}
               {filteredClients.map(c => (
                 <div key={c.id}
@@ -702,33 +710,33 @@ export default function ContentHub() {
               <div className="flex items-center justify-between">
                 <button onClick={() => setShowNewProject(v => !v)}
                   className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
-                  <Plus size={12} /> פרויקט חדש
+                  <Plus size={12} /> {t('content.newProjectBtn')}
                 </button>
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">פרויקט</span>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{t('content.projectLabel')}</span>
               </div>
 
               {/* New project form */}
               {showNewProject && (
                 <div className="space-y-2 bg-slate-50 rounded-xl p-3 border border-slate-200">
                   <div className="flex gap-1.5">
-                    <button onClick={createProject} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700 flex-shrink-0">צור</button>
+                    <button onClick={createProject} className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded-lg font-semibold hover:bg-slate-700 flex-shrink-0">{t('common.create')}</button>
                     <input autoFocus value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && createProject()}
-                      placeholder="שם הפרויקט..." className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300 bg-white" />
+                      placeholder={t('content.projectName')} className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-slate-300 bg-white" />
                   </div>
                   <textarea
                     value={newProjectPrompt}
                     onChange={e => setNewProjectPrompt(e.target.value)}
-                    placeholder="פרומפט / מיקוד לפרויקט (אופציונלי) — לדוגמה: 'פרויקט יוקרתי בתל אביב לרוכשים גיל 40+, דגש על איכות חיים ועיצוב מינימליסטי'"
+                    placeholder={t('content.projectPromptOptional')}
                     rows={3}
                     className="w-full border border-slate-200 rounded-lg px-2.5 py-2 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white resize-none placeholder-slate-400"
                   />
-                  <p className="text-[10px] text-slate-400 text-right">הפרומפט ישמר עם הפרויקט וישפיע על כל יצירת התוכן</p>
+                  <p className="text-[10px] text-slate-400 text-right">{t('content.projectPromptSaved')}</p>
                 </div>
               )}
 
               <div className="space-y-1 max-h-36 overflow-y-auto">
-                {clientProjects.length === 0 && <p className="text-xs text-slate-400 text-center py-1">אין פרויקטים ללקוח זה</p>}
+                {clientProjects.length === 0 && <p className="text-xs text-slate-400 text-center py-1">{t('content.noProjectsForClient')}</p>}
                 {clientProjects.map(p => (
                   <div key={p.id}
                     className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all group ${selectedProject === p.id ? 'bg-indigo-600 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
@@ -756,63 +764,63 @@ export default function ContentHub() {
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               <div className="space-y-3">
                 <div>
-                  <label className={lbl}>שם החברה *</label>
-                  <input type="text" value={brief.company} onChange={e => updateBrief({ company: e.target.value })} className={inp} placeholder="לדוגמה: מגדלי הים..." />
+                  <label className={lbl}>{t('content.companyName')}</label>
+                  <input type="text" value={brief.company} onChange={e => updateBrief({ company: e.target.value })} className={inp} placeholder="..." />
                 </div>
                 <div>
-                  <label className={lbl}>תחום / ניצ'</label>
-                  <input type="text" value={brief.niche} onChange={e => updateBrief({ niche: e.target.value })} className={inp} placeholder='נדל"ן, פינטק, אופנה...' />
-                </div>
-              </div>
-              <hr className="border-slate-100" />
-              <div className="space-y-3">
-                <div>
-                  <label className={lbl}>קהל יעד</label>
-                  <input type="text" value={brief.targetAudience} onChange={e => updateBrief({ targetAudience: e.target.value })} className={inp} placeholder="עסקים קטנים, גיל 30-50..." />
-                </div>
-                <div>
-                  <label className={lbl}>דמוגרפיה</label>
-                  <input type="text" value={brief.demographics} onChange={e => updateBrief({ demographics: e.target.value })} className={inp} placeholder="גיל, מין, אזור..." />
+                  <label className={lbl}>{t('content.nicheField')}</label>
+                  <input type="text" value={brief.niche} onChange={e => updateBrief({ niche: e.target.value })} className={inp} placeholder='...' />
                 </div>
               </div>
               <hr className="border-slate-100" />
               <div className="space-y-3">
                 <div>
-                  <label className={lbl}>נקודות כאב</label>
-                  <textarea value={brief.painPoints} onChange={e => updateBrief({ painPoints: e.target.value })} className={`${inp} resize-none`} rows={2} placeholder="מה מציק ללקוח?" />
+                  <label className={lbl}>{t('content.targetAudienceField')}</label>
+                  <input type="text" value={brief.targetAudience} onChange={e => updateBrief({ targetAudience: e.target.value })} className={inp} placeholder="..." />
                 </div>
                 <div>
-                  <label className={lbl}>יתרון ייחודי (USP)</label>
-                  <input type="text" value={brief.usp} onChange={e => updateBrief({ usp: e.target.value })} className={inp} placeholder="מה מייחד אותך?" />
+                  <label className={lbl}>{t('content.demographicsField')}</label>
+                  <input type="text" value={brief.demographics} onChange={e => updateBrief({ demographics: e.target.value })} className={inp} placeholder="..." />
+                </div>
+              </div>
+              <hr className="border-slate-100" />
+              <div className="space-y-3">
+                <div>
+                  <label className={lbl}>{t('content.painPointsField')}</label>
+                  <textarea value={brief.painPoints} onChange={e => updateBrief({ painPoints: e.target.value })} className={`${inp} resize-none`} rows={2} placeholder="..." />
+                </div>
+                <div>
+                  <label className={lbl}>{t('content.uspField')}</label>
+                  <input type="text" value={brief.usp} onChange={e => updateBrief({ usp: e.target.value })} className={inp} placeholder="..." />
                 </div>
               </div>
               <hr className="border-slate-100" />
               <div>
-                <label className={lbl}>טון תקשורת</label>
+                <label className={lbl}>{t('content.brandVoiceField')}</label>
                 <div className="grid grid-cols-2 gap-1.5">
                   {VOICE_OPTIONS.map(v => (
                     <button key={v.id} onClick={() => updateBrief({ brandVoice: v.id })}
                       className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${brief.brandVoice === v.id ? 'border-black bg-black text-white' : 'border-slate-200 text-slate-600 hover:border-neutral-300 hover:bg-slate-50'}`}>
-                      <span>{v.emoji}</span><span>{v.label}</span>
+                      <span>{v.emoji}</span><span>{t(`content.${v.id}`)}</span>
                     </button>
                   ))}
                 </div>
               </div>
               <div>
-                <label className={lbl}>מטרות קמפיין</label>
+                <label className={lbl}>{t('content.campaignGoals')}</label>
                 <div className="flex gap-2">
                   {GOAL_OPTIONS.map(g => (
                     <button key={g.id} onClick={() => toggleGoal(g.id)}
                       className={`flex-1 py-2 rounded-xl border text-xs font-semibold transition-all ${brief.goals.includes(g.id) ? 'border-black bg-black text-white' : 'border-slate-200 text-slate-500 hover:border-neutral-300'}`}>
-                      {g.label}
+                      {t(`content.${g.id}`)}
                     </button>
                   ))}
                 </div>
               </div>
               <div>
-                <label className={lbl}>שפה</label>
+                <label className={lbl}>{t('content.languageField')}</label>
                 <div className="flex gap-2">
-                  {[{ id: 'he' as const, label: '🇮🇱 עברית' }, { id: 'en' as const, label: '🇺🇸 English' }].map(l => (
+                  {[{ id: 'he' as const, label: `🇮🇱 ${t('content.hebrewLang')}` }, { id: 'en' as const, label: `🇺🇸 ${t('content.englishLang')}` }].map(l => (
                     <button key={l.id} onClick={() => updateBrief({ language: l.id })}
                       className={`flex-1 py-2 rounded-xl border text-xs font-semibold transition-all ${brief.language === l.id ? 'border-black bg-black text-white' : 'border-slate-200 text-slate-500'}`}>
                       {l.label}
@@ -826,33 +834,33 @@ export default function ContentHub() {
           {/* ── Actions ─── */}
           <div className="p-4 border-t border-slate-100 flex-shrink-0 space-y-2">
             {!selectedClient ? (
-              <p className="text-center text-[11px] text-slate-400 py-1">בחר לקוח כדי להתחיל</p>
+              <p className="text-center text-[11px] text-slate-400 py-1">{t('content.selectClientStart')}</p>
             ) : !selectedProject ? (
-              <p className="text-center text-[11px] text-slate-400 py-1">בחר פרויקט כדי להמשיך</p>
+              <p className="text-center text-[11px] text-slate-400 py-1">{t('content.selectProjectContinue')}</p>
             ) : generating ? (
               <div className="flex gap-2">
                 <div className="flex-1 bg-black text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
-                  <Loader2 size={15} className="animate-spin" /> מייצר...
+                  <Loader2 size={15} className="animate-spin" /> {t('content.generating')}
                 </div>
-                <button onClick={handleStop} className="px-4 py-3 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 text-sm font-medium">עצור</button>
+                <button onClick={handleStop} className="px-4 py-3 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 text-sm font-medium">{t('content.stop')}</button>
               </div>
             ) : hasContent ? (
               <div className="flex gap-2">
                 <button onClick={handleGenerate} disabled={!brief.company.trim() || !brief.niche.trim()}
                   className="flex-1 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
-                  <RefreshCw size={14} /> צור מחדש הכל
+                  <RefreshCw size={14} /> {t('content.regenerateAll')}
                 </button>
-                <button onClick={handleReset} className="px-4 py-3 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm font-medium">נקה</button>
+                <button onClick={handleReset} className="px-4 py-3 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm font-medium">{t('content.clear')}</button>
               </div>
             ) : (
               <button onClick={handleGenerate} disabled={!brief.company.trim() || !brief.niche.trim()}
                 className="w-full bg-black hover:bg-neutral-800 disabled:opacity-40 text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
-                <Sparkles size={15} /> צור תוכן קריאייטיב
-                {filesContext && <span className="text-[10px] opacity-60">+ {files.filter(f=>f.analysis).length} קבצים</span>}
+                <Sparkles size={15} /> {t('content.generateCreative')}
+                {filesContext && <span className="text-[10px] opacity-60">+ {files.filter(f=>f.analysis).length} {t('content.filesCount')}</span>}
               </button>
             )}
             {selectedClient && selectedProject && !brief.company.trim() && (
-              <p className="text-center text-[11px] text-slate-400">מלא שם חברה להמשך</p>
+              <p className="text-center text-[11px] text-slate-400">{t('content.fillCompanyFirst')}</p>
             )}
           </div>
         </div>
@@ -868,17 +876,17 @@ export default function ContentHub() {
               <Layers size={36} className="text-white" />
             </div>
             <div>
-              <h2 className="text-2xl font-black text-slate-800 tracking-tight mb-2">Creative Hub</h2>
+              <h2 className="text-2xl font-black text-slate-800 tracking-tight mb-2">{t('content.welcomeTitle')}</h2>
               <p className="text-slate-400 text-sm max-w-sm leading-relaxed">
-                צור לקוח חדש בסרגל הצדדי, הוסף פרויקט עם פרומפט מותאם, העלה קבצי מותג — ו-AI יבנה עבורך תוכן שיווקי מותאם אישית.
+                {t('content.welcomeDesc')}
               </p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-400 max-w-lg">
               {[
-                { icon: <Building2 size={18}/>, label: 'לקוחות שמורים' },
-                { icon: <FolderOpen size={18}/>, label: 'פרויקטים מאורגנים' },
-                { icon: <Pencil size={18}/>, label: 'פרומפט מותאם' },
-                { icon: <Upload size={18}/>, label: 'ניתוח קבצי מותג' },
+                { icon: <Building2 size={18}/>, label: t('content.savedClients') },
+                { icon: <FolderOpen size={18}/>, label: t('content.organizedProjects') },
+                { icon: <Pencil size={18}/>, label: t('content.customPrompt') },
+                { icon: <Upload size={18}/>, label: t('content.brandFileAnalysis') },
               ].map((item, i) => (
                 <div key={i} className="flex flex-col items-center gap-2 p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
                   <div className="text-slate-500">{item.icon}</div>
@@ -896,17 +904,17 @@ export default function ContentHub() {
               <div className="flex items-center justify-between mb-4">
                 <button onClick={() => setShowNewProject(true)}
                   className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-slate-700 transition-all">
-                  <Plus size={14} /> פרויקט חדש
+                  <Plus size={14} /> {t('content.newProjectBtn')}
                 </button>
                 <div className="text-right">
                   <h2 className="text-xl font-bold text-slate-800">{client.brief.company}</h2>
-                  <p className="text-sm text-slate-400">{clientProjects.length} פרויקטים</p>
+                  <p className="text-sm text-slate-400">{clientProjects.length} {t('content.projectsCount')}</p>
                 </div>
               </div>
               {clientProjects.length === 0 ? (
                 <div className="text-center py-12">
                   <FolderOpen size={40} className="text-slate-200 mx-auto mb-3" />
-                  <p className="text-slate-400 text-sm">אין פרויקטים עדיין — צור פרויקט חדש</p>
+                  <p className="text-slate-400 text-sm">{t('content.noProjectsYet')}</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -941,14 +949,14 @@ export default function ContentHub() {
                 <div className="flex items-center gap-2">
                   <button onClick={() => setEditingPrompt(v => !v)}
                     className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
-                    <Pencil size={12} /> {editingPrompt ? 'סגור עריכה' : 'ערוך פרומפט'}
+                    <Pencil size={12} /> {editingPrompt ? t('content.closeEdit') : t('content.editPrompt')}
                   </button>
                   {customPrompt && !editingPrompt && (
-                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">פעיל ✓</span>
+                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">{t('content.promptActive')}</span>
                   )}
                 </div>
                 <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                  <Sparkles size={14} className="text-indigo-500" /> פרומפט הפרויקט
+                  <Sparkles size={14} className="text-indigo-500" /> {t('content.projectPrompt')}
                 </span>
               </div>
               <div className="px-5 py-4">
@@ -963,7 +971,7 @@ export default function ContentHub() {
                       className="w-full border border-indigo-200 rounded-xl px-4 py-3 text-sm text-right bg-indigo-50/30 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
                     />
                     <p className="text-[11px] text-slate-400 text-right flex items-center justify-end gap-1">
-                      <Check size={10} className="text-emerald-500" /> נשמר אוטומטית
+                      <Check size={10} className="text-emerald-500" /> {t('content.autoSaved')}
                     </p>
                   </div>
                 ) : customPrompt ? (
@@ -975,8 +983,8 @@ export default function ContentHub() {
                   <button onClick={() => setEditingPrompt(true)}
                     className="w-full border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-xl p-6 text-center transition-all">
                     <Pencil size={22} className="text-slate-300 mx-auto mb-2" />
-                    <p className="text-sm text-slate-400 font-medium">הוסף פרומפט מותאם לפרויקט</p>
-                    <p className="text-xs text-slate-300 mt-1">הנחיות מיוחדות, קהל יעד ספציפי, סגנון כתיבה — AI יתחשב בהכל</p>
+                    <p className="text-sm text-slate-400 font-medium">{t('content.addCustomPrompt')}</p>
+                    <p className="text-xs text-slate-300 mt-1">{t('content.promptHint')}</p>
                   </button>
                 )}
               </div>
@@ -987,16 +995,16 @@ export default function ContentHub() {
               <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
                 <button onClick={() => fileInputRef.current?.click()}
                   className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
-                  <Upload size={12} /> העלה קבצים
+                  <Upload size={12} /> {t('content.uploadFiles')}
                 </button>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">{files.length} קבצים שמורים</span>
+                  <span className="text-xs text-slate-400">{files.length} {t('content.filesCount')}</span>
                   {files.filter(f => f.analysis).length > 0 && (
                     <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">
-                      {files.filter(f => f.analysis).length} נותחו ✓
+                      {files.filter(f => f.analysis).length} {t('content.analyzedCount')}
                     </span>
                   )}
-                  <span className="text-sm font-bold text-slate-700">חומרי מותג</span>
+                  <span className="text-sm font-bold text-slate-700">{t('content.brandAssets')}</span>
                 </div>
               </div>
 
@@ -1009,9 +1017,9 @@ export default function ContentHub() {
                   onClick={() => fileInputRef.current?.click()}
                   className="m-4 border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-xl p-8 text-center cursor-pointer transition-all">
                   <Upload size={28} className="text-slate-300 mx-auto mb-3" />
-                  <p className="text-sm font-semibold text-slate-500">גרור קבצים לכאן או לחץ להעלאה</p>
-                  <p className="text-xs text-slate-400 mt-1">תמונות (PNG, JPG, WebP) · עד {MAX_FILE_MB}MB לקובץ</p>
-                  <p className="text-xs text-indigo-500 mt-2 font-medium">קבצים נשמרים לפרויקט — בפעם הבאה כבר יהיו כאן</p>
+                  <p className="text-sm font-semibold text-slate-500">{t('content.dragOrClick')}</p>
+                  <p className="text-xs text-slate-400 mt-1">{t('content.fileTypes')} {MAX_FILE_MB}MB {t('content.fileTypesEnd')}</p>
+                  <p className="text-xs text-indigo-500 mt-2 font-medium">{t('content.filesSavedNote')}</p>
                 </div>
               ) : (
                 <div className="p-4">
@@ -1028,13 +1036,13 @@ export default function ContentHub() {
                     onClick={() => fileInputRef.current?.click()}
                     className="border border-dashed border-slate-200 hover:border-indigo-300 rounded-xl p-3 text-center cursor-pointer transition-all">
                     <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5">
-                      <Upload size={11} /> הוסף עוד קבצים (נשמרים לפרויקט)
+                      <Upload size={11} /> {t('content.addMoreFiles')}
                     </p>
                   </div>
                   {filesContext && (
                     <div className="mt-2 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                       <Bot size={12} className="text-emerald-600" />
-                      <p className="text-[11px] text-emerald-700 font-medium">{files.filter(f=>f.analysis).length} קבצים מנותחים ישולבו בתוכן המיוצר</p>
+                      <p className="text-[11px] text-emerald-700 font-medium">{files.filter(f=>f.analysis).length} {t('content.filesIntegrated')}</p>
                     </div>
                   )}
                 </div>
@@ -1053,7 +1061,7 @@ export default function ContentHub() {
                       <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                         className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all ${active ? 'bg-black text-white shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'}`}>
                         <tab.icon size={14} />
-                        <span className="hidden sm:inline">{tab.label}</span>
+                        <span className="hidden sm:inline">{t(`content.tabs.${tab.id}`)}</span>
                         {(s.loading || isRegen) && <Loader2 size={11} className="animate-spin opacity-60" />}
                         {s.done && !s.loading && !isRegen && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
                       </button>
@@ -1072,14 +1080,14 @@ export default function ContentHub() {
                           disabled={!!regenTab || generating}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-xs font-medium text-slate-500 hover:text-indigo-600 transition-all disabled:opacity-40">
                           {regenTab === activeTab
-                            ? <><Loader2 size={11} className="animate-spin" /> מייצר...</>
-                            : <><RefreshCw size={11} /> צור מחדש טאב זה</>}
+                            ? <><Loader2 size={11} className="animate-spin" /> {t('content.generating')}</>
+                            : <><RefreshCw size={11} /> {t('content.regenerateTab')}</>}
                         </button>
                       </>
                     )}
                   </div>
                   <div className="text-right">
-                    <h3 className="font-bold text-slate-800">{TABS.find(t => t.id === activeTab)?.label}</h3>
+                    <h3 className="font-bold text-slate-800">{t(`content.tabs.${activeTab}`)}</h3>
                     {brief.company && <p className="text-xs text-slate-400">{brief.company} · {brief.niche}</p>}
                   </div>
                 </div>
@@ -1094,20 +1102,20 @@ export default function ContentHub() {
             {!hasContent && (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-sm">
                 <Sparkles size={32} className="text-slate-200 mx-auto mb-3" />
-                <p className="text-slate-500 font-semibold">מוכן לייצור תוכן</p>
+                <p className="text-slate-500 font-semibold">{t('content.readyToGenerate')}</p>
                 <div className="text-xs text-slate-400 mt-1 space-y-0.5">
-                  {customPrompt && <p className="text-indigo-600 font-medium">✓ פרומפט מותאם פעיל</p>}
+                  {customPrompt && <p className="text-indigo-600 font-medium">{t('content.customPromptActive')}</p>}
                   {filesContext
-                    ? <p>✓ {files.filter(f=>f.analysis).length} קבצי מותג מנותחים ומוכנים</p>
-                    : <p>העלה קבצי מותג לתוצאות מותאמות יותר</p>}
+                    ? <p>{t('content.brandFilesReady').replace('{n}', String(files.filter(f=>f.analysis).length))}</p>
+                    : <p>{t('content.uploadBrandFiles')}</p>}
                 </div>
                 <button onClick={handleGenerate} disabled={!brief.company.trim() || !brief.niche.trim()}
                   className="mt-5 inline-flex items-center gap-2 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-bold transition-all">
-                  <Sparkles size={14} /> צור תוכן קריאייטיב
+                  <Sparkles size={14} /> {t('content.generateCreative')}
                 </button>
                 {(!brief.company.trim() || !brief.niche.trim()) && (
                   <div className="mt-3 flex items-center justify-center gap-1.5 text-xs text-amber-600">
-                    <AlertCircle size={12} /> מלא שם חברה ותחום בסרגל הצדדי
+                    <AlertCircle size={12} /> {t('content.fillCompanyAndNiche')}
                   </div>
                 )}
               </div>

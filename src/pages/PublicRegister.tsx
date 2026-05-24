@@ -7,6 +7,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import type { UserProfile, WorkspaceProfile } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 const ALL_PAGES = ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents'] as const;
@@ -16,6 +17,7 @@ interface Props { onSuccess: (slug: string) => void; onBack: () => void; onSignI
 type Step = 'details' | 'creds' | 'done';
 
 export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
+  const { t, dir } = useLang();
   const [step, setStep]         = useState<Step>('details');
   /* step 1 */
   const [company,   setCompany]   = useState('');
@@ -37,7 +39,7 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
   const goToCreds = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!company.trim()) { setError('נא להזין שם עסק'); return; }
+    if (!company.trim()) { setError(t('register.errorBusinessName')); return; }
     setStep('creds');
   };
 
@@ -45,8 +47,8 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (password !== confirm) { setError('הסיסמאות אינן תואמות'); return; }
-    if (password.length < 6)  { setError('הסיסמה חייבת להכיל לפחות 6 תווים'); return; }
+    if (password !== confirm) { setError(t('register.errorPasswordMatch')); return; }
+    if (password.length < 6)  { setError(t('register.errorPasswordLength')); return; }
     setLoading(true);
     try {
       /* 1. Create Firebase Auth user */
@@ -100,12 +102,12 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
       console.error('Registration error:', err);
       const code    = (err as { code?: string }).code ?? '';
       const message = (err as { message?: string }).message ?? '';
-      if (code === 'auth/email-already-in-use')  setError('אימייל זה כבר קיים ב-Firebase Auth — נא למחוק אותו ידנית דרך Firebase Console → Authentication → Users');
-      else if (code === 'auth/invalid-email')    setError('כתובת אימייל לא תקינה');
-      else if (code === 'auth/weak-password')    setError('הסיסמה חלשה מדי — לפחות 6 תווים');
-      else if (code === 'permission-denied')     setError('שגיאת הרשאות Firestore — בדוק כללי אבטחה');
-      else if (message)                          setError(`שגיאה: ${message}`);
-      else setError('שגיאה ביצירת החשבון. נסה שוב.');
+      if (code === 'auth/email-already-in-use')  setError(t('register.errorEmailInUse'));
+      else if (code === 'auth/invalid-email')    setError(t('register.errorInvalidEmail'));
+      else if (code === 'auth/weak-password')    setError(t('register.errorWeakPassword'));
+      else if (code === 'permission-denied')     setError(t('register.errorPermissions'));
+      else if (message)                          setError(message);
+      else setError(t('register.errorGeneral'));
     } finally {
       setLoading(false);
     }
@@ -118,17 +120,17 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
 
   /* ── Done ─────────────────────────────────────────────────────────────── */
   if (step === 'done') return (
-    <Screen onSignIn={onSignIn}>
+    <Screen onSignIn={onSignIn} dir={dir}>
       <div className="text-center py-8">
         <CheckCircle2 size={56} className="text-emerald-400 mx-auto mb-5" />
-        <h2 className="text-white font-black text-2xl mb-2">סביבת העבודה נוצרה! 🎉</h2>
-        <p className="text-slate-400 text-sm">מעביר אותך להגדרת המערכת...</p>
+        <h2 className="text-white font-black text-2xl mb-2">{t('register.success')}</h2>
+        <p className="text-slate-400 text-sm">{t('register.successDesc')}</p>
       </div>
     </Screen>
   );
 
   return (
-    <Screen onSignIn={onSignIn}>
+    <Screen onSignIn={onSignIn} dir={dir}>
       {/* Progress bar */}
       <div className="flex gap-2 mb-8">
         {(['details','creds'] as const).map((s, i) => (
@@ -140,23 +142,23 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
       {step === 'details' && (
         <form onSubmit={goToCreds} className="space-y-4">
           <div className="text-center mb-6">
-            <h1 className="text-white font-black text-2xl">פתיחת חשבון עסקי</h1>
-            <p className="text-slate-400 text-sm mt-1">14 יום ניסיון חינם · ללא כרטיס אשראי</p>
+            <h1 className="text-white font-black text-2xl">{t('register.title')}</h1>
+            <p className="text-slate-400 text-sm mt-1">{t('landing.pricing.trial.period')} {t('billing.trial')}</p>
           </div>
 
-          <Field label="שם העסק *" icon={<Building2 size={14} />}>
+          <Field label={t('register.businessName')} icon={<Building2 size={14} />}>
             <input
               type="text" value={company} onChange={e => setCompany(e.target.value)} required
-              className={INPUT} placeholder="למשל: סוכנות שיווק חכמה" />
+              className={INPUT} placeholder={t('register.companyPlaceholder')} />
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label='ח.פ / ע.מ' icon={<Hash size={14} />}>
+            <Field label={t('register.businessId')} icon={<Hash size={14} />}>
               <input
                 type="text" value={bizId} onChange={e => setBizId(e.target.value)}
                 className={INPUT} placeholder="515123456" />
             </Field>
-            <Field label="טלפון" icon={<Phone size={14} />}>
+            <Field label={t('register.phone')} icon={<Phone size={14} />}>
               <input
                 type="tel" value={phone} onChange={e => setPhone(e.target.value)}
                 className={INPUT} placeholder="050-0000000" />
@@ -164,11 +166,11 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
           </div>
 
           <div>
-            <label className="block text-slate-400 text-xs font-medium mb-1.5">תחום עיסוק</label>
+            <label className="block text-slate-400 text-xs font-medium mb-1.5">{t('register.industry')}</label>
             <select
               value={industry} onChange={e => setIndustry(e.target.value)}
               className={INPUT + ' appearance-none'}>
-              <option value="">בחר תחום...</option>
+              <option value="">{t('register.industryPlaceholder')}</option>
               {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
             </select>
           </div>
@@ -178,11 +180,11 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onBack}
               className="flex-shrink-0 px-4 py-3 text-slate-500 hover:text-slate-300 flex items-center gap-1.5 text-sm transition-colors">
-              <ArrowLeft size={14} /> חזרה
+              <ArrowLeft size={14} /> {t('register.back')}
             </button>
             <button type="submit"
               className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25">
-              המשך
+              {t('register.continue')}
             </button>
           </div>
         </form>
@@ -194,34 +196,34 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
           <div className="mb-6">
             <button type="button" onClick={() => setStep('details')}
               className="flex items-center gap-1.5 text-slate-500 hover:text-slate-300 text-xs mb-4 transition-colors">
-              <ArrowLeft size={12} /> חזרה
+              <ArrowLeft size={12} /> {t('register.back')}
             </button>
-            <h1 className="text-white font-black text-2xl">פרטי משתמש מנהל</h1>
+            <h1 className="text-white font-black text-2xl">{t('register.accountDetails')}</h1>
             <p className="text-slate-400 text-sm mt-1">
-              <span className="text-indigo-400 font-medium">{company}</span> — הזן פרטים אישיים
+              <span className="text-indigo-400 font-medium">{company}</span> — {t('register.personalDetails')}
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="שם פרטי *" icon={<User size={14} />}>
+            <Field label={t('register.firstName')} icon={<User size={14} />}>
               <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} required
-                className={INPUT} placeholder="ישראל" />
+                className={INPUT} placeholder={t('register.firstNamePlaceholder')} />
             </Field>
-            <Field label="שם משפחה *" icon={<User size={14} />}>
+            <Field label={t('register.lastName')} icon={<User size={14} />}>
               <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} required
-                className={INPUT} placeholder="ישראלי" />
+                className={INPUT} placeholder={t('register.lastNamePlaceholder')} />
             </Field>
           </div>
 
-          <Field label="אימייל *" icon={<Mail size={14} />}>
+          <Field label={t('register.email')} icon={<Mail size={14} />}>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
               className={INPUT} placeholder="you@company.com" dir="ltr" />
           </Field>
 
-          <Field label="סיסמה *" icon={<Lock size={14} />}>
+          <Field label={t('register.password')} icon={<Lock size={14} />}>
             <div className="relative">
               <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required
-                className={INPUT + ' pl-10'} placeholder="לפחות 6 תווים" dir="ltr" />
+                className={INPUT + ' pl-10'} placeholder={t('register.passwordPlaceholder')} dir="ltr" />
               <button type="button" onClick={() => setShowPw(p => !p)}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
                 {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -229,21 +231,21 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
             </div>
           </Field>
 
-          <Field label="אימות סיסמה *" icon={<Lock size={14} />}>
+          <Field label={t('register.confirmPassword')} icon={<Lock size={14} />}>
             <input type={showPw ? 'text' : 'password'} value={confirm} onChange={e => setConfirm(e.target.value)} required
-              className={INPUT} placeholder="חזור על הסיסמה" dir="ltr" />
+              className={INPUT} placeholder={t('register.confirmPasswordPlaceholder')} dir="ltr" />
           </Field>
 
           {error && <ErrorBox msg={error} />}
 
           <button type="submit" disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25 mt-2">
-            {loading ? 'יוצר חשבון...' : 'צור חשבון ←'}
+            {loading ? t('common.loading') : `${t('register.createAccount')} ←`}
           </button>
 
           <p className="text-center text-slate-600 text-xs">
-            בלחיצה על יצירת חשבון אתה מסכים ל
-            <span className="text-indigo-400 cursor-pointer"> תנאי השימוש</span>
+            {t('register.termsAgreement')}{' '}
+            <span className="text-indigo-400 cursor-pointer">{t('register.termsLink')}</span>
           </p>
         </form>
       )}
@@ -254,9 +256,9 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
 /* ─── small shared components ─────────────────────────────────────────────── */
 const INPUT = 'w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500';
 
-function Screen({ children, onSignIn }: { children: React.ReactNode; onSignIn?: () => void }) {
+function Screen({ children, onSignIn, dir: dirProp }: { children: React.ReactNode; onSignIn?: () => void; dir?: string }) {
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dirProp ?? 'rtl'}>
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-10">
@@ -265,7 +267,7 @@ function Screen({ children, onSignIn }: { children: React.ReactNode; onSignIn?: 
           </div>
           <div>
             <p className="text-white font-black text-3xl">RAY</p>
-            <p className="text-slate-500 text-xs -mt-1">Lead Manager · מיתוג לבן</p>
+            <p className="text-slate-500 text-xs -mt-1">Lead Manager</p>
           </div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
@@ -273,12 +275,12 @@ function Screen({ children, onSignIn }: { children: React.ReactNode; onSignIn?: 
         </div>
         {/* Sign-in link */}
         <p className="text-center text-slate-500 text-sm mt-5">
-          כבר יש לך חשבון?{' '}
+          {t('register.haveAccount')}{' '}
           <button
             onClick={onSignIn ?? (() => window.location.replace('/'))}
             className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
           >
-            התחבר ←
+            {t('register.signIn')} ←
           </button>
         </p>
       </div>
