@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { sendLeadEmail, isEmailJSConfigured } from '../lib/emailjs';
+import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { useLang } from '../contexts/LangContext';
 
 interface EmailOption {
@@ -218,6 +219,14 @@ export default function EmailModal({ lead, onClose, workspace }: EmailModalProps
       setGeneratedEmail('⚠️ מפתח API חסר. הגדר VITE_ANTHROPIC_API_KEY ב-.env');
       return;
     }
+    // Check token balance before making the API call
+    if (workspace?.id) {
+      const hasBal = await hasBalance(workspace.id);
+      if (!hasBal) {
+        setGeneratedEmail('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.');
+        return;
+      }
+    }
     setLoading(true);
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -242,6 +251,14 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
           text += event.delta.text;
           setGeneratedEmail(text);
         }
+      }
+      // Deduct tokens after stream completes
+      try {
+        const finalMsg = await stream.finalMessage();
+        const cost = calculateCost('claude-opus-4-6', finalMsg.usage.input_tokens, finalMsg.usage.output_tokens);
+        if (workspace?.id) await deductTokens(workspace.id, cost, 'claude-opus-4-6', 'Email generation');
+      } catch (trackErr) {
+        console.error('Token tracking failed:', trackErr);
       }
     } catch {
       setGeneratedEmail('שגיאה ביצירת המייל. אנא נסה שוב.');

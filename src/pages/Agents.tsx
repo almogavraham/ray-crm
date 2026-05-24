@@ -15,6 +15,7 @@ import { getApiKey } from '../lib/apiKey';
 import { doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useLang } from '../contexts/LangContext';
+import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'performance' | 'brief' | 'portal' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
@@ -27,6 +28,7 @@ interface AgentsProps {
   onCreateTask: (task: StandaloneTask) => void;
   onUpdateLead: (lead: Lead) => void;
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
+  workspaceId?: string;
 }
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
@@ -60,12 +62,13 @@ function closeProbability(lead: Lead): number {
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 1 — FOLLOW-UP AGENT
 ══════════════════════════════════════════════════════════════════════════════ */
-function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast }: {
+function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId }: {
   leads: Lead[];
   currentUser: string;
   onCreateTask: (task: StandaloneTask) => void;
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
+  workspaceId?: string;
 }) {
   const { t } = useLang();
   const [threshold,    setThreshold]    = useState(7);
@@ -93,6 +96,11 @@ function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast
   const generateMessage = useCallback(async (lead: Lead) => {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    // Check token balance before calling AI
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setGeneratingFor(lead.id);
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -126,9 +134,14 @@ ${styleSection}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setMessages(prev => ({ ...prev, [lead.id]: text }));
+      // Deduct tokens after successful call
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Follow-up agent');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה ביצירת הודעה', 'error'); }
     finally { setGeneratingFor(null); }
-  }, [mirrorStyles, currentUser, onToast]);
+  }, [mirrorStyles, currentUser, onToast, workspaceId]);
 
   const markContacted = (lead: Lead) => {
     onUpdateLead({ ...lead, lastUpdate: new Date().toLocaleDateString('he-IL') });
@@ -434,10 +447,11 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 3 — PROPOSAL GENERATOR AI
 ══════════════════════════════════════════════════════════════════════════════ */
-function ProposalGenerator({ leads, currentUser, onToast }: {
+function ProposalGenerator({ leads, currentUser, onToast, workspaceId }: {
   leads: Lead[];
   currentUser: string;
   onToast?: AgentsProps['onToast'];
+  workspaceId?: string;
 }) {
   const { t } = useLang();
   const [selectedLead, setSelectedLead] = useState('');
@@ -462,6 +476,10 @@ function ProposalGenerator({ leads, currentUser, onToast }: {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (!services.length) { onToast?.('בחר שירות אחד לפחות', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setResult('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -499,6 +517,10 @@ ${notes ? `הערות נוספות: ${notes}` : ''}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setResult(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Proposal generator');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה ביצירת הצעה', 'error'); }
     finally { setLoading(false); }
   };
@@ -860,10 +882,11 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 6 — LEAD ENRICHMENT AI
 ══════════════════════════════════════════════════════════════════════════════ */
-function LeadEnrichment({ leads, onUpdateLead, onToast }: {
+function LeadEnrichment({ leads, onUpdateLead, onToast, workspaceId }: {
   leads: Lead[];
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
+  workspaceId?: string;
 }) {
   const { t } = useLang();
   const [selectedId, setSelectedId] = useState('');
@@ -880,6 +903,10 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
     if (!lead) return;
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setResult(null);
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -912,6 +939,8 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const block of (res.content || [])) { if (block.type === 'text') finalText += block.text; }
       const jsonMatch = finalText.match(/\{[\s\S]*?\}/);
+      let totalInputTokens = res.usage?.input_tokens ?? 0;
+      let totalOutputTokens = res.usage?.output_tokens ?? 0;
       if (jsonMatch) { setResult(JSON.parse(jsonMatch[0])); }
       else {
         // Fallback: ask without web search for generic insight
@@ -920,11 +949,17 @@ function LeadEnrichment({ leads, onUpdateLead, onToast }: {
           model: 'claude-opus-4-5', max_tokens: 600,
           messages: [{ role: 'user', content: `ספק הערכה כללית לחברה בשם "${lead.company}" בתחום הנדל"ן בישראל בפורמט JSON:\n{"industry":"נדל\\"ן","description":"","readinessScore":65,"insights":["insight1","insight2","insight3"],"suggestedBudget":4500}` }],
         });
+        totalInputTokens += r2.usage?.input_tokens ?? 0;
+        totalOutputTokens += r2.usage?.output_tokens ?? 0;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const t2 = r2.content?.find((b: any) => b.type === 'text')?.text ?? '';
         const m2 = t2.match(/\{[\s\S]*?\}/);
         if (m2) setResult(JSON.parse(m2[0]));
       }
+      try {
+        const cost = calculateCost('claude-opus-4-5', totalInputTokens, totalOutputTokens);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Lead enrichment');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה בהעשרת הליד', 'error'); }
     finally { setLoading(false); }
   };
@@ -1440,8 +1475,8 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 10 — MEETING BRIEF AGENT
 ══════════════════════════════════════════════════════════════════════════════ */
-function MeetingBrief({ leads, currentUser, onToast }: {
-  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast'];
+function MeetingBrief({ leads, currentUser, onToast, workspaceId }: {
+  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const { t } = useLang();
   const [selectedId,   setSelectedId]   = useState('');
@@ -1456,6 +1491,10 @@ function MeetingBrief({ leads, currentUser, onToast }: {
     if (!lead) return;
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setBrief('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -1509,6 +1548,10 @@ ${openTasks}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setBrief(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Meeting brief');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה ביצירת התדריך', 'error'); }
     finally { setLoading(false); }
   };
@@ -1577,8 +1620,8 @@ ${openTasks}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 11 — MARKETING AI CONTENT GENERATOR
 ══════════════════════════════════════════════════════════════════════════════ */
-function MarketingAI({ leads, currentUser, onToast }: {
-  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast'];
+function MarketingAI({ leads, currentUser, onToast, workspaceId }: {
+  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const { t } = useLang();
   const platforms = [
@@ -1609,6 +1652,10 @@ function MarketingAI({ leads, currentUser, onToast }: {
   const generate = async () => {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setContent('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -1640,6 +1687,10 @@ ${clientCtx}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setContent(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Marketing content');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה ביצירת תוכן', 'error'); }
     finally { setLoading(false); }
   };
@@ -1721,8 +1772,8 @@ ${clientCtx}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 12 — CAMPAIGN OPTIMIZER
 ══════════════════════════════════════════════════════════════════════════════ */
-function CampaignOptimizer({ leads, onToast }: {
-  leads: Lead[]; onToast?: AgentsProps['onToast'];
+function CampaignOptimizer({ leads, onToast, workspaceId }: {
+  leads: Lead[]; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const [loading,  setLoading]  = useState(false);
   const [analysis, setAnalysis] = useState('');
@@ -1745,6 +1796,10 @@ function CampaignOptimizer({ leads, onToast }: {
   const analyze = async () => {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setAnalysis('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -1784,6 +1839,10 @@ ${statsText}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setAnalysis(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Marketing content');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה בניתוח', 'error'); }
     finally { setLoading(false); }
   };
@@ -1854,8 +1913,8 @@ ${statsText}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 13 — CHURN SHIELD
 ══════════════════════════════════════════════════════════════════════════════ */
-export function ChurnShield({ leads, onToast }: {
-  leads: Lead[]; onToast?: AgentsProps['onToast'];
+export function ChurnShield({ leads, onToast, workspaceId }: {
+  leads: Lead[]; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [plans,     setPlans]     = useState<Record<string, string>>({});
@@ -1890,6 +1949,10 @@ export function ChurnShield({ leads, onToast }: {
   const generatePlan = async (lead: Lead) => {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoadingId(lead.id);
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -1921,6 +1984,10 @@ export function ChurnShield({ leads, onToast }: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setPlans(prev => ({ ...prev, [lead.id]: text }));
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Follow-up agent');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה', 'error'); }
     finally { setLoadingId(null); }
   };
@@ -2006,8 +2073,8 @@ const DEFAULT_TEMPLATES: SmartTemplate[] = [
   { id: 're_engage',      name: 'הפעלה מחדש',          category: 'שיווק', emoji: '💡', content: 'שלום {שם},\n\nזמן מה שלא דיברנו!\n\nהרגשנו שאולי הגיע הזמן לבדוק יחד איפה אתם עומדים ואיך אנחנו יכולים לעזור.\n\nנשמח לשיחה קצרה של 15 דקות — מתי מתאים? 📞' },
 ];
 
-function SmartTemplates({ leads, currentUser, onToast }: {
-  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast'];
+function SmartTemplates({ leads, currentUser, onToast, workspaceId }: {
+  leads: Lead[]; currentUser: string; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const [templates,         setTemplates]         = useState<SmartTemplate[]>(DEFAULT_TEMPLATES);
   const [selectedTemplate,  setSelectedTemplate]  = useState<SmartTemplate | null>(null);
@@ -2033,6 +2100,10 @@ function SmartTemplates({ leads, currentUser, onToast }: {
     if (!selectedTemplate) return;
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setPersonalized('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -2055,6 +2126,10 @@ ${selectedTemplate.content}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setPersonalized(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Marketing content');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה', 'error'); }
     finally { setLoading(false); }
   };
@@ -2170,8 +2245,8 @@ ${selectedTemplate.content}
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 15 — SALES COACH AI
 ══════════════════════════════════════════════════════════════════════════════ */
-function SalesCoach({ leads, team, standaloneTask, currentUser, onToast }: {
-  leads: Lead[]; team: TeamMember[]; standaloneTask: StandaloneTask[]; currentUser: string; onToast?: AgentsProps['onToast'];
+function SalesCoach({ leads, team, standaloneTask, currentUser, onToast, workspaceId }: {
+  leads: Lead[]; team: TeamMember[]; standaloneTask: StandaloneTask[]; currentUser: string; onToast?: AgentsProps['onToast']; workspaceId?: string;
 }) {
   const [loading,  setLoading]  = useState(false);
   const [coaching, setCoaching] = useState('');
@@ -2201,6 +2276,10 @@ function SalesCoach({ leads, team, standaloneTask, currentUser, onToast }: {
   const analyze = async () => {
     const apiKey = getApiKey();
     if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
     setLoading(true); setCoaching('');
     try {
       const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -2247,6 +2326,10 @@ function SalesCoach({ leads, team, standaloneTask, currentUser, onToast }: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
       setCoaching(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Follow-up agent');
+      } catch (trackErr) { console.error('Token tracking failed:', trackErr); }
     } catch { onToast?.('שגיאה', 'error'); }
     finally { setLoading(false); }
   };
@@ -2316,7 +2399,7 @@ function SalesCoach({ leads, team, standaloneTask, currentUser, onToast }: {
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function Agents({
   leads, team, currentUser, standaloneTask,
-  onCreateTask, onUpdateLead, onToast,
+  onCreateTask, onUpdateLead, onToast, workspaceId,
 }: AgentsProps) {
   const { t } = useLang();
   const [tab, setTab] = useState<AgentTab>('followup');
@@ -2491,13 +2574,13 @@ export default function Agents({
             <div className="p-4 md:p-5">
               {tab === 'followup' && (
                 <FollowupAgent leads={leads} currentUser={currentUser}
-                  onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}/>
+                  onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast} workspaceId={workspaceId}/>
               )}
               {tab === 'forecast'    && <RevenueForecast leads={leads}/>}
-              {tab === 'proposal'    && <ProposalGenerator leads={leads} currentUser={currentUser} onToast={onToast}/>}
+              {tab === 'proposal'    && <ProposalGenerator leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'alerts'      && <SmartAlerts leads={leads} standaloneTask={standaloneTask}/>}
               {tab === 'roi'         && <SourceROI leads={leads}/>}
-              {tab === 'enrich'      && <LeadEnrichment leads={leads} onUpdateLead={onUpdateLead} onToast={onToast}/>}
+              {tab === 'enrich'      && <LeadEnrichment leads={leads} onUpdateLead={onUpdateLead} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'workflow'    && (
                 <WorkflowBuilder leads={leads} currentUser={currentUser}
                   onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}/>
@@ -2506,12 +2589,12 @@ export default function Agents({
               {tab === 'performance' && (
                 <AgentPerformance leads={leads} team={team} standaloneTask={standaloneTask}/>
               )}
-              {tab === 'brief'       && <MeetingBrief leads={leads} currentUser={currentUser} onToast={onToast}/>}
-              {tab === 'marketing'   && <MarketingAI leads={leads} currentUser={currentUser} onToast={onToast}/>}
-              {tab === 'campaign'    && <CampaignOptimizer leads={leads} onToast={onToast}/>}
-              {tab === 'churn'       && <ChurnShield leads={leads} onToast={onToast}/>}
-              {tab === 'templates'   && <SmartTemplates leads={leads} currentUser={currentUser} onToast={onToast}/>}
-              {tab === 'coach'       && <SalesCoach leads={leads} team={team} standaloneTask={standaloneTask} currentUser={currentUser} onToast={onToast}/>}
+              {tab === 'brief'       && <MeetingBrief leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'marketing'   && <MarketingAI leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'campaign'    && <CampaignOptimizer leads={leads} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'churn'       && <ChurnShield leads={leads} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'templates'   && <SmartTemplates leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'coach'       && <SalesCoach leads={leads} team={team} standaloneTask={standaloneTask} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
             </div>
           </div>
         </div>

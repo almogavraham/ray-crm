@@ -854,6 +854,7 @@ function AppInner() {
         onSignOut={signOut}
         logoUrl={(isWorkspaceUser || isAdminWorkspace) ? workspace?.logoUrl : undefined}
         workspaceName={(isWorkspaceUser || isAdminWorkspace) ? workspace?.name : undefined}
+        workspace={(isWorkspaceUser || isAdminWorkspace) ? workspace ?? undefined : undefined}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -886,6 +887,8 @@ function AppInner() {
             onOpenLeadsWizard={workspace ? () => setShowLeadsWizard(true) : undefined}
             onImportLeads={handleImportLeads}
             currentUser={displayName}
+            onCreateTask={handleStandaloneAdd}
+            onUpdateLead={handleLeadUpdate}
           />
         )}
         {page === 'overview' && (

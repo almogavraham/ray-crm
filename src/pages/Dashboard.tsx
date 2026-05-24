@@ -4,10 +4,11 @@ import {
   MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
   Sparkles, MessageCircle, FileSpreadsheet,
 } from 'lucide-react';
-import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
+import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import EmailModal from '../components/EmailModal';
 import ExcelImportModal from '../components/ExcelImportModal';
+import DashboardAiPanel from '../components/DashboardAiPanel';
 import { useLang } from '../contexts/LangContext';
 
 const ALL_STATUSES: LeadStatus[] = [
@@ -32,6 +33,8 @@ interface DashboardProps {
   onOpenLeadsWizard?: () => void;
   onImportLeads?: (leads: Lead[]) => void;
   currentUser?: string;
+  onCreateTask?: (task: StandaloneTask) => void;
+  onUpdateLead?: (lead: Lead) => void;
 }
 
 // ─── safe helpers ──────────────────────────────────────────────────────────────
@@ -50,7 +53,7 @@ function parseDate(d: string | undefined): number {
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
-  compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser,
+  compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser, onCreateTask, onUpdateLead,
 }: DashboardProps) {
   const { t } = useLang();
   const [search,       setSearch]       = useState('');
@@ -241,6 +244,16 @@ export default function Dashboard({
         <KpiCard label={t('status.inProgress')}         value={onboarding}    sub="פרויקטים פעילים"               icon={<Rocket     size={20} className="text-orange-500"  />} color="orange" percent={Math.round(onboarding / Math.max(leads.length, 1) * 100)} />
         <KpiCard label={t('dashboard.total')}           value={leads.length}  sub={`${newLeads} ${t('common.new')}`} icon={<Users    size={20} className="text-slate-600"  />} color="indigo" percent={100} />
       </div>
+
+      {/* AI Panel — stale lead follow-up + pipeline insights */}
+      <DashboardAiPanel
+        leads={leads}
+        currentUser={currentUser}
+        workspace={workspace}
+        onCreateTask={onCreateTask}
+        onUpdateLead={onUpdateLead}
+        onToast={onToast}
+      />
 
       {/* Search + Filters */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 space-y-2.5">

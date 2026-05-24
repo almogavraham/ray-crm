@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import {
   CreditCard, Check, Zap, Building2, Crown, X, Lock,
-  RefreshCw, CheckCircle2, Star, AlertCircle,
+  RefreshCw, CheckCircle2, Star, AlertCircle, AlertTriangle,
 } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { WorkspaceProfile, WorkspacePlan } from '../types';
 import { useLang } from '../contexts/LangContext';
+import {
+  TOPUP_PACKAGES, formatBalance, balancePercent, addTokens,
+} from '../lib/tokenTracker';
 
 interface BillingPageProps {
   workspace: WorkspaceProfile;
@@ -87,6 +90,32 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const [selectedPlan, setSelectedPlan] = useState<'pro' | 'enterprise' | null>(null);
   const [paymentStep, setPaymentStep] = useState<'form' | 'processing' | 'success'>('form');
 
+  // Token topup state
+  const [topupLoading, setTopupLoading] = useState<string | null>(null);
+  const [topupSuccess, setTopupSuccess] = useState<string | null>(null);
+
+  // Token balance helpers
+  const tokenBalance    = workspace?.tokenBalance ?? 0;
+  const tokenAllocation = workspace?.tokenPlanAllocation ?? 0;
+  const tokenUsed       = workspace?.tokenUsed ?? 0;
+  const tokenPct        = balancePercent(tokenBalance, tokenAllocation);
+  const tokenBarColor   = tokenPct > 50 ? 'bg-emerald-500' : tokenPct > 20 ? 'bg-amber-400' : 'bg-red-500';
+
+  const handleTopup = async (pkg: typeof TOPUP_PACKAGES[number]) => {
+    if (!window.confirm(`${t('tokens.confirmTopup')} ${pkg.tokens}?`)) return;
+    setTopupLoading(pkg.id);
+    setTopupSuccess(null);
+    try {
+      await addTokens(workspace.id, pkg.dollars, 'topup', `Token top-up: ${pkg.label}`);
+      setTopupSuccess(pkg.id);
+      setTimeout(() => setTopupSuccess(null), 3000);
+    } catch (err) {
+      console.error('Topup error:', err);
+    } finally {
+      setTopupLoading(null);
+    }
+  };
+
   // Card form state
   const [cardNumber, setCardNumber] = useState('');
   const [expiry, setExpiry] = useState('');
@@ -164,6 +193,49 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-white mb-1">{t('billing.title')}</h1>
           <p className="text-slate-400 text-sm">{t('billing.subtitle')}</p>
+        </div>
+
+        {/* ── Token Balance Card ───────────────────────────────────────────── */}
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 space-y-4">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-lg select-none">💎</div>
+              <div>
+                <p className="font-semibold text-white text-sm">{t('tokens.balance')}</p>
+                <p className="text-emerald-400 text-xs">{t('tokens.planAllocation')}: {formatBalance(tokenAllocation)}</p>
+              </div>
+            </div>
+            <p className="text-3xl font-black text-white">{formatBalance(tokenBalance)}</p>
+          </div>
+
+          {/* Progress bar */}
+          <div>
+            <div className="flex justify-between text-xs text-emerald-300 mb-1.5">
+              <span>{t('tokens.used')}: {formatBalance(tokenUsed)}</span>
+              <span>{tokenPct}% {t('tokens.remaining')}</span>
+            </div>
+            <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${tokenBarColor}`} style={{ width: `${tokenPct}%` }} />
+            </div>
+            <p className="text-xs text-slate-400 mt-1.5">
+              {t('tokens.used')}: {formatBalance(tokenUsed)} {t('tokens.of')} {formatBalance(tokenAllocation)}
+            </p>
+          </div>
+
+          {/* Warnings */}
+          {tokenBalance <= 0 && (
+            <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 text-red-300 text-sm">
+              <AlertCircle size={15} className="flex-shrink-0" />
+              {t('tokens.emptyWarning')}
+            </div>
+          )}
+          {tokenBalance > 0 && tokenPct < 20 && (
+            <div className="flex items-center gap-2 bg-amber-500/20 border border-amber-500/40 rounded-xl px-4 py-3 text-amber-300 text-sm">
+              <AlertTriangle size={15} className="flex-shrink-0" />
+              {t('tokens.lowWarning')}
+            </div>
+          )}
         </div>
 
         {/* ── Current plan banner ───────────────────────────────────────────── */}
@@ -298,6 +370,51 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               );
             })}
           </div>
+        </div>
+
+        {/* ── Token Top-up Section ─────────────────────────────────────────── */}
+        <div>
+          <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+            <span className="text-xl">💎</span>
+            {t('tokens.topup')}
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {TOPUP_PACKAGES.map(pkg => {
+              const isLoading = topupLoading === pkg.id;
+              const isSuccess = topupSuccess === pkg.id;
+              return (
+                <div key={pkg.id} className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 flex flex-col items-center text-center gap-3 hover:border-emerald-500/60 transition-all">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
+                    <span className="text-2xl font-black text-emerald-400">{pkg.label}</span>
+                  </div>
+                  <div>
+                    <p className="text-white font-bold text-lg">{pkg.label}</p>
+                    <p className="text-emerald-400 text-xs">{pkg.tokens}</p>
+                  </div>
+                  <button
+                    onClick={() => handleTopup(pkg)}
+                    disabled={isLoading || isSuccess}
+                    className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                      isSuccess
+                        ? 'bg-green-600 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-60'
+                    }`}
+                  >
+                    {isLoading ? (
+                      <><RefreshCw size={14} className="animate-spin" /> מעבד...</>
+                    ) : isSuccess ? (
+                      <><CheckCircle2 size={14} /> {t('tokens.topupSuccess')}</>
+                    ) : (
+                      t('tokens.buy')
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-slate-500 text-xs mt-3 text-center">
+            * בסביבת פיתוח — הרכישה מדומה. בפרודקשן יתחבר לפרוסס תשלום.
+          </p>
         </div>
 
         {/* ── Billing history placeholder ──────────────────────────────────── */}

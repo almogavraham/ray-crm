@@ -10,7 +10,7 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
-  KeyRound, AtSign, Unlink, Layers, Menu,
+  KeyRound, AtSign, Unlink, Layers, Menu, DollarSign,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
@@ -20,6 +20,11 @@ import { db, auth, functions } from '../lib/firebase';
 import { sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import type { WorkspaceProfile, WorkspaceStatus, UserProfile, Page } from '../types';
+import {
+  grantPlanTokens, addTokens, formatBalance, balancePercent,
+  DEFAULT_PLAN_TOKEN_AMOUNTS,
+} from '../lib/tokenTracker';
+import type { PlanTokenConfig } from '../lib/tokenTracker';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'features' | 'announcements' | 'releases' | 'system';
@@ -163,6 +168,8 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   const [flagSaving,      setFlagSaving]     = useState(false);
   const [planPages,       setPlanPages]      = useState<PlanPages>(DEFAULT_PLAN_PAGES);
   const [planPagesSaving, setPlanPagesSaving] = useState(false);
+  const [planTokenAmounts, setPlanTokenAmounts] = useState<PlanTokenConfig>(DEFAULT_PLAN_TOKEN_AMOUNTS);
+  const [tokenAmountsSaving, setTokenAmountsSaving] = useState(false);
 
   /* ── Load all data ──────────────────────────────────────────────────────── */
   const loadAll = useCallback(async () => {
@@ -181,8 +188,9 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
       setReleases(relSnap.docs.map(d => d.data() as Release));
       if (cfgSnap.exists()) {
         const cfg = cfgSnap.data();
-        if (cfg.featureFlags) setFlags({ ...DEFAULT_FLAGS, ...cfg.featureFlags });
-        if (cfg.planPages)    setPlanPages({ ...DEFAULT_PLAN_PAGES, ...cfg.planPages });
+        if (cfg.featureFlags)    setFlags({ ...DEFAULT_FLAGS, ...cfg.featureFlags });
+        if (cfg.planPages)       setPlanPages({ ...DEFAULT_PLAN_PAGES, ...cfg.planPages });
+        if (cfg.planTokenAmounts) setPlanTokenAmounts({ ...DEFAULT_PLAN_TOKEN_AMOUNTS, ...cfg.planTokenAmounts });
       }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
@@ -292,6 +300,17 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     } catch { toast('שגיאה בשמירת דפי מסלול', 'error'); }
     finally { setPlanPagesSaving(false); }
   };
+  /* ── Plan token amounts ──────────────────────────────────────────────────── */
+  const savePlanTokenAmounts = async (amounts: PlanTokenConfig) => {
+    setTokenAmountsSaving(true);
+    try {
+      await setDoc(doc(db, 'system', 'config'), { planTokenAmounts: amounts }, { merge: true });
+      setPlanTokenAmounts(amounts);
+      toast('הקצאת טוקנים עודכנה ✓', 'success');
+    } catch { toast('שגיאה בשמירת הקצאת טוקנים', 'error'); }
+    finally { setTokenAmountsSaving(false); }
+  };
+
   const togglePlanPage = (page: Page, plan: PlanKey) => {
     const current = planPages[plan] ?? [];
     const next: PlanPages = {
@@ -423,10 +442,10 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
         ) : (
           <>
             {tab === 'overview'      && <OverviewTab workspaces={workspaces} users={users} total={total} active={active} trial={trial} suspended={suspended} newMonth={newMonth} />}
-            {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} planPages={planPages} onSetPages={setWorkspacePages} />}
+            {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} planPages={planPages} onSetPages={setWorkspacePages} planTokenAmounts={planTokenAmounts} />}
             {tab === 'analytics'     && <AnalyticsTab workspaces={workspaces} />}
             {tab === 'users'         && <UsersTab users={users} workspaces={workspaces} />}
-            {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} planPages={planPages} onTogglePage={togglePlanPage} onSavePlanPages={savePlanPages} planPagesSaving={planPagesSaving} />}
+            {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} planPages={planPages} onTogglePage={togglePlanPage} onSavePlanPages={savePlanPages} planPagesSaving={planPagesSaving} planTokenAmounts={planTokenAmounts} onSavePlanTokenAmounts={savePlanTokenAmounts} tokenAmountsSaving={tokenAmountsSaving} />}
             {tab === 'announcements' && <AnnouncementsTab announcements={announcements} onRefresh={loadAll} onToast={toast} />}
             {tab === 'releases'      && <ReleasesTab releases={releases} workspaces={workspaces} onRefresh={loadAll} onToast={toast} />}
             {tab === 'system'        && <SystemTab workspaces={workspaces} onToast={toast} />}
@@ -642,11 +661,12 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Workspaces
 ══════════════════════════════════════════════════════════════════════════ */
-function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDelete, onToast, planPages, onSetPages }:
+function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDelete, onToast, planPages, onSetPages, planTokenAmounts }:
   { workspaces: WorkspaceProfile[]; selected: WorkspaceProfile|null; onSelect: (w: WorkspaceProfile|null)=>void;
     onStatus: (id:string, s:WorkspaceStatus)=>Promise<void>; onPlan: (id:string, p:string)=>Promise<void>;
     onDelete: (id:string)=>Promise<void>; onToast: (m:string,t?:'success'|'error'|'info')=>void;
-    planPages: PlanPages; onSetPages: (wid:string, pages:Page[]|null)=>Promise<void>; }) {
+    planPages: PlanPages; onSetPages: (wid:string, pages:Page[]|null)=>Promise<void>;
+    planTokenAmounts: PlanTokenConfig; }) {
 
   const [search, setSearch]   = useState('');
   const [status, setStatus]   = useState<WorkspaceStatus|'all'>('all');
@@ -751,6 +771,7 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
             onToast={onToast}
             planPages={planPages}
             onSetPages={pages => onSetPages(selected.id, pages)}
+            planTokenAmounts={planTokenAmounts}
           />
         </>
       )}
@@ -758,10 +779,11 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
   );
 }
 
-function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onToast, planPages, onSetPages }:
+function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onToast, planPages, onSetPages, planTokenAmounts }:
   { ws: WorkspaceProfile; onClose: ()=>void; onStatus:(s:WorkspaceStatus)=>void;
     onPlan:(p:string)=>void; onDelete:()=>void; loading:string|null; onToast:(m:string,t?:'success'|'error'|'info')=>void;
-    planPages: PlanPages; onSetPages:(pages:Page[]|null)=>Promise<void>; }) {
+    planPages: PlanPages; onSetPages:(pages:Page[]|null)=>Promise<void>;
+    planTokenAmounts: PlanTokenConfig; }) {
 
   const d = daysLeft(ws.trialEndsAt);
   const RAY_DOMAIN     = 'ray-crm.com';
@@ -778,6 +800,40 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
   // Support action states
   const [resetLoad,  setResetLoad]  = useState(false);
   const [authLoad,   setAuthLoad]   = useState(false);
+
+  // Token management state
+  const [tokenGrantLoad, setTokenGrantLoad] = useState(false);
+  const [manualAmount,   setManualAmount]   = useState('');
+  const [manualLoad,     setManualLoad]     = useState(false);
+
+  const planTokenAmount = planTokenAmounts[ws.plan as PlanKey] ?? DEFAULT_PLAN_TOKEN_AMOUNTS[ws.plan as PlanKey] ?? 0;
+  const tokenBalance    = ws.tokenBalance ?? 0;
+  const tokenAllocation = ws.tokenPlanAllocation ?? 0;
+  const tokenUsed       = ws.tokenUsed ?? 0;
+  const tokenPct        = balancePercent(tokenBalance, tokenAllocation);
+  const tokenBarColor   = tokenPct > 50 ? 'bg-emerald-500' : tokenPct > 20 ? 'bg-amber-400' : 'bg-red-500';
+
+  const handleGrantPlanTokens = async () => {
+    if (planTokenAmount <= 0) { onToast('לא הוגדרה הקצאה לתוכנית זו', 'error'); return; }
+    setTokenGrantLoad(true);
+    try {
+      await grantPlanTokens(ws.id, ws.plan, planTokenAmount);
+      onToast(`${planTokenAmount}$ טוקנים הוענקו ✓`, 'success');
+    } catch { onToast('שגיאה בהענקת טוקנים', 'error'); }
+    finally { setTokenGrantLoad(false); }
+  };
+
+  const handleManualTokens = async () => {
+    const amt = parseFloat(manualAmount);
+    if (!amt || amt <= 0) { onToast('הזן סכום תקין', 'error'); return; }
+    setManualLoad(true);
+    try {
+      await addTokens(ws.id, amt, 'manual', 'Admin manual credit');
+      setManualAmount('');
+      onToast(`$${amt} טוקנים נוספו ✓`, 'success');
+    } catch { onToast('שגיאה בהוספת טוקנים', 'error'); }
+    finally { setManualLoad(false); }
+  };
 
   // Page override state for this workspace
   const isCustomPages  = Array.isArray(ws.allowedPages);
@@ -1046,6 +1102,75 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               ))}
             </div>
           )}
+        </div>
+
+        {/* ── Token Balance ─────────────────────────────────────── */}
+        <div className="px-5 py-4 border-b border-slate-100">
+          <p className="text-xs font-semibold text-emerald-700 mb-3 flex items-center gap-1.5">
+            <DollarSign size={11} /> מאזן טוקנים AI
+          </p>
+
+          {/* Stats row */}
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-emerald-50 rounded-lg px-2 py-2 text-center">
+              <p className="text-[9px] text-emerald-600 font-medium mb-0.5">מאזן</p>
+              <p className="text-xs font-bold text-emerald-800">{formatBalance(tokenBalance)}</p>
+            </div>
+            <div className="bg-slate-50 rounded-lg px-2 py-2 text-center">
+              <p className="text-[9px] text-slate-500 font-medium mb-0.5">הקצאה</p>
+              <p className="text-xs font-bold text-slate-700">{formatBalance(tokenAllocation)}</p>
+            </div>
+            <div className="bg-slate-50 rounded-lg px-2 py-2 text-center">
+              <p className="text-[9px] text-slate-500 font-medium mb-0.5">שומש</p>
+              <p className="text-xs font-bold text-slate-700">{formatBalance(tokenUsed)}</p>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mb-3">
+            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+              <span>{tokenPct}% נותר</span>
+              <span>{formatBalance(tokenBalance)} מתוך {formatBalance(tokenAllocation)}</span>
+            </div>
+            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${tokenBarColor}`} style={{ width: `${tokenPct}%` }} />
+            </div>
+          </div>
+
+          {/* Grant plan tokens */}
+          <button
+            onClick={handleGrantPlanTokens}
+            disabled={tokenGrantLoad}
+            className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white py-2 rounded-lg text-xs font-bold transition-colors mb-2"
+          >
+            {tokenGrantLoad ? <RefreshCw size={11} className="animate-spin" /> : <DollarSign size={11} />}
+            הענק טוקני תוכנית ({formatBalance(planTokenAmount)})
+          </button>
+
+          {/* Manual add tokens */}
+          <div className="flex gap-1.5">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="סכום $"
+              value={manualAmount}
+              onChange={e => setManualAmount(e.target.value)}
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-emerald-500"
+              dir="ltr"
+            />
+            <button
+              onClick={handleManualTokens}
+              disabled={manualLoad}
+              className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors"
+            >
+              {manualLoad ? <RefreshCw size={10} className="animate-spin" /> : <Plus size={10} />}
+              הוסף ידנית
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1.5">
+            תוכנית {ws.plan} · הקצאה מוגדרת: {formatBalance(planTokenAmount)}
+          </p>
         </div>
 
         {/* Technical support tools */}
@@ -1347,12 +1472,17 @@ function UsersTab({ users, workspaces }:
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: Feature Flags
 ══════════════════════════════════════════════════════════════════════════ */
-function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage, onSavePlanPages, planPagesSaving }:
+function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage, onSavePlanPages, planPagesSaving, planTokenAmounts, onSavePlanTokenAmounts, tokenAmountsSaving }:
   { flags: FeatureFlags; onToggle:(f:string,p:PlanKey)=>void; onSave:(f:FeatureFlags)=>Promise<void>; saving:boolean;
     planPages: PlanPages; onTogglePage:(page:Page,plan:PlanKey)=>void;
-    onSavePlanPages:(pp:PlanPages)=>Promise<void>; planPagesSaving:boolean; }) {
+    onSavePlanPages:(pp:PlanPages)=>Promise<void>; planPagesSaving:boolean;
+    planTokenAmounts: PlanTokenConfig; onSavePlanTokenAmounts:(a:PlanTokenConfig)=>Promise<void>; tokenAmountsSaving:boolean; }) {
 
   const PLANS: PlanKey[] = ['trial','basic','pro','enterprise'];
+  const [localTokenAmounts, setLocalTokenAmounts] = useState<PlanTokenConfig>(planTokenAmounts);
+
+  // sync if parent changes
+  useEffect(() => { setLocalTokenAmounts(planTokenAmounts); }, [planTokenAmounts]);
 
   return (
     <div className="p-6 space-y-6">
@@ -1453,6 +1583,55 @@ function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage,
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-700 flex items-start gap-2">
           <Info size={14} className="flex-shrink-0 mt-0.5" />
           <p>ברירות המחדל חלות על סביבות עבודה חדשות. סביבות עם הגדרה ידנית (כחול "מותאם אישית" בפאנל) לא יושפעו.</p>
+        </div>
+      </div>
+
+      {/* ── Section 3: Plan Token Allocation ────────────────────── */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
+              <DollarSign size={18} className="text-emerald-600" /> טוקנים לפי תוכנית
+            </h2>
+            <p className="text-slate-500 text-sm mt-0.5">הגדר כמה דולרים של טוקנים AI מקבלת כל תוכנית</p>
+          </div>
+          <button onClick={() => onSavePlanTokenAmounts(localTokenAmounts)} disabled={tokenAmountsSaving}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+            {tokenAmountsSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            שמור הקצאות
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="grid grid-cols-3 px-5 py-3 bg-emerald-50 border-b border-emerald-100">
+            <div className="col-span-1 text-xs font-bold text-emerald-700 uppercase tracking-wider">תוכנית</div>
+            <div className="text-center text-xs font-bold text-emerald-700 uppercase tracking-wider">הקצאת טוקנים ($)</div>
+            <div className="text-center text-xs font-bold text-emerald-700 uppercase tracking-wider">מטבע</div>
+          </div>
+          {PLANS.map(plan => (
+            <div key={plan} className="grid grid-cols-3 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
+              <div className="col-span-1 flex items-center gap-2">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[plan]}`}>{plan}</span>
+              </div>
+              <div className="flex justify-center">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={localTokenAmounts[plan] ?? DEFAULT_PLAN_TOKEN_AMOUNTS[plan] ?? 0}
+                  onChange={e => setLocalTokenAmounts(prev => ({ ...prev, [plan]: parseFloat(e.target.value) || 0 }))}
+                  className="w-24 text-center bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-sm font-semibold focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  dir="ltr"
+                />
+              </div>
+              <div className="text-center text-xs text-slate-500">USD</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-700 flex items-start gap-2">
+          <Info size={14} className="flex-shrink-0 mt-0.5" />
+          <p>ערכים אלו קובעים כמה דולרים של טוקנים AI מוקצים לכל סביבה עבור כל תוכנית. השינויים לא חלים אוטומטית — יש ללחוץ "הענק טוקני תוכנית" בפאנל הסביבה.</p>
         </div>
       </div>
 

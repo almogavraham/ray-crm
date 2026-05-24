@@ -3,10 +3,11 @@ import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, Settings, CreditCard,
   Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot, Shield,
-  Clock, AlertTriangle, Search, Globe,
+  Clock, AlertTriangle, Search, Globe, Gem,
 } from 'lucide-react';
-import type { Page } from '../types';
+import type { Page, WorkspaceProfile } from '../types';
 import { useLang } from '../contexts/LangContext';
+import { formatBalance, balancePercent } from '../lib/tokenTracker';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -23,6 +24,7 @@ interface LayoutProps {
   onSignOut?: () => void;
   logoUrl?: string;
   workspaceName?: string;
+  workspace?: WorkspaceProfile;  // for token balance display
 }
 
 // Static fallback labels (Hebrew) used for currentLabel lookup before t() is available
@@ -77,11 +79,13 @@ interface SidebarProps {
   userName: string;
   isAdmin: boolean;
   onSignOut?: () => void;
+  workspace?: WorkspaceProfile;
 }
 
 function SidebarInner({
   filteredGroups, currentPage, onGo, onNewLead,
   overdueBadge, logoUrl, workspaceName, userInitials, userName, isAdmin, onSignOut,
+  workspace,
 }: SidebarProps) {
   const { t, lang, setLang } = useLang();
   return (
@@ -171,6 +175,52 @@ function SidebarInner({
           </div>
         ))}
       </nav>
+
+      {/* Token balance mini-bar */}
+      {workspace && workspace.tokenBalance !== undefined && (
+        <div className="px-3 pb-2">
+          <button
+            onClick={() => onGo('billing')}
+            className="w-full rounded-xl p-2.5 text-right transition-all hover:scale-[1.01]"
+            style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}
+            onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#dcfce7'; }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#f0fdf4'; }}
+          >
+            {(() => {
+              const bal  = workspace.tokenBalance ?? 0;
+              const alloc = workspace.tokenPlanAllocation ?? 0;
+              const pct  = balancePercent(bal, alloc);
+              const isEmpty = bal <= 0.000001;
+              const isLow   = !isEmpty && pct < 20;
+              const barColor = isEmpty ? '#ef4444' : isLow ? '#f59e0b' : '#10b981';
+              return (
+                <>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold" style={{ color: barColor }}>
+                      {isEmpty ? '⚠️' : isLow ? '⚡' : '💎'}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Gem size={9} style={{ color: barColor }} />
+                      <span className="text-[11px] font-black" style={{ color: barColor }}>
+                        {formatBalance(bal)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full" style={{ backgroundColor: '#d1fae5' }}>
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${alloc > 0 ? pct : 100}%`, backgroundColor: barColor }}
+                    />
+                  </div>
+                  <p className="text-[9px] mt-1 text-right" style={{ color: '#64748b' }}>
+                    {isEmpty ? 'טוקנים נגמרו — לחץ לרכישה' : isLow ? 'טוקנים עומדים להיגמר' : 'יתרת טוקנים AI'}
+                  </p>
+                </>
+              );
+            })()}
+          </button>
+        </div>
+      )}
 
       {/* User footer */}
       <div className="p-3" style={{ borderTop: '1px solid #e5e9f0' }}>
@@ -349,7 +399,7 @@ export default function Layout({
   children, currentPage, onPageChange, onNewLead,
   overdueBadge = 0, userInitials = 'A', userName = 'משתמש',
   allowedPages = [], isAdmin = false, isSuperAdmin = false,
-  onSignOut, logoUrl, workspaceName,
+  onSignOut, logoUrl, workspaceName, workspace,
 }: LayoutProps) {
   const { t, dir } = useLang();
   const [open, setOpen] = useState(false);
@@ -375,7 +425,7 @@ export default function Layout({
     filteredGroups, currentPage, onGo: go,
     onNewLead: () => { onNewLead(); setOpen(false); },
     overdueBadge, logoUrl, workspaceName,
-    userInitials, userName, isAdmin, onSignOut,
+    userInitials, userName, isAdmin, onSignOut, workspace,
   };
 
   return (

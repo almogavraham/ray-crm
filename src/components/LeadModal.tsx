@@ -13,6 +13,7 @@ import StatusBadge from './StatusBadge';
 import EmailModal from './EmailModal';
 import { getApiKey } from '../lib/apiKey';
 import { useLang } from '../contexts/LangContext';
+import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 const PRIORITY_OPTS: { value: 'high' | 'medium' | 'low'; label: string; active: string; idle: string }[] = [
   { value: 'high',   label: '🔴', active: 'bg-red-500 text-white ring-2 ring-red-300',    idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
@@ -176,6 +177,16 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
       return;
     }
 
+    // Check token balance before making the API call
+    if (workspace?.id) {
+      const hasBal = await hasBalance(workspace.id);
+      if (!hasBal) {
+        setAiInsightError('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.');
+        setShowInsight(true);
+        return;
+      }
+    }
+
     setAiScoring(true);
     setShowInsight(true);
     setAiInsight(null);
@@ -218,11 +229,15 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let finalText = '';
       const searchedFor: string[] = [];
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
 
       // Agentic loop for web search
       for (let turn = 0; turn < 4; turn++) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const response: any = await (client.messages as any).create(reqPayload);
+        totalInputTokens += response.usage?.input_tokens ?? 0;
+        totalOutputTokens += response.usage?.output_tokens ?? 0;
         const content: unknown[] = response.content || [];
 
         const textParts = content
@@ -259,6 +274,13 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           const score = Math.min(99, baseScore + budgetBonus + solutionsBonus);
           setData(d => ({ ...d, aiScore: score }));
           setAiInsight({ summary: finalText, sources: searchedFor });
+          // Deduct tokens after research completes
+          try {
+            const cost = calculateCost('claude-opus-4-6', totalInputTokens, totalOutputTokens);
+            if (workspace?.id) await deductTokens(workspace.id, cost, 'claude-opus-4-6', 'Lead enrichment');
+          } catch (trackErr) {
+            console.error('Token tracking failed:', trackErr);
+          }
           break;
         }
 

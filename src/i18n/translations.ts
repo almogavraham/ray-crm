@@ -1416,6 +1416,24 @@ export const translations: Record<'he' | 'en', Record<string, string>> = {
     'excelImport.errorNoData': 'לא נמצאו שורות נתונים בקובץ. ודא שהקובץ מכיל לפחות שורת כותרות + שורת נתונים.',
     'excelImport.errorParse': 'שגיאה בקריאת הקובץ — ודא שזה קובץ Excel תקני (.xlsx / .xls / .csv)',
     'excelImport.colPrefix': 'עמודה',
+
+    // Token system
+    'tokens.balance': 'מאזן טוקנים AI',
+    'tokens.remaining': 'נותרו',
+    'tokens.used': 'שומש',
+    'tokens.of': 'מתוך',
+    'tokens.lowWarning': 'הטוקנים שלך עומדים להיגמר',
+    'tokens.emptyWarning': 'הטוקנים נגמרו — פיצ\'רי AI מושבתים',
+    'tokens.topup': 'רכוש טוקנים נוספים',
+    'tokens.buy': 'רכוש',
+    'tokens.planAllocation': 'הקצאת תוכנית',
+    'tokens.grantPlan': 'הענק טוקני תוכנית',
+    'tokens.addManual': 'הוסף טוקנים ידנית',
+    'tokens.noTokens': 'אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.',
+    'tokens.confirmTopup': 'האם לרכוש',
+    'tokens.topupSuccess': 'הטוקנים נוספו בהצלחה!',
+    'tokens.planTokens': 'טוקנים לפי תוכנית',
+    'tokens.usd': 'דולר ארה"ב',
   },
   en: {
     // Navigation
@@ -2834,5 +2852,23 @@ export const translations: Record<'he' | 'en', Record<string, string>> = {
     'excelImport.errorNoData': 'No data rows found. Make sure the file contains at least a header row + data row.',
     'excelImport.errorParse': 'Error reading file — make sure it is a valid Excel file (.xlsx / .xls / .csv)',
     'excelImport.colPrefix': 'Column',
+
+    // Token system
+    'tokens.balance': 'AI Token Balance',
+    'tokens.remaining': 'remaining',
+    'tokens.used': 'used',
+    'tokens.of': 'of',
+    'tokens.lowWarning': 'Your tokens are running low',
+    'tokens.emptyWarning': 'Tokens depleted — AI features are disabled',
+    'tokens.topup': 'Purchase More Tokens',
+    'tokens.buy': 'Buy',
+    'tokens.planAllocation': 'Plan allocation',
+    'tokens.grantPlan': 'Grant Plan Tokens',
+    'tokens.addManual': 'Add tokens manually',
+    'tokens.noTokens': 'Not enough tokens. Purchase more on the Billing page.',
+    'tokens.confirmTopup': 'Purchase',
+    'tokens.topupSuccess': 'Tokens added successfully!',
+    'tokens.planTokens': 'Tokens by Plan',
+    'tokens.usd': 'USD',
   },
 };

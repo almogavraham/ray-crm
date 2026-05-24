@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, StandaloneTask, TaskPriority, TeamMember, AccountData } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { db } from '../lib/firebase';
+import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { doc, getDoc, setDoc, collection, onSnapshot, getDocs, query, orderBy, limit } from 'firebase/firestore';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
@@ -1114,9 +1115,11 @@ export default function AiAssistant({
     msgs: any[],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     systemBlocks: any[],
-  ): Promise<{ text: string; searches: string[]; actions: ToolAction[] }> => {
+  ): Promise<{ text: string; searches: string[]; actions: ToolAction[]; totalInputTokens: number; totalOutputTokens: number }> => {
     const allSearches: string[] = [];
     const allActions:  ToolAction[] = [];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tools: any[] = [
@@ -1133,6 +1136,9 @@ export default function AiAssistant({
         messages:   msgs,
         tools,
       }));
+
+      totalInputTokens += response.usage?.input_tokens ?? 0;
+      totalOutputTokens += response.usage?.output_tokens ?? 0;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const content: any[] = response.content || [];
@@ -1151,7 +1157,7 @@ export default function AiAssistant({
       const existingResults = content.filter(b => b.type === 'tool_result');
 
       if (response.stop_reason === 'end_turn' || toolUses.length === 0) {
-        return { text: textParts, searches: allSearches, actions: allActions };
+        return { text: textParts, searches: allSearches, actions: allActions, totalInputTokens, totalOutputTokens };
       }
 
       // Track web searches
@@ -1203,7 +1209,7 @@ export default function AiAssistant({
       ];
     }
 
-    return { text: 'לא הצלחתי לקבל תשובה סופית. נסה שנית.', searches: allSearches, actions: allActions };
+    return { text: 'לא הצלחתי לקבל תשובה סופית. נסה שנית.', searches: allSearches, actions: allActions, totalInputTokens, totalOutputTokens };
   }, [webSearchEnabled, executeCRMTool]);
 
   /* ── Voice input ──────────────────────────────────────────────────────── */
@@ -1243,6 +1249,15 @@ export default function AiAssistant({
       setError('מפתח API חסר. הגדר VITE_ANTHROPIC_API_KEY בקובץ .env ואתחל מחדש.');
       return;
     }
+    // Check token balance before sending
+    if (workspace?.id) {
+      const hasBal = await hasBalance(workspace.id);
+      if (!hasBal) {
+        setError('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.');
+        return;
+      }
+    }
+
     setError(null);
     setInput('');
     setCurrentSearches([]);
@@ -1261,7 +1276,7 @@ export default function AiAssistant({
     const apiMessages = updatedMsgs.map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const { text: result, searches, actions } = await runAgentLoop(client, apiMessages, systemBlocks);
+      const { text: result, searches, actions, totalInputTokens, totalOutputTokens } = await runAgentLoop(client, apiMessages, systemBlocks);
 
       const assistantMsg: Message = {
         role:      'assistant',
@@ -1271,6 +1286,14 @@ export default function AiAssistant({
         timestamp: new Date().toISOString(),
       };
       setMessages(prev => [...prev, assistantMsg]);
+
+      // Deduct tokens after successful response
+      try {
+        const cost = calculateCost('claude-opus-4-6', totalInputTokens, totalOutputTokens);
+        if (workspace?.id) await deductTokens(workspace.id, cost, 'claude-opus-4-6', 'AI Assistant chat');
+      } catch (trackErr) {
+        console.error('Token tracking failed:', trackErr);
+      }
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

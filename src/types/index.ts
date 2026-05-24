@@ -322,6 +322,23 @@ export type Invite = {
   workspaceId?: string;   // which workspace this invite belongs to
 };
 
+// ─── Token System ────────────────────────────────────────────────────────────
+export type TokenTopupPackage = {
+  id:      string;   // 'topup5' | 'topup10' | 'topup25'
+  dollars: number;   // 5 | 10 | 25
+  label:   string;   // '$5' | '$10' | '$25'
+  bonus?:  number;   // optional bonus % (e.g. 10 = 10% extra)
+};
+
+export type TokenHistoryEntry = {
+  id:          string;
+  type:        'plan' | 'topup' | 'usage' | 'manual';
+  amount:      number;   // positive = credit, negative = debit (USD)
+  model?:      string;   // claude model used (for usage entries)
+  description: string;
+  timestamp:   string;   // ISO
+};
+
 // ─── White Label / Multi-tenant ─────────────────────────────────────────────
 export type WorkspacePlan   = 'trial' | 'basic' | 'pro' | 'enterprise';
 export type WorkspaceStatus = 'pending' | 'trial' | 'active' | 'suspended';
@@ -354,6 +371,10 @@ export type WorkspaceProfile = {
   };
   memberCount?: number;          // denormalized counter
   allowedPages?: Page[];         // override: which pages this workspace can see (null = use plan defaults)
+  // ── Token balance ──────────────────────────────────────────────────────────
+  tokenBalance?: number;         // USD remaining (e.g. 8.42)
+  tokenUsed?: number;            // USD consumed total (cumulative)
+  tokenPlanAllocation?: number;  // USD granted by current plan
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {
     idealClient?: string;        // לקוח אידיאלי — מי הקהל היעד
