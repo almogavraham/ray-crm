@@ -1051,191 +1051,494 @@ function LeadEnrichment({ leads, onUpdateLead, onToast, workspaceId }: {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   FEATURE 7 — WORKFLOW BUILDER
+   FEATURE 7 — WORKFLOW BUILDER (Advanced)
 ══════════════════════════════════════════════════════════════════════════════ */
+type TriggerType = 'days_inactive' | 'status_is' | 'score_above' | 'score_below' | 'budget_above' | 'source_is' | 'has_overdue_task';
+type WFActionType = 'create_task' | 'change_status' | 'send_whatsapp_ai' | 'send_email_ai' | 'add_note' | 'assign_to' | 'send_webhook';
+
+interface WorkflowCondition { id: string; type: TriggerType; value: string; }
+interface WorkflowAction    { id: string; type: WFActionType; config: Record<string, string>; }
 interface Workflow {
-  id: string; name: string; active: boolean;
-  triggerType: 'days_inactive' | 'status_is' | 'score_above';
-  triggerValue: string;
-  actionType: 'create_task' | 'change_status';
-  actionValue: string;
+  id: string; name: string; description?: string; active: boolean;
+  conditionLogic: 'and' | 'or';
+  conditions: WorkflowCondition[];
+  actions:    WorkflowAction[];
   createdAt: string; runCount: number; lastRunAt?: string;
 }
+interface RunResult {
+  lead: Lead;
+  actionResults: { actionId: string; type: WFActionType; message?: string; subject?: string; success: boolean }[];
+}
 
-function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast }: {
+const WF_STATUSES = ['חדש','בתהליך','לקוח פעיל','רימרקטינג','לא רלוונטי'];
+const WF_SOURCES  = ['אורגני','פרסום ממומן','הפניה','אינסטגרם','פייסבוק','גוגל'];
+
+const TRIGGER_LABELS: Record<TriggerType, string> = {
+  days_inactive:    'ימים ללא עדכון ≥',
+  status_is:        'סטטוס הוא',
+  score_above:      'ציון AI מעל',
+  score_below:      'ציון AI מתחת ל-',
+  budget_above:     'תקציב מעל ₪',
+  source_is:        'מקור הוא',
+  has_overdue_task: 'יש משימה באיחור',
+};
+const ACTION_LABELS: Record<WFActionType, string> = {
+  create_task:      '📋 צור משימה',
+  change_status:    '🔄 שנה סטטוס',
+  send_whatsapp_ai: '💬 שלח WhatsApp (AI)',
+  send_email_ai:    '📧 שלח מייל (AI)',
+  add_note:         '📝 הוסף הערה',
+  assign_to:        '👤 שייך לאיש צוות',
+  send_webhook:     '🔗 שלח Webhook',
+};
+const ACTION_ICON: Record<WFActionType, string> = {
+  create_task: '📋', change_status: '🔄', send_whatsapp_ai: '💬',
+  send_email_ai: '📧', add_note: '📝', assign_to: '👤', send_webhook: '🔗',
+};
+
+const mkCond = (): WorkflowCondition => ({ id: `${Date.now()}${Math.random()}`, type: 'days_inactive', value: '7' });
+const mkAct  = (): WorkflowAction    => ({ id: `${Date.now()}${Math.random()}`, type: 'create_task',   config: {} });
+
+function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId }: {
   leads: Lead[]; currentUser: string;
   onCreateTask: (task: StandaloneTask) => void;
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
+  workspaceId?: string;
 }) {
-  const { t } = useLang();
-  const [workflows,  setWorkflows]  = useState<Workflow[]>([]);
-  const [loadingWf,  setLoadingWf]  = useState(true);
-  const [showForm,   setShowForm]   = useState(false);
-  const [running,    setRunning]    = useState<string | null>(null);
-  const [form, setForm] = useState({
-    name: '', triggerType: 'days_inactive' as Workflow['triggerType'],
-    triggerValue: '7', actionType: 'create_task' as Workflow['actionType'], actionValue: '',
-  });
+  const [workflows,   setWorkflows]   = useState<Workflow[]>([]);
+  const [loadingWf,   setLoadingWf]   = useState(true);
+  const [showForm,    setShowForm]    = useState(false);
+  const [running,     setRunning]     = useState<string | null>(null);
+  const [runResults,  setRunResults]  = useState<RunResult[] | null>(null);
+  const [previewWf,   setPreviewWf]   = useState<string | null>(null);
+
+  /* form state */
+  const [fName,    setFName]    = useState('');
+  const [fDesc,    setFDesc]    = useState('');
+  const [fLogic,   setFLogic]   = useState<'and'|'or'>('and');
+  const [fConds,   setFConds]   = useState<WorkflowCondition[]>([mkCond()]);
+  const [fActions, setFActions] = useState<WorkflowAction[]>([mkAct()]);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [genAi,    setGenAi]    = useState(false);
 
   useEffect(() => {
     getDocs(collection(db, 'workflows'))
-      .then(snap => setWorkflows(snap.docs.map(d => d.data() as Workflow)))
+      .then(s => setWorkflows(s.docs.map(d => d.data() as Workflow)))
       .catch(() => {}).finally(() => setLoadingWf(false));
   }, []);
 
+  const resetForm = () => {
+    setFName(''); setFDesc(''); setFLogic('and');
+    setFConds([mkCond()]); setFActions([mkAct()]); setAiPrompt('');
+  };
+
+  /* match a lead against workflow conditions */
+  const matches = (lead: Lead, wf: Workflow) => {
+    const results = wf.conditions.map(c => {
+      switch (c.type) {
+        case 'days_inactive':    return daysSinceUpdate(lead) >= parseInt(c.value);
+        case 'status_is':        return lead.status === c.value;
+        case 'score_above':      return lead.aiScore > parseInt(c.value);
+        case 'score_below':      return lead.aiScore < parseInt(c.value);
+        case 'budget_above':     return lead.budget > parseInt(c.value);
+        case 'source_is':        return lead.source === c.value;
+        case 'has_overdue_task': {
+          const t = new Date(); t.setHours(0,0,0,0);
+          return lead.tasks.some(tk => !tk.completed && (() => { try { return new Date(tk.date+'T00:00:00') < t; } catch { return false; } })());
+        }
+        default: return false;
+      }
+    });
+    return wf.conditionLogic === 'and' ? results.every(Boolean) : results.some(Boolean);
+  };
+
+  const matchLeads = (wf: Workflow) => leads.filter(l => matches(l, wf));
+
+  /* AI: build workflow from natural language */
+  const buildWithAi = async () => {
+    if (!aiPrompt.trim()) return;
+    const apiKey = getApiKey();
+    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    setGenAi(true);
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-5', max_tokens: 800,
+        messages: [{ role: 'user', content:
+          `בנה אוטומציה CRM מהתיאור: "${aiPrompt}"\n\nטריגרים: ${Object.keys(TRIGGER_LABELS).join(', ')}\nפעולות: ${Object.keys(ACTION_LABELS).join(', ')}\nסטטוסים: ${WF_STATUSES.join(', ')}\nמקורות: ${WF_SOURCES.join(', ')}\n\nהחזר JSON בלבד ללא markdown:\n{"name":"","description":"","conditionLogic":"and","conditions":[{"id":"1","type":"","value":""}],"actions":[{"id":"1","type":"","config":{}}]}\n\nעבור send_whatsapp_ai/send_email_ai שים config: {"tone":"ידידותי","prompt":""}`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = res.content?.find((b: any) => b.type === 'text')?.text ?? '{}';
+      const p   = JSON.parse(raw.replace(/^```json\s*/,'').replace(/\s*```$/,''));
+      if (p.name)             setFName(p.name);
+      if (p.description)      setFDesc(p.description);
+      if (p.conditionLogic)   setFLogic(p.conditionLogic);
+      if (p.conditions?.length) setFConds(p.conditions.map((c: WorkflowCondition) => ({ ...c, id: `${Date.now()}${Math.random()}` })));
+      if (p.actions?.length)    setFActions(p.actions.map((a: WorkflowAction) => ({ ...a, id: `${Date.now()}${Math.random()}` })));
+      onToast?.('אוטומציה נבנתה על ידי AI ✓', 'success');
+    } catch { onToast?.('שגיאה בבניית האוטומציה', 'error'); }
+    finally  { setGenAi(false); }
+  };
+
   const saveWorkflow = async () => {
-    if (!form.name.trim() || !form.actionValue.trim()) { onToast?.('מלא שם ופעולה', 'error'); return; }
+    if (!fName.trim()) { onToast?.('חסר שם לאוטומציה', 'error'); return; }
     const wf: Workflow = {
-      id: Date.now().toString(), name: form.name, active: true,
-      triggerType: form.triggerType, triggerValue: form.triggerValue,
-      actionType: form.actionType, actionValue: form.actionValue,
+      id: Date.now().toString(), name: fName, description: fDesc, active: true,
+      conditionLogic: fLogic, conditions: fConds, actions: fActions,
       createdAt: new Date().toISOString(), runCount: 0,
     };
     await setDoc(doc(db, 'workflows', wf.id), wf).catch(() => {});
-    setWorkflows(prev => [...prev, wf]);
-    setShowForm(false);
-    setForm({ name: '', triggerType: 'days_inactive', triggerValue: '7', actionType: 'create_task', actionValue: '' });
+    setWorkflows(p => [...p, wf]);
+    setShowForm(false); resetForm();
     onToast?.('אוטומציה נוצרה ✓', 'success');
   };
 
   const toggleWf = async (wf: Workflow) => {
-    const updated = { ...wf, active: !wf.active };
-    await setDoc(doc(db, 'workflows', wf.id), updated).catch(() => {});
-    setWorkflows(prev => prev.map(w => w.id === wf.id ? updated : w));
+    const u = { ...wf, active: !wf.active };
+    await setDoc(doc(db, 'workflows', wf.id), u).catch(() => {});
+    setWorkflows(p => p.map(w => w.id === wf.id ? u : w));
   };
 
   const deleteWf = async (id: string) => {
     await deleteDoc(doc(db, 'workflows', id)).catch(() => {});
-    setWorkflows(prev => prev.filter(w => w.id !== id));
+    setWorkflows(p => p.filter(w => w.id !== id));
     onToast?.('אוטומציה נמחקה', 'info');
   };
 
   const runWf = async (wf: Workflow) => {
-    setRunning(wf.id);
-    const matching = leads.filter(l => {
-      if (wf.triggerType === 'days_inactive') return daysSinceUpdate(l) >= parseInt(wf.triggerValue);
-      if (wf.triggerType === 'status_is')    return l.status === wf.triggerValue;
-      if (wf.triggerType === 'score_above')  return l.aiScore >= parseInt(wf.triggerValue);
-      return false;
-    });
-    let count = 0;
-    for (const lead of matching) {
-      if (wf.actionType === 'create_task') {
-        onCreateTask({ id: `${Date.now()}-${lead.id}`, description: wf.actionValue.replace('{company}', lead.company), date: new Date().toISOString().split('T')[0], time: '09:00', priority: 'medium' as TaskPriority, completed: false, assignedTo: currentUser, assignedBy: 'אוטומציה', createdAt: new Date().toISOString(), leadId: lead.id });
-      } else if (wf.actionType === 'change_status') {
-        onUpdateLead({ ...lead, status: wf.actionValue as Lead['status'], lastUpdate: new Date().toLocaleDateString('he-IL') });
-      }
-      count++;
+    const matching = matchLeads(wf);
+    if (!matching.length) { onToast?.('אין לידים תואמים', 'info'); return; }
+    const hasAiAction = wf.actions.some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
+    if (hasAiAction && workspaceId) {
+      const ok = await hasBalance(workspaceId);
+      if (!ok) { onToast?.('⚠️ אין מספיק טוקנים לפעולות AI.', 'error'); return; }
     }
+    setRunning(wf.id);
+    const results: RunResult[] = [];
+    for (const lead of matching) {
+      const actionResults: RunResult['actionResults'] = [];
+      for (const action of wf.actions) {
+        try {
+          if (action.type === 'create_task') {
+            const desc = (action.config.description || 'מעקב — {company}')
+              .replace('{company}', lead.company).replace('{name}', lead.contactName);
+            onCreateTask({ id: `${Date.now()}-${lead.id}`, description: desc,
+              date: new Date().toISOString().split('T')[0], time: '09:00',
+              priority: (action.config.priority || 'medium') as TaskPriority,
+              completed: false, assignedTo: currentUser, assignedBy: 'אוטומציה',
+              createdAt: new Date().toISOString(), leadId: lead.id });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'change_status') {
+            onUpdateLead({ ...lead, status: action.config.status as Lead['status'],
+              lastUpdate: new Date().toLocaleDateString('he-IL') });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'add_note') {
+            const noteText = (action.config.noteText || '')
+              .replace('{company}', lead.company).replace('{name}', lead.contactName);
+            onUpdateLead({ ...lead, notes: [...lead.notes,
+              { id: Date.now().toString(), text: noteText, author: 'אוטומציה', timestamp: new Date().toISOString() }] });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'assign_to') {
+            onUpdateLead({ ...lead, assignedTo: action.config.assignee || currentUser });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'send_webhook') {
+            if (action.config.url) {
+              await fetch(action.config.url, {
+                method: action.config.method || 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lead, triggeredBy: wf.name, at: new Date().toISOString() }),
+              });
+            }
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'send_whatsapp_ai' || action.type === 'send_email_ai') {
+            const apiKey = getApiKey();
+            if (!apiKey) { actionResults.push({ actionId: action.id, type: action.type, success: false }); continue; }
+            const client   = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+            const tone     = action.config.tone || 'ידידותי';
+            const hint     = action.config.prompt || '';
+            const lastNote = lead.notes[lead.notes.length - 1]?.text ?? '';
+            const isWA     = action.type === 'send_whatsapp_ai';
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const res: any = await (client.messages as any).create({
+              model: 'claude-opus-4-5', max_tokens: 600,
+              messages: [{ role: 'user', content: isWA
+                ? `כתוב הודעת ווטסאפ ב${tone} ל${lead.company} (${lead.contactName}), סטטוס: ${lead.status}, תקציב: ₪${lead.budget}/חודש.${lastNote ? ` הערה: ${lastNote}` : ''}${hint ? ` הנחיה: ${hint}` : ''}\nכללים: עברית, 2-3 משפטים, ללא חתימה, טקסט בלבד.`
+                : `כתוב מייל ${tone} ל${lead.company} (${lead.contactName}), סטטוס: ${lead.status}.${hint ? ` הנחיה: ${hint}` : ''}\nהחזר JSON בלבד: {"subject":"","body":""}`,
+              }],
+            });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const rawText = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+            const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+            if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', `Workflow: ${wf.name}`).catch(() => {});
+
+            if (isWA) {
+              actionResults.push({ actionId: action.id, type: action.type, message: rawText, success: true });
+            } else {
+              const parsed = (() => { try { return JSON.parse(rawText.replace(/^```json\s*/,'').replace(/\s*```$/,'')); } catch { return { subject: '', body: rawText }; } })();
+              actionResults.push({ actionId: action.id, type: action.type, message: parsed.body || rawText, subject: parsed.subject || '', success: true });
+            }
+          }
+        } catch { actionResults.push({ actionId: action.id, type: action.type, success: false }); }
+      }
+      results.push({ lead, actionResults });
+    }
+
     const updated = { ...wf, runCount: wf.runCount + 1, lastRunAt: new Date().toISOString() };
     await setDoc(doc(db, 'workflows', wf.id), updated).catch(() => {});
-    setWorkflows(prev => prev.map(w => w.id === wf.id ? updated : w));
+    setWorkflows(p => p.map(w => w.id === wf.id ? updated : w));
     setRunning(null);
-    onToast?.(`הופעל על ${count} לידים ✓`, 'success');
+
+    if (results.some(r => r.actionResults.some(a => a.message))) {
+      setRunResults(results);
+    } else {
+      onToast?.(`הופעל על ${results.length} לידים ✓`, 'success');
+    }
   };
 
-  const TLABELS: Record<string, string> = { days_inactive: t('agents.triggerDaysInactive') + ' ≥', status_is: 'Status =', score_above: 'AI Score ≥' };
-  const ALABELS: Record<string, string> = { create_task: t('agents.actionCreateTask') + ':', change_status: t('agents.actionChangeStatus') + ':' };
+  /* ── Condition row ── */
+  const CondRow = ({ c, idx }: { c: WorkflowCondition; idx: number }) => (
+    <div className="flex items-center gap-2 flex-wrap bg-slate-900/60 border border-slate-700/50 rounded-xl px-3 py-2.5">
+      {idx > 0 && (
+        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${fLogic === 'and' ? 'bg-blue-900/50 text-blue-300' : 'bg-violet-900/50 text-violet-300'}`}>
+          {fLogic === 'and' ? 'AND' : 'OR'}
+        </span>
+      )}
+      <select value={c.type} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, type: e.target.value as TriggerType, value: '' } : x))}
+        className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none flex-1 min-w-32">
+        {(Object.keys(TRIGGER_LABELS) as TriggerType[]).map(k => <option key={k} value={k}>{TRIGGER_LABELS[k]}</option>)}
+      </select>
+      {c.type === 'status_is' ? (
+        <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      ) : c.type === 'source_is' ? (
+        <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          {WF_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      ) : c.type !== 'has_overdue_task' ? (
+        <input type="number" value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          placeholder="ערך" className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none w-20"/>
+      ) : <span className="text-slate-500 text-xs">(כל ליד עם משימה באיחור)</span>}
+      {fConds.length > 1 && (
+        <button onClick={() => setFConds(cs => cs.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={12}/></button>
+      )}
+    </div>
+  );
 
+  /* ── Action row ── */
+  const ActionRow = ({ a, idx }: { a: WorkflowAction; idx: number }) => (
+    <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl px-3 py-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2 py-0.5 rounded-full font-bold flex-shrink-0">#{idx+1}</span>
+        <select value={a.type} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, type: e.target.value as WFActionType, config: {} } : x))}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none flex-1">
+          {(Object.keys(ACTION_LABELS) as WFActionType[]).map(k => <option key={k} value={k}>{ACTION_LABELS[k]}</option>)}
+        </select>
+        {fActions.length > 1 && (
+          <button onClick={() => setFActions(as => as.filter(x => x.id !== a.id))} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={12}/></button>
+        )}
+      </div>
+      {a.type === 'create_task' && (
+        <div className="space-y-1.5">
+          <input value={a.config.description || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, description: e.target.value } } : x))}
+            placeholder="תיאור משימה — {company} {name}" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+          <select value={a.config.priority || 'medium'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, priority: e.target.value } } : x))}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            <option value="high">🔴 דחוף</option><option value="medium">🟡 בינוני</option><option value="low">🟢 נמוך</option>
+          </select>
+        </div>
+      )}
+      {a.type === 'change_status' && (
+        <select value={a.config.status || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, status: e.target.value } } : x))}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          <option value="">— בחר סטטוס —</option>
+          {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+      {(a.type === 'send_whatsapp_ai' || a.type === 'send_email_ai') && (
+        <div className="space-y-1.5">
+          <select value={a.config.tone || 'ידידותי'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, tone: e.target.value } } : x))}
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            <option value="ידידותי">ידידותי</option><option value="מקצועי">מקצועי</option>
+            <option value="חמים">חמים</option><option value="תכליתי">תכליתי</option>
+          </select>
+          <input value={a.config.prompt || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, prompt: e.target.value } } : x))}
+            placeholder={a.type === 'send_whatsapp_ai' ? 'הנחיה (אופציונלי) — "הזכר את הפגישה"' : 'נושא / הנחיה (אופציונלי)'}
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+        </div>
+      )}
+      {a.type === 'add_note' && (
+        <textarea value={a.config.noteText || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, noteText: e.target.value } } : x))}
+          placeholder="טקסט ההערה — {company} {name}" rows={2}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right resize-none"/>
+      )}
+      {a.type === 'assign_to' && (
+        <input value={a.config.assignee || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, assignee: e.target.value } } : x))}
+          placeholder="שם איש צוות" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+      )}
+      {a.type === 'send_webhook' && (
+        <div className="space-y-1.5">
+          <input value={a.config.url || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, url: e.target.value } } : x))}
+            placeholder="https://hooks.zapier.com/..." type="url"
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none"/>
+          <select value={a.config.method || 'POST'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, method: e.target.value } } : x))}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            <option>POST</option><option>GET</option>
+          </select>
+        </div>
+      )}
+    </div>
+  );
+
+  /* ══ RENDER ══ */
   return (
     <div className="space-y-4">
+      {/* Header */}
       <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Settings size={18} className="text-black"/></div>
-          <div><p className="text-white font-bold text-sm">{t('agents.workflowTitle')}</p><p className="text-zinc-500 text-xs">{t('agents.workflowDesc')}</p></div>
+          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Zap size={18} className="text-black"/></div>
+          <div>
+            <p className="text-white font-bold text-sm">בונה אוטומציות מתקדם</p>
+            <p className="text-zinc-500 text-xs">AI WhatsApp · מייל · Webhook · תנאים מרובים · AND/OR</p>
+          </div>
         </div>
-        <button onClick={() => setShowForm(v => !v)} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">
-          <Plus size={14}/> {t('agents.newAutomation')}
+        <button onClick={() => { setShowForm(v => !v); if (showForm) resetForm(); }}
+          className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">
+          <Plus size={14}/> אוטומציה חדשה
         </button>
       </div>
 
+      {/* ── FORM ── */}
       {showForm && (
-        <div className="bg-slate-800/60 border border-amber-700/40 rounded-2xl p-5 space-y-4">
-          <h3 className="text-white font-bold text-sm">✨ {t('agents.newAutomation')}</h3>
-          <input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-            placeholder={t('agents.automationName')}
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30 text-right"/>
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <p className="text-amber-400 text-xs font-bold">{t('agents.trigger')}</p>
-              <select value={form.triggerType} onChange={e => setForm(p => ({ ...p, triggerType: e.target.value as Workflow['triggerType'] }))}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                <option value="days_inactive">{t('agents.triggerDaysInactive')}</option>
-                <option value="status_is">{t('agents.triggerStatusIs')}</option>
-                <option value="score_above">{t('agents.triggerScoreAbove')}</option>
-              </select>
-              {form.triggerType === 'status_is' ? (
-                <select value={form.triggerValue} onChange={e => setForm(p => ({ ...p, triggerValue: e.target.value }))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                  {['חדש','בתהליך','לקוח פעיל','רימרקטינג','לא רלוונטי'].map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              ) : (
-                <input type="number" value={form.triggerValue} onChange={e => setForm(p => ({ ...p, triggerValue: e.target.value }))} placeholder="ערך"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none"/>
-              )}
-            </div>
-            <div className="space-y-2">
-              <p className="text-blue-400 text-xs font-bold">{t('agents.action')}</p>
-              <select value={form.actionType} onChange={e => setForm(p => ({ ...p, actionType: e.target.value as Workflow['actionType'], actionValue: '' }))}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                <option value="create_task">{t('agents.actionCreateTask')}</option>
-                <option value="change_status">{t('agents.actionChangeStatus')}</option>
-              </select>
-              {form.actionType === 'create_task' ? (
-                <input value={form.actionValue} onChange={e => setForm(p => ({ ...p, actionValue: e.target.value }))}
-                  placeholder="תיאור משימה (השתמש {company})"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none text-right"/>
-              ) : (
-                <select value={form.actionValue} onChange={e => setForm(p => ({ ...p, actionValue: e.target.value }))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none">
-                  <option value="">— בחר סטטוס —</option>
-                  {['חדש','בתהליך','לקוח פעיל','רימרקטינג','לא רלוונטי'].map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              )}
+        <div className="bg-slate-800/60 border border-amber-700/40 rounded-2xl p-5 space-y-5">
+          <div className="flex items-center justify-between">
+            <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-500 hover:text-white text-xs transition-colors">✕ ביטול</button>
+            <h3 className="text-white font-bold text-sm">⚡ בנה אוטומציה חדשה</h3>
+          </div>
+
+          {/* AI builder from natural language */}
+          <div className="bg-violet-900/20 border border-violet-700/40 rounded-xl p-3 space-y-2">
+            <p className="text-violet-300 text-xs font-bold text-right">✨ תאר מה אתה רוצה — AI יבנה בשבילך</p>
+            <div className="flex gap-2">
+              <button onClick={buildWithAi} disabled={genAi || !aiPrompt.trim()}
+                className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex-shrink-0">
+                {genAi ? <><Loader2 size={11} className="animate-spin"/> בונה...</> : <><Brain size={11}/> בנה</>}
+              </button>
+              <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
+                placeholder='למשל: "שלח וואטסאפ ידידותי לכל ליד שלא עדכנתי 10 ימים"'
+                className="flex-1 bg-slate-900 border border-violet-700/40 rounded-lg px-3 py-2 text-xs text-white focus:outline-none text-right"/>
             </div>
           </div>
-          <div className="flex gap-3 justify-end">
-            <button onClick={() => setShowForm(false)} className="text-zinc-400 hover:text-white text-sm px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors">{t('common.cancel')}</button>
-            <button onClick={saveWorkflow} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-6 py-2 rounded-xl transition-colors flex items-center gap-2"><CheckCircle2 size={14}/> {t('common.save')}</button>
+
+          <input value={fName} onChange={e => setFName(e.target.value)} placeholder="שם האוטומציה *"
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none text-right"/>
+          <input value={fDesc} onChange={e => setFDesc(e.target.value)} placeholder="תיאור (אופציונלי)"
+            className="w-full bg-slate-900 border border-slate-600/60 rounded-xl px-3 py-2 text-xs text-slate-400 focus:outline-none text-right"/>
+
+          {/* Conditions */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex gap-2">
+                <button onClick={() => setFConds(cs => [...cs, mkCond()])}
+                  className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 px-2 py-1 rounded-lg hover:bg-amber-900/20 transition-colors">
+                  <Plus size={11}/> הוסף תנאי
+                </button>
+                {fConds.length > 1 && (
+                  <button onClick={() => setFLogic(l => l === 'and' ? 'or' : 'and')}
+                    className={`text-[10px] font-black px-2.5 py-1 rounded-full border transition-colors ${fLogic === 'and' ? 'bg-blue-900/50 text-blue-300 border-blue-700/40' : 'bg-violet-900/50 text-violet-300 border-violet-700/40'}`}>
+                    {fLogic === 'and' ? '🔗 AND — כל התנאים' : '⚡ OR — אחד מהתנאים'}
+                  </button>
+                )}
+              </div>
+              <p className="text-amber-400 text-xs font-bold">🔀 תנאים</p>
+            </div>
+            {fConds.map((c, i) => <CondRow key={c.id} c={c} idx={i}/>)}
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <button onClick={() => setFActions(as => [...as, mkAct()])}
+                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded-lg hover:bg-blue-900/20 transition-colors">
+                <Plus size={11}/> הוסף פעולה
+              </button>
+              <p className="text-blue-400 text-xs font-bold">⚡ פעולות</p>
+            </div>
+            {fActions.map((a, i) => <ActionRow key={a.id} a={a} idx={i}/>)}
+          </div>
+
+          <div className="flex justify-start">
+            <button onClick={saveWorkflow}
+              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-6 py-2 rounded-xl transition-colors flex items-center gap-2">
+              <CheckCircle2 size={14}/> שמור אוטומציה
+            </button>
           </div>
         </div>
       )}
 
+      {/* Workflows list */}
       {loadingWf ? (
         <div className="text-center py-8"><Loader2 size={20} className="animate-spin text-slate-500 mx-auto"/></div>
       ) : workflows.length === 0 ? (
         <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
-          <Settings size={36} className="text-slate-700 mx-auto mb-3"/>
-          <p className="text-white font-bold">{t('agents.noAutomations')}</p>
-          <p className="text-zinc-400 text-sm mt-1">{t('agents.createFirstAutomation')}</p>
+          <Zap size={36} className="text-slate-700 mx-auto mb-3"/>
+          <p className="text-white font-bold">אין אוטומציות עדיין</p>
+          <p className="text-zinc-400 text-sm mt-1">צור את האוטומציה הראשונה שלך ↑</p>
         </div>
       ) : (
         <div className="space-y-3">
           {workflows.map(wf => {
-            const matchCount = leads.filter(l => {
-              if (wf.triggerType === 'days_inactive') return daysSinceUpdate(l) >= parseInt(wf.triggerValue);
-              if (wf.triggerType === 'status_is')    return l.status === wf.triggerValue;
-              if (wf.triggerType === 'score_above')  return l.aiScore >= parseInt(wf.triggerValue);
-              return false;
-            }).length;
+            const mc     = matchLeads(wf).length;
+            const hasAi  = wf.actions.some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
+            const isPrev = previewWf === wf.id;
             return (
               <div key={wf.id} className={`border rounded-2xl p-4 transition-all ${wf.active ? 'bg-slate-800/60 border-slate-700/50' : 'bg-black/40 border-slate-800/50 opacity-60'}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex-1 min-w-0 text-right">
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      {hasAi && <span className="text-[9px] bg-violet-900/40 text-violet-300 border border-violet-700/30 px-1.5 py-0.5 rounded-full font-bold">AI</span>}
+                      {mc > 0 && wf.active && <span className="text-[10px] bg-amber-600/30 text-amber-300 border border-amber-600/40 px-2 py-0.5 rounded-full font-bold">{mc} לידים</span>}
                       <span className="text-white font-bold text-sm">{wf.name}</span>
-                      {wf.active && matchCount > 0 && <span className="text-[10px] bg-amber-600/30 text-amber-300 border border-amber-600/40 px-2 py-0.5 rounded-full font-bold">{matchCount} לידים</span>}
                     </div>
-                    <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs">
-                      <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full">{t('agents.ifCondition')} {TLABELS[wf.triggerType]} {wf.triggerValue}</span>
-                      <ChevronRight size={10} className="text-slate-600"/>
-                      <span className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30">{t('agents.thenAction')} {ALABELS[wf.actionType]} "{wf.actionValue}"</span>
+                    {wf.description && <p className="text-slate-500 text-xs mt-0.5">{wf.description}</p>}
+                    {/* Conditions + actions summary */}
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap justify-end">
+                      {wf.conditions.map((c, i) => (
+                        <span key={c.id} className="flex items-center gap-1">
+                          {i > 0 && <span className={`text-[9px] font-black px-1 rounded ${wf.conditionLogic === 'and' ? 'text-blue-400' : 'text-violet-400'}`}>{wf.conditionLogic.toUpperCase()}</span>}
+                          <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{TRIGGER_LABELS[c.type]} {c.value}</span>
+                        </span>
+                      ))}
+                      <span className="text-slate-600 text-[10px]">→</span>
+                      {wf.actions.map(a => (
+                        <span key={a.id} className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30 text-[10px]">
+                          {ACTION_ICON[a.type]} {ACTION_LABELS[a.type].replace(/^.\s/,'')}
+                        </span>
+                      ))}
                     </div>
-                    {wf.runCount > 0 && <p className="text-slate-600 text-[10px] mt-1">{t('agents.runCount')} {wf.runCount} {t('agents.times')}</p>}
+                    {wf.runCount > 0 && (
+                      <p className="text-slate-600 text-[10px] mt-1">
+                        הופעל {wf.runCount} פעמים{wf.lastRunAt ? ` · אחרון: ${new Date(wf.lastRunAt).toLocaleDateString('he-IL')}` : ''}
+                      </p>
+                    )}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
-                    <button onClick={() => runWf(wf)} disabled={running === wf.id || !wf.active || matchCount === 0} title="הפעל עכשיו"
+                    <button onClick={() => setPreviewWf(isPrev ? null : wf.id)} title="תצוגה מקדימה"
+                      className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors ${isPrev ? 'bg-slate-600 border-slate-500 text-white' : 'bg-slate-700/40 border-slate-600/40 text-slate-400 hover:text-white'}`}>
+                      <Search size={12}/>
+                    </button>
+                    <button onClick={() => runWf(wf)} disabled={running === wf.id || !wf.active || mc === 0} title="הפעל עכשיו"
                       className="w-8 h-8 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 border border-amber-600/40 flex items-center justify-center text-amber-400 transition-colors disabled:opacity-30">
                       {running === wf.id ? <Loader2 size={12} className="animate-spin"/> : <Play size={12}/>}
                     </button>
@@ -1249,9 +1552,74 @@ function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToa
                     </button>
                   </div>
                 </div>
+                {/* Preview panel */}
+                {isPrev && (
+                  <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-1">
+                    <p className="text-slate-400 text-xs text-right font-bold mb-2">לידים שיושפעו ({mc}):</p>
+                    {mc === 0 ? (
+                      <p className="text-slate-600 text-xs text-center py-2">אין לידים תואמים כרגע</p>
+                    ) : matchLeads(wf).map(l => (
+                      <div key={l.id} className="flex items-center justify-between bg-slate-900/60 rounded-lg px-3 py-1.5">
+                        <span className="text-slate-500 text-[10px]">{l.status} · {daysSinceUpdate(l)}י׳</span>
+                        <span className="text-white text-xs font-medium">{l.company}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── RUN RESULTS MODAL ── */}
+      {runResults && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setRunResults(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <button onClick={() => setRunResults(null)} className="text-slate-400 hover:text-white text-sm transition-colors">✕ סגור</button>
+              <h3 className="text-white font-bold">✅ תוצאות — {runResults.length} לידים</h3>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh] p-4 space-y-4">
+              {runResults.map(({ lead, actionResults }) => (
+                <div key={lead.id} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 space-y-3">
+                  <p className="text-white font-bold text-sm text-right">
+                    {lead.company} <span className="text-slate-400 font-normal text-xs">· {lead.contactName}</span>
+                  </p>
+                  {actionResults.map(ar => {
+                    if (!ar.message) return null;
+                    const waNum = lead.phone ? `972${lead.phone.replace(/^0/,'').replace(/\D/g,'')}` : '';
+                    return (
+                      <div key={ar.actionId} className="space-y-2">
+                        <p className="text-[10px] text-slate-400 font-bold text-right">{ACTION_LABELS[ar.type]}</p>
+                        {ar.subject && <p className="text-slate-300 text-xs font-semibold text-right">נושא: {ar.subject}</p>}
+                        <div className="bg-slate-900 rounded-lg px-3 py-2.5 text-sm text-slate-200 text-right whitespace-pre-wrap leading-relaxed">{ar.message}</div>
+                        <div className="flex gap-2 flex-wrap">
+                          <button onClick={() => { navigator.clipboard.writeText(ar.message!); onToast?.('הועתק ✓','success'); }}
+                            className="flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-lg transition-colors">
+                            <Copy size={9}/> העתק
+                          </button>
+                          {ar.type === 'send_whatsapp_ai' && waNum && (
+                            <a href={`https://wa.me/${waNum}?text=${encodeURIComponent(ar.message!)}`} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1 text-xs bg-green-800/60 hover:bg-green-700/60 text-green-300 border border-green-700/40 px-2.5 py-1 rounded-lg transition-colors">
+                              <MessageCircle size={9}/> שלח WhatsApp
+                            </a>
+                          )}
+                          {ar.type === 'send_email_ai' && lead.email && (
+                            <a href={`mailto:${lead.email}?subject=${encodeURIComponent(ar.subject||'')}&body=${encodeURIComponent(ar.message!)}`}
+                              target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1 text-xs bg-blue-900/50 hover:bg-blue-800/50 text-blue-300 border border-blue-700/40 px-2.5 py-1 rounded-lg transition-colors">
+                              📧 פתח מייל
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
