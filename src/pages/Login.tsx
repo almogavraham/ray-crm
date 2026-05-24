@@ -4,6 +4,7 @@ import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firesto
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import ForgotPassword from './ForgotPassword';
+import { useLang } from '../contexts/LangContext';
 
 interface WorkspaceBranding {
   name: string;
@@ -12,6 +13,7 @@ interface WorkspaceBranding {
 
 export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; onSignUp?: () => void; onBack?: () => void }) {
   const { signIn } = useAuth();
+  const { t } = useLang();
   const [email,      setEmail]      = useState('');
   const [password,   setPassword]   = useState('');
   const [showPw,     setShowPw]     = useState(false);
@@ -121,7 +123,7 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
 
           <form onSubmit={handle} className="space-y-5">
             <div>
-              <label className="block text-slate-400 text-sm font-medium mb-2">אימייל</label>
+              <label className="block text-slate-400 text-sm font-medium mb-2">{t('auth.email')}</label>
               <div className="relative">
                 <Mail size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -134,7 +136,7 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
             </div>
 
             <div>
-              <label className="block text-slate-400 text-sm font-medium mb-2">סיסמה</label>
+              <label className="block text-slate-400 text-sm font-medium mb-2">{t('auth.password')}</label>
               <div className="relative">
                 <Lock size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -158,13 +160,13 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
 
             <button type="submit" disabled={loading}
               className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25">
-              {loading ? 'מתחבר...' : 'התחברות'}
+              {loading ? t('common.loading') : t('auth.signIn')}
             </button>
 
             <div className="text-center pt-1">
               <button type="button" onClick={() => setShowForgot(true)}
                 className="text-slate-500 hover:text-indigo-400 text-sm transition-colors">
-                שכחתי סיסמה
+                {t('auth.forgotPassword')}
               </button>
             </div>
           </form>
@@ -173,12 +175,12 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
         {/* Sign-up link */}
         {onSignUp && !branding && (
           <p className="text-center text-slate-500 text-sm mt-5">
-            אין לך חשבון עדיין?{' '}
+            {t('auth.noAccount')}{' '}
             <button
               onClick={onSignUp}
               className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
             >
-              התחל ניסיון חינם ←
+              {t('landing.hero.cta')} ←
             </button>
           </p>
         )}

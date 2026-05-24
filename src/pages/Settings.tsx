@@ -5,6 +5,7 @@ import {
   ChevronLeft, Monitor, Moon, Globe, Users2, Copy, Link,
   Mail, KeyRound, Lock, Eye, EyeOff, Users, Send, Trash2,
 } from 'lucide-react';
+import { useLang } from '../contexts/LangContext';
 import { collection, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import {
   sendPasswordResetEmail,
@@ -78,6 +79,7 @@ export default function Settings({
       ]
     : BASE_SECTIONS;
 
+  const { t, lang, setLang } = useLang();
   const [section, setSection]     = useState<Section>('profile');
   const [local, setLocal]         = useState<AppSettings>({ ...settings });
   const [saved, setSaved]         = useState(false);
@@ -414,7 +416,7 @@ export default function Settings({
         {/* Desktop: vertical sidebar */}
         <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden sticky top-[80px]">
           <div className="px-4 py-3.5 border-b border-slate-100 bg-gradient-to-l from-neutral-50 to-white">
-            <div className="font-bold text-slate-800">הגדרות</div>
+            <div className="font-bold text-slate-800">{t('settings.title')}</div>
             <div className="text-xs text-slate-400 mt-0.5">RAY Lead Manager</div>
           </div>
           <nav className="p-1.5 space-y-0.5">
@@ -500,7 +502,39 @@ export default function Settings({
         {/* ── APPEARANCE ── */}
         {section === 'appearance' && (
           <>
-            <SectionHeader icon={<Palette size={18} />} title="מראה ותצוגה" desc="התאם את הממשק לטעמך" />
+            <SectionHeader icon={<Palette size={18} />} title={t('settings.appearance')} desc="התאם את הממשק לטעמך" />
+
+            {/* Language section */}
+            <Card>
+              <div className="font-semibold text-slate-700 mb-3 text-right flex items-center gap-2 justify-end">
+                <Globe size={15} className="text-slate-400" />
+                {t('settings.language')}
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setLang('he')}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all ${
+                    lang === 'he'
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="text-base">🇮🇱</span>
+                  {t('settings.hebrew')}
+                </button>
+                <button
+                  onClick={() => setLang('en')}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all ${
+                    lang === 'en'
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="text-base">🇺🇸</span>
+                  {t('settings.english')}
+                </button>
+              </div>
+            </Card>
             <Card>
               <FormField label="מצב תצוגה קומפקטי">
                 <div className="flex items-center justify-between">

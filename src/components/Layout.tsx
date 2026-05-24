@@ -3,9 +3,10 @@ import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, Settings, CreditCard,
   Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot, Shield,
-  Clock, AlertTriangle, Search,
+  Clock, AlertTriangle, Search, Globe,
 } from 'lucide-react';
 import type { Page } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,38 +25,43 @@ interface LayoutProps {
   workspaceName?: string;
 }
 
+// Static fallback labels (Hebrew) used for currentLabel lookup before t() is available
 const NAV_GROUPS = [
   {
     label: 'ניהול לקוחות',
+    labelKey: 'nav.groupClients',
     items: [
-      { page: 'home'      as Page, label: 'לוח בקרה',     icon: LayoutDashboard },
-      { page: 'dashboard' as Page, label: 'לידים',         icon: Users           },
-      { page: 'kanban'    as Page, label: 'פייפליין',      icon: GitBranch       },
-      { page: 'deals'     as Page, label: 'לקוחות פעילים', icon: Briefcase       },
-      { page: 'tasks'     as Page, label: 'משימות',        icon: CheckSquare, badge: true },
+      { page: 'home'      as Page, label: 'לוח בקרה',     labelKey: 'nav.home',      icon: LayoutDashboard },
+      { page: 'dashboard' as Page, label: 'לידים',         labelKey: 'nav.dashboard', icon: Users           },
+      { page: 'kanban'    as Page, label: 'פייפליין',      labelKey: 'nav.kanban',    icon: GitBranch       },
+      { page: 'deals'     as Page, label: 'לקוחות פעילים', labelKey: 'nav.deals',     icon: Briefcase       },
+      { page: 'tasks'     as Page, label: 'משימות',        labelKey: 'nav.tasks',     icon: CheckSquare, badge: true },
     ],
   },
   {
     label: 'שיווק',
+    labelKey: 'nav.groupMarketing',
     items: [
-      { page: 'content'  as Page, label: 'קריאייטיב', icon: Layers    },
-      { page: 'overview' as Page, label: 'דוחות',     icon: BarChart3 },
+      { page: 'content'  as Page, label: 'קריאייטיב', labelKey: 'nav.content',  icon: Layers    },
+      { page: 'overview' as Page, label: 'דוחות',     labelKey: 'nav.overview', icon: BarChart3 },
     ],
   },
   {
     label: 'כלים חכמים',
+    labelKey: 'nav.groupTools',
     items: [
-      { page: 'agents'   as Page, label: 'סוכנים AI',     icon: Bot        },
-      { page: 'ai'       as Page, label: 'עוזר AI',       icon: Sparkles   },
-      { page: 'settings' as Page, label: 'הגדרות',        icon: Settings   },
-      { page: 'billing'  as Page, label: 'מנוי ותשלום',   icon: CreditCard },
+      { page: 'agents'   as Page, label: 'סוכנים AI',   labelKey: 'nav.agents',   icon: Bot        },
+      { page: 'ai'       as Page, label: 'עוזר AI',     labelKey: 'nav.ai',       icon: Sparkles   },
+      { page: 'settings' as Page, label: 'הגדרות',      labelKey: 'nav.settings', icon: Settings   },
+      { page: 'billing'  as Page, label: 'מנוי ותשלום', labelKey: 'nav.billing',  icon: CreditCard },
     ],
   },
 ];
 
 const SUPER_ADMIN_GROUP = {
   label: 'מערכת',
-  items: [{ page: 'admin' as Page, label: 'לוח אדמין', icon: Shield }],
+  labelKey: 'nav.groupSystem',
+  items: [{ page: 'admin' as Page, label: 'לוח אדמין', labelKey: 'nav.admin', icon: Shield }],
 };
 
 /* ── Sidebar inner ───────────────────────────────────────────────────────── */
@@ -77,6 +83,7 @@ function SidebarInner({
   filteredGroups, currentPage, onGo, onNewLead,
   overdueBadge, logoUrl, workspaceName, userInitials, userName, isAdmin, onSignOut,
 }: SidebarProps) {
+  const { t, lang, setLang } = useLang();
   return (
     <div className="flex flex-col h-full">
 
@@ -110,7 +117,7 @@ function SidebarInner({
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#4f46e5')}
         >
           <Plus size={13} className="group-hover:rotate-90 transition-transform duration-200" />
-          ליד חדש
+          {t('nav.newLead')}
         </button>
       </div>
 
@@ -120,9 +127,10 @@ function SidebarInner({
           <div key={group.label} className="mb-1">
             <p className="text-[9px] font-bold uppercase tracking-widest px-3 pt-4 pb-1.5 select-none"
               style={{ color: '#cbd5e1' }}>
-              {group.label}
+              {t((group as typeof NAV_GROUPS[0]).labelKey ?? group.label)}
             </p>
-            {group.items.map(({ page, label, icon: Icon, badge }) => {
+            {group.items.map(({ page, label, icon: Icon, badge, ...rest }) => {
+              const labelKey = (rest as { labelKey?: string }).labelKey;
               const active = currentPage === page;
               return (
                 <button
@@ -151,7 +159,7 @@ function SidebarInner({
                   }}
                 >
                   <Icon size={14} className="flex-shrink-0" />
-                  <span className="flex-1 text-right text-[13px]">{label}</span>
+                  <span className="flex-1 text-right text-[13px]">{labelKey ? t(labelKey) : label}</span>
                   {badge && overdueBadge > 0 && (
                     <span className="mr-auto bg-red-500 text-white text-[9px] font-bold min-w-[16px] h-4 rounded-full flex items-center justify-center px-1">
                       {overdueBadge > 9 ? '9+' : overdueBadge}
@@ -174,8 +182,20 @@ function SidebarInner({
           </div>
           <div className="flex-1 min-w-0 text-right">
             <p className="text-[13px] font-semibold truncate" style={{ color: '#1e293b' }}>{userName}</p>
-            <p className="text-[10px]" style={{ color: '#94a3b8' }}>{isAdmin ? 'מנהל' : 'סוכן'}</p>
+            <p className="text-[10px]" style={{ color: '#94a3b8' }}>{isAdmin ? t('nav.manager') : t('nav.agent')}</p>
           </div>
+          {/* Language toggle */}
+          <button
+            onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
+            className="p-1 rounded-lg transition-colors flex items-center gap-0.5 text-[10px] font-bold"
+            style={{ color: '#94a3b8' }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#4f46e5'; e.currentTarget.style.backgroundColor = '#eef2ff'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.backgroundColor = 'transparent'; }}
+            title={lang === 'he' ? 'Switch to English' : 'עבור לעברית'}
+          >
+            <Globe size={11} />
+            {lang === 'he' ? 'EN' : 'עב'}
+          </button>
           <button
             onClick={() => onSignOut?.()}
             className="p-1 rounded-lg transition-colors"
@@ -288,6 +308,42 @@ function BellDropdown({ overdueBadge, onNavigateTasks }: { overdueBadge: number;
   );
 }
 
+/* ── Mobile Bottom Nav ───────────────────────────────────────────────────── */
+function MobileBottomNav({ currentPage, go, overdueBadge }: { currentPage: Page; go: (p: Page) => void; overdueBadge: number }) {
+  const { t } = useLang();
+  const items = [
+    { page: 'home'      as Page, labelKey: 'nav.home',      icon: LayoutDashboard },
+    { page: 'dashboard' as Page, labelKey: 'nav.dashboard', icon: Users           },
+    { page: 'kanban'    as Page, labelKey: 'nav.kanban',    icon: GitBranch       },
+    { page: 'tasks'     as Page, labelKey: 'nav.tasks',     icon: CheckSquare, badge: true },
+    { page: 'settings'  as Page, labelKey: 'nav.settings',  icon: Settings        },
+  ];
+  return (
+    <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 flex items-center justify-around px-1 py-1"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      {items.map(item => {
+        const active = currentPage === item.page;
+        return (
+          <button key={item.page} onClick={() => go(item.page)}
+            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${
+              active ? 'text-indigo-600' : 'text-slate-400'
+            }`}>
+            <div className="relative">
+              <item.icon size={20} />
+              {item.badge && overdueBadge > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-bold min-w-[14px] h-3.5 rounded-full flex items-center justify-center px-0.5">
+                  {overdueBadge > 9 ? '9+' : overdueBadge}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] font-medium">{t(item.labelKey)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 export default function Layout({
   children, currentPage, onPageChange, onNewLead,
@@ -295,6 +351,7 @@ export default function Layout({
   allowedPages = [], isAdmin = false, isSuperAdmin = false,
   onSignOut, logoUrl, workspaceName,
 }: LayoutProps) {
+  const { t, dir } = useLang();
   const [open, setOpen] = useState(false);
 
   const go = (p: Page) => { onPageChange(p); setOpen(false); };
@@ -322,7 +379,7 @@ export default function Layout({
   };
 
   return (
-    <div className="min-h-screen flex" dir="rtl" style={{ backgroundColor: '#f5f7fa' }}>
+    <div className="min-h-screen flex" dir={dir} style={{ backgroundColor: '#f5f7fa' }}>
 
       {/* ── Desktop Sidebar ─────────────────────────────────────────────── */}
       <aside
@@ -391,34 +448,7 @@ export default function Layout({
       </div>
 
       {/* ── Mobile Bottom Navigation ────────────────────────────────────── */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 flex items-center justify-around px-1 py-1"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {[
-          { page: 'home'      as Page, label: 'בקרה',    icon: LayoutDashboard },
-          { page: 'dashboard' as Page, label: 'לידים',   icon: Users           },
-          { page: 'kanban'    as Page, label: 'פייפליין', icon: GitBranch       },
-          { page: 'tasks'     as Page, label: 'משימות',  icon: CheckSquare, badge: true },
-          { page: 'settings'  as Page, label: 'הגדרות',  icon: Settings        },
-        ].map(item => {
-          const active = currentPage === item.page;
-          return (
-            <button key={item.page} onClick={() => go(item.page)}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${
-                active ? 'text-indigo-600' : 'text-slate-400'
-              }`}>
-              <div className="relative">
-                <item.icon size={20} />
-                {item.badge && overdueBadge > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-bold min-w-[14px] h-3.5 rounded-full flex items-center justify-center px-0.5">
-                    {overdueBadge > 9 ? '9+' : overdueBadge}
-                  </span>
-                )}
-              </div>
-              <span className="text-[10px] font-medium">{item.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      <MobileBottomNav currentPage={currentPage} go={go} overdueBadge={overdueBadge} />
 
       {/* ── Main Content ────────────────────────────────────────────────── */}
       <main className="flex-1 md:mr-[220px] min-h-screen relative z-10">
@@ -449,7 +479,7 @@ export default function Layout({
                 style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', color: '#94a3b8' }}
               >
                 <Search size={11} />
-                <span>חיפוש</span>
+                <span>{t('common.search')}</span>
                 <kbd className="rounded px-1 text-[10px] font-mono" style={{ backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b' }}>⌘K</kbd>
               </div>
 

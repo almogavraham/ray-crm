@@ -8,6 +8,7 @@ import {
   Pencil, CalendarPlus, Check, Sparkles,
 } from 'lucide-react';
 import type { Lead, StandaloneTask, Task, TaskPriority, TeamMember } from '../types';
+import { useLang } from '../contexts/LangContext';
 
 /* ─── date helpers ────────────────────────────────────────────────────────── */
 function parseDate(raw: string): Date {
@@ -115,6 +116,7 @@ export default function Tasks({
   onLeadClick, onLeadTaskComplete, onLeadTaskDelete, onLeadAddTask,
   onStandaloneAdd, onStandaloneComplete, onStandaloneDelete, onStandaloneEdit, onPageChange,
 }: TasksProps) {
+  const { t } = useLang();
 
   const [viewMode,     setViewMode]     = useState<ViewMode>('list');
   const [ownerFilter,  setOwnerFilter]  = useState<OwnerFilter>('all');
@@ -307,7 +309,7 @@ export default function Tasks({
               onClick={() => setShowCreate(true)}
               className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-sm active:scale-95"
             >
-              <Plus size={15} /> משימה חדשה
+              <Plus size={15} /> {t('tasks.new')}
             </button>
             {onPageChange && (
               <button
@@ -319,17 +321,17 @@ export default function Tasks({
             )}
           </div>
           <div className="text-right">
-            <h1 className="text-xl font-bold text-slate-800">משימות</h1>
+            <h1 className="text-xl font-bold text-slate-800">{t('tasks.title')}</h1>
             <p className="text-sm text-slate-400">{stats.total} פתוחות · {stats.mine} שלי</p>
           </div>
         </div>
 
         {/* ── Stats Row ────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <StatCard value={stats.overdue}    label="פגי תוקף"     icon={<AlertTriangle size={18}/>}  scheme={stats.overdue>0?'red':'slate'}  onClick={() => { setDateFilter('overdue'); setOwnerFilter('all'); }} />
-          <StatCard value={stats.todayCount} label="להיום"         icon={<CalendarClock size={18}/>}  scheme="amber"  onClick={() => { setDateFilter('today');   setOwnerFilter('all'); }} />
-          <StatCard value={stats.delegated}  label="הקצאתי לצוות"  icon={<Users size={18}/>}          scheme="indigo" onClick={() => { setOwnerFilter('delegated'); setDateFilter('all'); }} />
-          <StatCard value={stats.completedToday} label="הושלמו היום" icon={<CalendarCheck size={18}/>} scheme="green" onClick={() => { setDateFilter('completed'); setOwnerFilter('all'); }} />
+          <StatCard value={stats.overdue}    label={t('tasks.overdue')}    icon={<AlertTriangle size={18}/>}  scheme={stats.overdue>0?'red':'slate'}  onClick={() => { setDateFilter('overdue'); setOwnerFilter('all'); }} />
+          <StatCard value={stats.todayCount} label={t('tasks.today')}     icon={<CalendarClock size={18}/>}  scheme="amber"  onClick={() => { setDateFilter('today');   setOwnerFilter('all'); }} />
+          <StatCard value={stats.delegated}  label="הקצאתי לצוות"          icon={<Users size={18}/>}          scheme="indigo" onClick={() => { setOwnerFilter('delegated'); setDateFilter('all'); }} />
+          <StatCard value={stats.completedToday} label={t('tasks.completed')} icon={<CalendarCheck size={18}/>} scheme="green" onClick={() => { setDateFilter('completed'); setOwnerFilter('all'); }} />
           {/* Gauge */}
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm col-span-2 md:col-span-1">
             <div className="flex items-center justify-between mb-2">

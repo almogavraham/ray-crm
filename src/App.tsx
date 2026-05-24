@@ -28,6 +28,7 @@ import BillingPage from './pages/BillingPage';
 import LeadsOnboardingWizard from './pages/LeadsOnboardingWizard';
 import ForgotPassword from './pages/ForgotPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { LangProvider } from './contexts/LangContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask, WorkspacePlan } from './types';
 import type { ToastMessage } from './components/Toast';
 import { initialLeads, initialTeam } from './data/mockData';
@@ -1027,9 +1028,11 @@ function AppInner() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <AppInner />
-      </AuthProvider>
+      <LangProvider>
+        <AuthProvider>
+          <AppInner />
+        </AuthProvider>
+      </LangProvider>
     </ErrorBoundary>
   );
 }

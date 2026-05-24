@@ -8,6 +8,7 @@ import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import EmailModal from '../components/EmailModal';
 import ExcelImportModal from '../components/ExcelImportModal';
+import { useLang } from '../contexts/LangContext';
 
 const ALL_STATUSES: LeadStatus[] = [
   'חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי',
@@ -51,6 +52,7 @@ export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
   compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser,
 }: DashboardProps) {
+  const { t } = useLang();
   const [search,       setSearch]       = useState('');
   const [activeStatus, setActiveStatus] = useState<LeadStatus | 'הכל'>('הכל');
   const [tasksExpanded,setTasksExpanded]= useState(true);
@@ -234,10 +236,10 @@ export default function Dashboard({
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <KpiCard label="לידים VIP"      value={hotLeads}      sub="תקציב ₪15K+"        icon={<Flame      size={20} className="text-red-500"    />} color="red"    percent={Math.round(hotLeads / Math.max(leads.length, 1) * 100)} />
-        <KpiCard label="לקוחות פעילים" value={activeClients} sub={`${conversionRate}% המרה`} icon={<CheckCircle2 size={20} className="text-green-500"  />} color="green"  percent={conversionRate} />
-        <KpiCard label="בתהליך"         value={onboarding}    sub="פרויקטים פעילים"     icon={<Rocket     size={20} className="text-orange-500"  />} color="orange" percent={Math.round(onboarding / Math.max(leads.length, 1) * 100)} />
-        <KpiCard label={'סה"כ לידים'}   value={leads.length}  sub={`${newLeads} חדשים`} icon={<Users      size={20} className="text-slate-600"  />} color="indigo" percent={100} />
+        <KpiCard label="לידים VIP"                      value={hotLeads}      sub="תקציב ₪15K+"                    icon={<Flame      size={20} className="text-red-500"    />} color="red"    percent={Math.round(hotLeads / Math.max(leads.length, 1) * 100)} />
+        <KpiCard label={t('dashboard.activeClients')}   value={activeClients} sub={`${conversionRate}% ${t('dashboard.conversionRate')}`} icon={<CheckCircle2 size={20} className="text-green-500"  />} color="green"  percent={conversionRate} />
+        <KpiCard label={t('status.inProgress')}         value={onboarding}    sub="פרויקטים פעילים"               icon={<Rocket     size={20} className="text-orange-500"  />} color="orange" percent={Math.round(onboarding / Math.max(leads.length, 1) * 100)} />
+        <KpiCard label={t('dashboard.total')}           value={leads.length}  sub={`${newLeads} ${t('common.new')}`} icon={<Users    size={20} className="text-slate-600"  />} color="indigo" percent={100} />
       </div>
 
       {/* Search + Filters */}
@@ -253,7 +255,7 @@ export default function Dashboard({
               type="text"
               autoComplete="off"
               spellCheck={false}
-              placeholder="חיפוש..."
+              placeholder={t('common.search') + '...'}
               value={search}
               onChange={e => setSearch(e.target.value)}
               onKeyDown={e => {
@@ -287,7 +289,7 @@ export default function Dashboard({
             }`}
           >
             <Filter size={12} />
-            <span className="hidden sm:inline">פילטרים</span>
+            <span className="hidden sm:inline">{t('common.filter')}</span>
             {sourceFilter && <span className="w-1.5 h-1.5 bg-black rounded-full" />}
           </button>
 
@@ -308,7 +310,7 @@ export default function Dashboard({
               className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-medium transition-all flex-shrink-0"
             >
               <FileSpreadsheet size={12} />
-              <span className="hidden sm:inline">ייבוא Excel</span>
+              <span className="hidden sm:inline">{t('dashboard.importExcel')}</span>
             </button>
           )}
 
@@ -357,22 +359,22 @@ export default function Dashboard({
       {/* Bulk Action Bar */}
       {selected.size > 0 && (
         <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-30 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 border border-slate-700">
-          <button type="button" onClick={clearSelection} className="text-slate-400 hover:text-white text-xs transition-colors">✕ ביטול</button>
+          <button type="button" onClick={clearSelection} className="text-slate-400 hover:text-white text-xs transition-colors">✕ {t('common.cancel')}</button>
           <div className="w-px h-5 bg-slate-700" />
-          <span className="text-sm font-bold text-white">{selected.size} נבחרו</span>
+          <span className="text-sm font-bold text-white">{selected.size} {t('dashboard.selected')}</span>
           <div className="w-px h-5 bg-slate-700" />
           <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value as LeadStatus | '')}
             className="bg-slate-800 text-white text-sm rounded-lg px-3 py-1.5 border border-slate-600 focus:outline-none cursor-pointer">
-            <option value="">שנה סטטוס...</option>
+            <option value="">{t('dashboard.bulkStatus')}...</option>
             {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <button type="button" onClick={applyBulkStatus} disabled={!bulkStatus}
             className="bg-white hover:bg-neutral-100 disabled:opacity-40 text-black text-sm px-4 py-1.5 rounded-lg font-medium transition-colors">
-            החל
+            {t('common.confirm')}
           </button>
           <div className="w-px h-5 bg-slate-700" />
           <button type="button" onClick={exportCSV} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition-colors">
-            <Download size={13} /> ייצא
+            <Download size={13} /> {t('common.export')}
           </button>
           {onBulkDelete && (
             <>
@@ -387,7 +389,7 @@ export default function Dashboard({
                 }`}
               >
                 <Trash2 size={13} />
-                {deleteConfirm ? `אשר מחיקת ${selected.size}` : 'מחק'}
+                {deleteConfirm ? `${t('common.confirm')} ${t('common.delete')} ${selected.size}` : t('common.delete')}
               </button>
             </>
           )}
@@ -399,7 +401,7 @@ export default function Dashboard({
         {filtered.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-10 text-center text-slate-400">
             <Search size={28} className="mx-auto mb-2 text-slate-200" />
-            לא נמצאו לידים
+            {t('dashboard.noLeads')}
           </div>
         ) : filtered.map(lead => (
           <div key={lead.id} onClick={() => onLeadClick(lead)}
@@ -454,13 +456,13 @@ export default function Dashboard({
                   onChange={toggleSelectAll}
                   className="rounded accent-indigo-600 cursor-pointer" />
               </th>
-              <SortTh label="חברה"        field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">שם איש קשר</th>
-              <SortTh label="סטטוס"       field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label={workspace?.cardLeftField?.label ?? 'תקציב'} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label="עדכון אחרון" field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label="ציון AI"     field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">פעולות</th>
+              <SortTh label={t('dashboard.company')}    field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">{t('dashboard.contact')}</th>
+              <SortTh label={t('common.status')}       field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
+              <SortTh label={workspace?.cardLeftField?.label ?? t('dashboard.budget')} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
+              <SortTh label={t('dashboard.lastUpdate')} field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
+              <SortTh label={t('dashboard.score')}     field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">{t('common.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -469,7 +471,7 @@ export default function Dashboard({
                 <td colSpan={8} className="text-center py-16 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Search size={32} className="text-slate-200" />
-                    <span>לא נמצאו לידים</span>
+                    <span>{t('dashboard.noLeads')}</span>
                   </div>
                 </td>
               </tr>

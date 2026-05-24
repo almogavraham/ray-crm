@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   Zap, Check, BarChart3,
-  Users, Brain, CheckSquare, Megaphone, Target,
+  Users, Brain, CheckSquare, Target,
   Shield, Rocket, Globe, Menu, X, TrendingUp,
   ChevronRight, Sparkles, Building2,
   Mail, ArrowLeft, Activity, Layers, GitBranch,
   Lock, Cpu, Database, Star,
 } from 'lucide-react';
+import { useLang } from '../contexts/LangContext';
 
 interface LandingPageProps {
   onSignIn: () => void;
@@ -46,6 +47,7 @@ function Counter({ target, suffix = '' }: { target: number; suffix?: string }) {
 
 /* ─── Navbar ─────────────────────────────────────────────────────────────────── */
 function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }: LandingPageProps) {
+  const { t, lang, setLang, dir } = useLang();
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -56,10 +58,13 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
   }, []);
 
   const navLinks = [
-    { label: 'תכונות', href: '#features' },
-    { label: 'פתרון', href: '#how' },
-    { label: 'תמחור', href: '#pricing' },
+    { label: t('landing.nav.features'), href: '#features' },
+    { label: t('landing.nav.solution'), href: '#how' },
+    { label: t('landing.nav.pricing'),  href: '#pricing' },
   ];
+
+  const toggleLang = () => setLang(lang === 'he' ? 'en' : 'he');
+  const langToggleLabel = lang === 'he' ? 'EN' : 'עב';
 
   return (
     <header
@@ -68,7 +73,7 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
           ? 'border-b border-[#1a2540]/80 bg-[#05070f]/95 backdrop-blur-2xl shadow-[0_1px_0_rgba(99,102,241,0.06)]'
           : 'bg-transparent'
       }`}
-      dir="rtl"
+      dir={dir}
     >
       <div className="max-w-7xl mx-auto px-5 sm:px-8 h-[64px] flex items-center justify-between">
 
@@ -96,28 +101,38 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
 
         {/* CTA */}
         <div className="hidden md:flex items-center gap-2.5">
+          {/* Language toggle */}
+          <button
+            onClick={toggleLang}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[#8899bb] hover:text-white hover:bg-white/[0.06] text-xs font-semibold transition-colors border border-transparent hover:border-[#2a3a55]"
+            title={lang === 'he' ? 'Switch to English' : 'עבור לעברית'}
+          >
+            <Globe size={13} />
+            {langToggleLabel}
+          </button>
+
           {isLoggedIn && isSuperAdmin ? (
             <a href="https://admin.ray-crm.com"
               className="flex items-center gap-1.5 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition-colors">
-              פאנל אדמין
+              {t('landing.nav.adminPanel')}
               <ArrowLeft size={13} />
             </a>
           ) : isLoggedIn && workspaceSlug ? (
             /* Workspace user is logged in — show "enter workspace" button */
             <a href={`/${workspaceSlug}`}
               className="flex items-center gap-1.5 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition-colors shadow-[0_0_20px_rgba(79,70,229,0.35)]">
-              כניסה לסביבת העבודה
+              {t('landing.nav.goToApp')}
               <ArrowLeft size={13} />
             </a>
           ) : (
             <>
               <button onClick={onSignIn}
                 className="px-4 py-2 text-sm font-medium text-[#8899bb] hover:text-white transition-colors rounded-lg hover:bg-white/[0.04]">
-                כניסה
+                {t('landing.nav.signIn')}
               </button>
               <button onClick={onSignUp}
                 className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all shadow-[0_0_20px_rgba(79,70,229,0.35)] hover:shadow-[0_0_28px_rgba(79,70,229,0.5)]">
-                התחל חינם
+                {t('landing.nav.signUp')}
                 <ArrowLeft size={13} />
               </button>
             </>
@@ -140,18 +155,25 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
             </a>
           ))}
           <div className="pt-3 flex flex-col gap-2 border-t border-[#1a2540] mt-3">
+            {/* Mobile lang toggle */}
+            <button onClick={toggleLang}
+              className="flex items-center justify-center gap-1.5 w-full border border-[#1a2540] text-[#8899bb] text-sm font-medium py-2 rounded-lg hover:bg-white/[0.04] transition-colors">
+              <Globe size={13} />
+              {lang === 'he' ? 'English' : 'עברית'}
+            </button>
+
             {isLoggedIn && isSuperAdmin ? (
               <a href="https://admin.ray-crm.com" className="w-full text-center bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">
-                פאנל אדמין
+                {t('landing.nav.adminPanel')}
               </a>
             ) : isLoggedIn && workspaceSlug ? (
               <a href={`/${workspaceSlug}`} className="w-full text-center bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">
-                כניסה לסביבת העבודה
+                {t('landing.nav.goToApp')}
               </a>
             ) : (
               <>
-                <button onClick={onSignIn} className="w-full border border-[#1a2540] text-[#8899bb] text-sm font-medium py-2.5 rounded-lg">כניסה</button>
-                <button onClick={onSignUp} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">התחל חינם</button>
+                <button onClick={onSignIn} className="w-full border border-[#1a2540] text-[#8899bb] text-sm font-medium py-2.5 rounded-lg">{t('landing.nav.signIn')}</button>
+                <button onClick={onSignUp} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors">{t('landing.nav.signUp')}</button>
               </>
             )}
           </div>
@@ -163,8 +185,9 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
 
 /* ─── Hero ───────────────────────────────────────────────────────────────────── */
 function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => void }) {
+  const { t, dir } = useLang();
   return (
-    <section className="relative min-h-screen flex items-center pt-16 overflow-hidden" dir="rtl">
+    <section className="relative min-h-screen flex items-center pt-16 overflow-hidden" dir={dir}>
 
       {/* Background radial */}
       <div className="absolute inset-0 pointer-events-none">
@@ -189,25 +212,24 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
           {/* Badge */}
           <div className="inline-flex items-center gap-2 mb-8 px-3 py-1.5 rounded-full border border-indigo-500/25 bg-indigo-500/[0.07] text-indigo-400 text-xs font-semibold tracking-wide">
             <Sparkles size={11} />
-            מערכת לידים חכמה לעסקים — מבוססת AI
+            {t('landing.hero.tagline')}
           </div>
 
           {/* Headline */}
           <h1 className="text-[clamp(2.8rem,7vw,5.2rem)] font-black text-white leading-[1.08] tracking-[-0.03em] mb-6">
-            הפסק לאבד לידים.
+            {t('landing.hero.title1')}
             <br />
             <span
               className="text-transparent"
               style={{ backgroundImage: 'linear-gradient(90deg, #818cf8 0%, #a5b4fc 40%, #6366f1 100%)', WebkitBackgroundClip: 'text', backgroundClip: 'text' }}
             >
-              התחל לסגור עסקאות.
+              {t('landing.hero.title2')}
             </span>
           </h1>
 
           {/* Subheadline */}
           <p className="text-[#6b7fa3] text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
-            RAY CRM עוקב אחרי כל ליד, מתעדף בשבילך ויודע מתי ואיך לפנות —
-            כדי שאף עסקה לא תיפול בין הכסאות.
+            {t('landing.hero.subtitle')}
           </p>
 
           {/* CTA buttons */}
@@ -215,19 +237,19 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
             <button onClick={onSignUp}
               className="group w-full sm:w-auto flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
               <Rocket size={15} />
-              נסה 14 יום בחינם
+              {t('landing.hero.cta')}
               <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
             </button>
             <button onClick={onSignIn}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl border border-[#1e2d4a] bg-white/[0.02] hover:bg-white/[0.05] text-[#8899bb] hover:text-white text-sm font-medium transition-all">
-              כניסה לחשבון קיים
+              {t('landing.nav.signIn')}
             </button>
           </div>
 
           {/* Trust badges */}
           <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-[#3d5080] text-xs font-medium">
             {[
-              { icon: Shield, label: 'ללא כרטיס אשראי' },
+              { icon: Shield, label: t('landing.hero.noCard') },
               { icon: Cpu,    label: 'AI שמכיר את העסק שלך' },
               { icon: Lock,   label: 'אבטחה ברמה ארגונית' },
             ].map(({ icon: Icon, label }) => (
@@ -342,8 +364,10 @@ function SocialProof() {
     { value: 14,  suffix: '',  label: 'יום ניסיון בחינם' },
   ];
 
+  const { dir } = useLang();
+
   return (
-    <section className="border-y border-[#1a2540]/60 bg-[#060d1a]/50" dir="rtl">
+    <section className="border-y border-[#1a2540]/60 bg-[#060d1a]/50" dir={dir}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8 py-12">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-4">
           {stats.map(s => (
@@ -362,6 +386,8 @@ function SocialProof() {
 
 /* ─── Features ───────────────────────────────────────────────────────────────── */
 function Features() {
+  const { t, dir } = useLang();
+
   const features = [
     {
       icon: GitBranch,
@@ -408,21 +434,21 @@ function Features() {
   ];
 
   return (
-    <section id="features" className="py-28" dir="rtl">
+    <section id="features" className="py-28" dir={dir}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8">
 
         {/* Section head */}
         <div className="max-w-2xl mb-16">
           <div className="inline-flex items-center gap-1.5 mb-5 px-3 py-1 rounded-full border border-indigo-500/20 bg-indigo-500/[0.06] text-indigo-400 text-[11px] font-semibold tracking-widest uppercase">
             <Layers size={10} />
-            הפלטפורמה
+            {t('landing.features.title')}
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
             כל מה שצריך לסגור.<br />
             <span className="text-[#3d5080]">בלי להסתבך.</span>
           </h2>
           <p className="text-[#6b7fa3] text-base leading-relaxed">
-            מהליד הראשון ועד החתימה — כל הכלים שהעסק שלך צריך, עם AI שעושה את העבודה הכבדה.
+            {t('landing.features.subtitle')}
           </p>
         </div>
 
@@ -469,32 +495,34 @@ function Features() {
 
 /* ─── How It Works ───────────────────────────────────────────────────────────── */
 function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
+  const { t, dir } = useLang();
+
   const steps = [
     {
       num: '01',
       icon: Building2,
-      title: 'הרשם תוך 2 דקות',
-      desc: 'אין צורך בידע טכני. ספר ל-AI על העסק שלך — תחום, קהל יעד, תהליך מכירה — והמערכת מתכווננת אוטומטית.',
+      title: t('landing.how.step1.title'),
+      desc: t('landing.how.step1.desc'),
       accent: '#6366f1',
     },
     {
       num: '02',
       icon: Target,
-      title: 'הכנס את הלידים שלך',
-      desc: 'ייבא לידים קיימים או הוסף חדשים. ה-AI מיד מנתח כל ליד, נותן ציון עדיפות ומציע את הצעד הבא.',
+      title: t('landing.how.step2.title'),
+      desc: t('landing.how.step2.desc'),
       accent: '#8b5cf6',
     },
     {
       num: '03',
       icon: TrendingUp,
-      title: 'סגור יותר, תהליך פחות',
-      desc: 'קבל התראות חכמות, מיילים ו-WhatsApp מוכנים, ומשימות אוטומטיות — ואתה פשוט מתמקד בלדבר עם הלקוחות.',
+      title: t('landing.how.step3.title'),
+      desc: t('landing.how.step3.desc'),
       accent: '#10b981',
     },
   ];
 
   return (
-    <section id="how" className="py-28 relative overflow-hidden" dir="rtl">
+    <section id="how" className="py-28 relative overflow-hidden" dir={dir}>
       {/* Background */}
       <div className="absolute inset-0 bg-[#060d1a]/70" />
       <div className="absolute inset-0"
@@ -507,7 +535,7 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-1.5 mb-5 px-3 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-400 text-[11px] font-semibold tracking-widest uppercase">
             <Rocket size={10} />
-            מתחילים
+            {t('landing.how.title')}
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
             מתחילים בפחות מ-5 דקות
@@ -547,7 +575,7 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
           <button onClick={onSignUp}
             className="group inline-flex items-center gap-2.5 px-7 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_30px_rgba(79,70,229,0.35)] hover:shadow-[0_0_40px_rgba(79,70,229,0.55)]">
             <Rocket size={15} />
-            התחל עכשיו — 14 יום חינם
+            {t('landing.hero.cta')}
             <ArrowLeft size={13} className="group-hover:-translate-x-0.5 transition-transform" />
           </button>
         </div>
@@ -558,78 +586,80 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
 
 /* ─── Pricing ────────────────────────────────────────────────────────────────── */
 function Pricing({ onSignUp }: { onSignUp: () => void }) {
+  const { t, dir } = useLang();
+
   const plans = [
     {
-      name: 'ניסיון חינם',
+      name: t('landing.pricing.trial.name'),
       price: '0',
-      period: '14 יום',
-      desc: 'כל התכונות, ללא הגבלה',
+      period: t('landing.pricing.trial.period'),
+      desc: t('landing.pricing.trial.desc'),
       highlight: false,
       features: [
         'עד 50 לידים',
-        'פייפליין חכם',
-        'עוזר AI בסיסי',
-        'ניהול משימות',
+        t('landing.pricing.features.pipeline'),
+        t('landing.pricing.features.ai'),
+        t('landing.pricing.features.tasks'),
         '2 משתמשים',
-        'דוחות ביצועים',
+        t('landing.pricing.features.reports'),
       ],
-      cta: 'התחל בחינם — ללא כרטיס',
+      cta: t('landing.pricing.trial.cta'),
       ctaClass: 'border border-[#1e2d4a] bg-white/[0.03] hover:bg-white/[0.06] text-white',
     },
     {
-      name: 'Pro',
+      name: t('landing.pricing.pro.name'),
       price: '89',
-      period: 'חודש',
-      desc: 'לעסקים שרוצים לצמוח',
+      period: t('landing.pricing.pro.period'),
+      desc: t('landing.pricing.pro.desc'),
       highlight: true,
       features: [
-        'לידים ללא הגבלה',
-        'פייפליין מלא + Kanban',
-        'AI מתקדם + מיילים חכמים',
+        t('landing.pricing.features.leads'),
+        t('landing.pricing.features.pipeline') + ' + Kanban',
+        t('landing.pricing.features.ai'),
         'WhatsApp ומעקב פולו-אפ',
         'עד 10 משתמשים',
-        'דוחות ואנליטיקה מלאה',
-        'ניהול לקוחות פעילים',
+        t('landing.pricing.features.advancedReports'),
+        t('landing.pricing.features.clients'),
         'אינטגרציות',
         'תמיכה מועדפת',
       ],
-      cta: 'התחל עם Pro',
+      cta: t('landing.pricing.pro.cta'),
       ctaClass: 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_24px_rgba(79,70,229,0.4)]',
     },
     {
-      name: 'Enterprise',
+      name: t('landing.pricing.enterprise.name'),
       price: '199',
-      period: 'חודש',
-      desc: 'לחברות וצוותים גדולים',
+      period: t('landing.pricing.enterprise.period'),
+      desc: t('landing.pricing.enterprise.desc'),
       highlight: false,
       features: [
         'הכל ב-Pro',
-        'משתמשים ללא הגבלה',
+        t('landing.pricing.features.unlimited'),
         'White-label מלא',
         'API גישה מלאה',
         'מנהל חשבון ייעודי',
-        'SLA מובטח',
-        'התאמה מלאה לתהליך שלך',
+        t('landing.pricing.features.sla'),
+        t('landing.pricing.features.custom'),
       ],
-      cta: 'התחל Enterprise',
+      cta: t('landing.pricing.enterprise.cta'),
       ctaClass: 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_24px_rgba(79,70,229,0.4)]',
     },
   ];
 
   return (
-    <section id="pricing" className="py-28" dir="rtl">
+    <section id="pricing" className="py-28" dir={dir}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8">
 
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-1.5 mb-5 px-3 py-1 rounded-full border border-violet-500/20 bg-violet-500/[0.06] text-violet-400 text-[11px] font-semibold tracking-widest uppercase">
             <Database size={10} />
-            תמחור
+            {t('landing.nav.pricing')}
           </div>
           <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.12] tracking-[-0.025em] mb-4">
-            מחיר שמתאים לעסק שלך.
+            {t('landing.pricing.title')}
           </h2>
           <p className="text-[#6b7fa3] text-base">
-            ללא הפתעות · ללא חוזים · ניתן לבטל בכל עת
+            {t('landing.pricing.subtitle')}
           </p>
         </div>
 
@@ -644,7 +674,7 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
 
               {plan.highlight && (
                 <div className="absolute -top-px right-6 px-3 py-1 rounded-b-lg bg-indigo-600 text-white text-[10px] font-bold tracking-widest uppercase">
-                  הפופולרי
+                  {t('landing.pricing.popular')}
                 </div>
               )}
 
@@ -652,8 +682,10 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                 <h3 className="text-white font-bold text-base mb-1">{plan.name}</h3>
                 <p className="text-[#3d5080] text-xs mb-5">{plan.desc}</p>
                 <div className="flex items-baseline gap-1">
-                  {plan.name !== 'ניסיון חינם' && plan.price !== 'בהתאמה' && <span className="text-[#3d5080] text-sm">₪</span>}
-                  <span className="text-4xl font-black text-white tracking-tight">{plan.price}</span>
+                  {plan.price !== '0' && <span className="text-[#3d5080] text-sm">₪</span>}
+                  <span className="text-4xl font-black text-white tracking-tight">
+                    {plan.price === '0' ? t('landing.pricing.trial.price') : plan.price}
+                  </span>
                   {plan.period && <span className="text-[#3d5080] text-sm">/{plan.period}</span>}
                 </div>
               </div>
@@ -682,8 +714,9 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
 
 /* ─── CTA ────────────────────────────────────────────────────────────────────── */
 function CTABanner({ onSignUp }: { onSignUp: () => void }) {
+  const { t, dir } = useLang();
   return (
-    <section className="py-20" dir="rtl">
+    <section className="py-20" dir={dir}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8">
         <div className="relative overflow-hidden rounded-2xl border border-indigo-500/20 bg-[#080e1c]">
           {/* Background elements */}
@@ -708,16 +741,16 @@ function CTABanner({ onSignUp }: { onSignUp: () => void }) {
             </div>
 
             <h2 className="text-[clamp(1.9rem,4vw,3rem)] font-black text-white leading-[1.1] tracking-[-0.025em] mb-4">
-              הפסק לאבד לידים היום.
+              {t('landing.cta.title')}
             </h2>
             <p className="text-[#6b7fa3] text-base mb-8 max-w-lg mx-auto">
-              הצטרף לעסקים שכבר עובדים עם RAY — ומסגרים יותר עסקאות עם פחות מאמץ.
+              {t('landing.cta.subtitle')}
             </p>
 
             <button onClick={onSignUp}
               className="group inline-flex items-center gap-2.5 px-8 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
               <Rocket size={15} />
-              נסה 14 יום בחינם — ללא כרטיס
+              {t('landing.cta.button')}
               <ArrowLeft size={13} className="group-hover:-translate-x-0.5 transition-transform" />
             </button>
 
@@ -731,8 +764,9 @@ function CTABanner({ onSignUp }: { onSignUp: () => void }) {
 
 /* ─── Footer ─────────────────────────────────────────────────────────────────── */
 function Footer({ onSignIn, onSignUp }: LandingPageProps) {
+  const { t, dir } = useLang();
   return (
-    <footer className="border-t border-[#1a2540]/60 py-14" dir="rtl">
+    <footer className="border-t border-[#1a2540]/60 py-14" dir={dir}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8">
         <div className="grid md:grid-cols-4 gap-10 mb-12">
           {/* Brand */}
@@ -750,7 +784,7 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
 
           {/* Links */}
           {[
-            { title: 'מוצר', links: ['תכונות', 'תמחור', 'אבטחה', 'API'] },
+            { title: 'מוצר', links: [t('landing.nav.features'), t('landing.nav.pricing'), 'אבטחה', 'API'] },
             { title: 'חברה',  links: ['אודות', 'בלוג', 'קריירה', 'יצירת קשר'] },
           ].map(col => (
             <div key={col.title}>
@@ -779,11 +813,11 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
             <div className="flex gap-2">
               <button onClick={onSignIn}
                 className="text-xs text-[#4d6080] hover:text-white border border-[#1a2540] hover:border-[#2a3a55] px-3 py-1.5 rounded-lg transition-colors">
-                כניסה
+                {t('landing.nav.signIn')}
               </button>
               <button onClick={onSignUp}
                 className="text-xs text-white bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg transition-colors font-semibold">
-                הרשמה
+                {t('landing.nav.signUp')}
               </button>
             </div>
           </div>
@@ -791,10 +825,14 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
 
         {/* Bottom bar */}
         <div className="pt-8 border-t border-[#1a2540]/50 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-[#2a3a55] text-xs">© 2025 RAY CRM. כל הזכויות שמורות.</p>
-          <div className="flex items-center gap-2 text-[#2a3a55] text-[10px] font-mono">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            All systems operational
+          <p className="text-[#2a3a55] text-xs">© 2025 RAY CRM. {t('landing.footer.rights')}.</p>
+          <div className="flex items-center gap-4 text-[#2a3a55] text-xs">
+            <a href="#" className="hover:text-[#8899bb] transition-colors">{t('landing.footer.privacy')}</a>
+            <a href="#" className="hover:text-[#8899bb] transition-colors">{t('landing.footer.terms')}</a>
+            <div className="flex items-center gap-2 font-mono">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              All systems operational
+            </div>
           </div>
         </div>
       </div>
@@ -804,8 +842,9 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
 
 /* ─── Page ───────────────────────────────────────────────────────────────────── */
 export default function LandingPage({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }: LandingPageProps) {
+  const { dir } = useLang();
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#05070f', color: '#e2e8f0' }}>
+    <div className="min-h-screen" style={{ backgroundColor: '#05070f', color: '#e2e8f0' }} dir={dir}>
       <Navbar onSignIn={onSignIn} onSignUp={onSignUp} isLoggedIn={isLoggedIn} isSuperAdmin={isSuperAdmin} workspaceSlug={workspaceSlug} />
       <Hero onSignUp={onSignUp} onSignIn={onSignIn} />
       <SocialProof />
