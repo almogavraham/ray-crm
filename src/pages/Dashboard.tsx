@@ -158,7 +158,7 @@ export default function Dashboard({
 
       {/* ── Lead card setup banner (shows until wizard is completed) ── */}
       {needsSetup && !bannerDismissed && (
-        <div className="relative bg-gradient-to-l from-indigo-600 to-violet-600 rounded-2xl px-5 py-4 flex items-center gap-4 shadow-lg shadow-indigo-500/20" dir="rtl">
+        <div className="relative bg-gradient-to-l from-indigo-600 to-violet-600 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-4 shadow-lg shadow-indigo-500/20" dir="rtl">
           {/* Dismiss */}
           <button
             onClick={() => setBannerDismissed(true)}
@@ -175,7 +175,7 @@ export default function Dashboard({
           {/* Text */}
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold text-sm">עצב את כרטיס הלקוח שלך</p>
-            <p className="text-white/70 text-xs mt-0.5">
+            <p className="text-white/70 text-xs mt-0.5 hidden sm:block">
               ענה על 3 שאלות קצרות ו-AI יתאים את המערכת לעסק שלך
             </p>
           </div>
@@ -183,7 +183,7 @@ export default function Dashboard({
           {/* CTA */}
           <button
             onClick={onOpenLeadsWizard}
-            className="flex-shrink-0 bg-white text-indigo-700 font-bold text-sm px-4 py-2 rounded-xl hover:bg-indigo-50 transition-colors flex items-center gap-1.5 shadow"
+            className="shrink-0 bg-white text-indigo-700 font-bold text-sm px-4 py-2 rounded-xl hover:bg-indigo-50 transition-colors flex items-center gap-1.5 shadow"
           >
             <Sparkles size={13} />
             מתחילים
@@ -210,14 +210,14 @@ export default function Dashboard({
               {upcomingTasks.map(task => (
                 <div
                   key={task.id}
-                  className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-4 py-2.5 cursor-pointer hover:bg-orange-100 transition-colors"
+                  className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-4 py-2.5 cursor-pointer hover:bg-orange-100 transition-colors gap-2"
                   onClick={() => onLeadClick(task.lead)}
                 >
                   <div className="flex items-center gap-3 text-sm">
                     <span className="text-slate-500 text-xs">📅 {task.date} · {task.time}</span>
                     <span className="text-orange-600 font-medium">🏢 {task.company}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 mt-1 sm:mt-0">
                     <span className="text-sm font-medium text-slate-800">{task.description}</span>
                     <button
                       type="button"

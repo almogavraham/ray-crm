@@ -64,6 +64,7 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
   const [filterSrc,  setFilterSrc]  = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<LeadStatus|null>(null);
+  const [mobileCol,  setMobileCol]  = useState<LeadStatus>('חדש');
   const dragLeadId = useRef<string|null>(null);
 
   /* filtered + sorted leads per column */
@@ -159,8 +160,8 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
           )}
         </div>
 
-        {/* Sort */}
-        <div className="relative">
+        {/* Sort — hidden on smallest screens */}
+        <div className="relative hidden sm:block">
           <ChevronDown size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
           <select value={sortKey} onChange={e=>setSortKey(e.target.value as SortKey)}
             className="bg-slate-50 border border-slate-200 rounded-xl pr-3 pl-7 py-2 text-xs font-semibold text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-300 appearance-none cursor-pointer">
@@ -211,8 +212,40 @@ export default function Kanban({ leads, onLeadClick, onLeadSave, onPageChange }:
         </div>
       )}
 
-      {/* ── Board ────────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden">
+      {/* ── Mobile column selector ──────────────────────────────────────── */}
+      <div className="md:hidden flex gap-2 px-3 py-2 bg-white border-b border-slate-200 overflow-x-auto scrollbar-hide">
+        {COLUMNS.map(status => {
+          const theme = COL_THEME[status];
+          const col = getCol(status);
+          const active = mobileCol === status;
+          return (
+            <button key={status} onClick={() => setMobileCol(status)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border-2 transition-all ${
+                active ? theme.header + ' text-white border-transparent' : 'bg-white text-slate-500 border-slate-200'
+              }`}>
+              {status}
+              <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${active ? 'bg-white/30 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {col.length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Mobile single-column board ──────────────────────────────────── */}
+      <div className="md:hidden flex-1 overflow-y-auto p-3 space-y-2">
+        {getCol(mobileCol).length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border-2 border-dashed border-slate-200">
+            <p className="text-sm text-slate-400">אין לידים בשלב זה</p>
+          </div>
+        ) : getCol(mobileCol).map(lead => (
+          <KanbanCard key={lead.id} lead={lead} theme={COL_THEME[mobileCol]}
+            onClick={() => onLeadClick(lead)} onDragStart={() => {}} />
+        ))}
+      </div>
+
+      {/* ── Desktop Board ────────────────────────────────────────────────── */}
+      <div className="hidden md:block flex-1 overflow-x-auto overflow-y-hidden">
         <div className="flex gap-0 h-full" style={{ minWidth: 'max-content' }}>
           {COLUMNS.map((status, colIdx) => {
             const col     = getCol(status);

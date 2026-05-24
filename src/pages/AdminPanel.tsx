@@ -10,7 +10,7 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
-  KeyRound, AtSign, Unlink, Layers,
+  KeyRound, AtSign, Unlink, Layers, Menu,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
@@ -152,6 +152,7 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   const toast = onToast ?? (() => {});
 
   const [tab,        setTab]        = useState<AdminTab>('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceProfile[]>([]);
   const [users,      setUsers]      = useState<UserProfile[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -320,13 +321,38 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     return w.status === 'trial' && d !== null && d <= 3 && d >= 0;
   }).length;
 
+  const NAV_ITEMS = [
+    { key: 'overview',      label: 'סקירה כללית',    icon: Activity,   group: 'main' },
+    { key: 'workspaces',    label: 'סביבות עבודה',   icon: Building2,  group: 'main' },
+    { key: 'analytics',     label: 'אנליטיקס',        icon: BarChart3,  group: 'main' },
+    { key: 'users',         label: 'משתמשים',         icon: Users,      group: 'main' },
+    { key: 'features',      label: 'תכונות',           icon: Settings2,  group: 'ops'  },
+    { key: 'announcements', label: 'הודעות',           icon: Megaphone,  group: 'ops'  },
+    { key: 'releases',      label: 'פרסום גרסאות',    icon: Rocket,     group: 'ops'  },
+    { key: 'system',        label: 'מערכת',            icon: Globe,      group: 'ops'  },
+  ] as { key: AdminTab; label: string; icon: React.ElementType; group: string }[];
+
+  const currentTabLabel = NAV_ITEMS.find(n => n.key === tab)?.label ?? '';
+
   /* ─── UI ──────────────────────────────────────────────────────────────── */
   return (
     <div className="flex h-[calc(100vh-theme(spacing.16))] -m-4 md:-m-6 overflow-hidden bg-slate-50" dir="rtl">
 
+      {/* Mobile overlay backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* ── Left sidebar nav ────────────────────────────────────────────── */}
-      <aside className="w-52 bg-slate-900 flex flex-col flex-shrink-0 border-l border-slate-800">
-        <div className="px-4 py-5 border-b border-slate-800">
+      <aside className={`
+        fixed md:relative inset-y-0 right-0 z-50 w-64 md:w-52 bg-slate-900 flex flex-col flex-shrink-0 border-l border-slate-800
+        transform transition-transform duration-300 md:transform-none
+        ${sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+      `}>
+        <div className="px-4 py-5 border-b border-slate-800 flex items-center justify-between">
+          <button onClick={() => setSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white p-1 transition-colors">
+            <X size={16} />
+          </button>
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
               <Shield size={15} className="text-white" />
@@ -339,22 +365,13 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
         </div>
 
         <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
-          {([
-            { key: 'overview',      label: 'סקירה כללית',    icon: Activity,   group: 'main' },
-            { key: 'workspaces',    label: 'סביבות עבודה',   icon: Building2,  group: 'main' },
-            { key: 'analytics',     label: 'אנליטיקס',        icon: BarChart3,  group: 'main' },
-            { key: 'users',         label: 'משתמשים',         icon: Users,      group: 'main' },
-            { key: 'features',      label: 'תכונות',           icon: Settings2,  group: 'ops'  },
-            { key: 'announcements', label: 'הודעות',           icon: Megaphone,  group: 'ops'  },
-            { key: 'releases',      label: 'פרסום גרסאות',    icon: Rocket,     group: 'ops'  },
-            { key: 'system',        label: 'מערכת',            icon: Globe,      group: 'ops'  },
-          ] as { key: AdminTab; label: string; icon: React.ElementType; group: string }[]).map(({ key, label, icon: Icon }, idx, arr) => (
+          {NAV_ITEMS.map(({ key, label, icon: Icon }, idx, arr) => (
             <div key={key}>
               {/* Divider between groups */}
               {idx > 0 && arr[idx].group !== arr[idx-1].group && (
                 <div className="border-t border-slate-800 my-2 mx-1" />
               )}
-              <button onClick={() => setTab(key)}
+              <button onClick={() => { setTab(key); setSidebarOpen(false); }}
                 className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   tab === key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}>
@@ -385,7 +402,20 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
       </aside>
 
       {/* ── Main content ────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto min-w-0">
+        {/* Mobile header */}
+        <div className="md:hidden flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
+              <Shield size={13} className="text-white" />
+            </div>
+            <span className="text-white font-bold text-sm">Admin Console</span>
+            {currentTabLabel && <span className="text-slate-400 text-xs">· {currentTabLabel}</span>}
+          </div>
+          <button onClick={() => setSidebarOpen(true)} className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors">
+            <Menu size={18} />
+          </button>
+        </div>
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <RefreshCw size={24} className="animate-spin text-indigo-500" />
@@ -709,17 +739,20 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
 
       {/* Detail panel */}
       {selected && (
-        <WorkspaceDetail
-          ws={selected}
-          onClose={() => onSelect(null)}
-          onStatus={s => action(() => onStatus(selected.id, s), selected.id)}
-          onPlan={p => action(() => onPlan(selected.id, p), p)}
-          onDelete={() => action(() => onDelete(selected.id), selected.id)}
-          loading={actLoad}
-          onToast={onToast}
-          planPages={planPages}
-          onSetPages={pages => onSetPages(selected.id, pages)}
-        />
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40 md:hidden" onClick={() => onSelect(null)} />
+          <WorkspaceDetail
+            ws={selected}
+            onClose={() => onSelect(null)}
+            onStatus={s => action(() => onStatus(selected.id, s), selected.id)}
+            onPlan={p => action(() => onPlan(selected.id, p), p)}
+            onDelete={() => action(() => onDelete(selected.id), selected.id)}
+            loading={actLoad}
+            onToast={onToast}
+            planPages={planPages}
+            onSetPages={pages => onSetPages(selected.id, pages)}
+          />
+        </>
       )}
     </div>
   );
@@ -814,7 +847,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
   };
 
   return (
-    <aside className="w-80 bg-white border-r border-slate-200 flex flex-col overflow-hidden">
+    <aside className="fixed inset-0 z-50 bg-white flex flex-col overflow-hidden md:relative md:inset-auto md:z-auto md:w-80 md:border-r md:border-slate-200">
       {/* Header */}
       <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between">
         <div className="flex items-center gap-3">
