@@ -4,7 +4,7 @@ import {
   MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
   Sparkles, MessageCircle, FileSpreadsheet,
 } from 'lucide-react';
-import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask } from '../types';
+import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask, TeamMember } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import EmailModal from '../components/EmailModal';
 import ExcelImportModal from '../components/ExcelImportModal';
@@ -35,6 +35,8 @@ interface DashboardProps {
   currentUser?: string;
   onCreateTask?: (task: StandaloneTask) => void;
   onUpdateLead?: (lead: Lead) => void;
+  team?: TeamMember[];
+  standaloneTask?: StandaloneTask[];
 }
 
 // ─── safe helpers ──────────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ function parseDate(d: string | undefined): number {
 export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
   compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser, onCreateTask, onUpdateLead,
+  team, standaloneTask,
 }: DashboardProps) {
   const { t } = useLang();
   const [search,       setSearch]       = useState('');
@@ -245,7 +248,7 @@ export default function Dashboard({
         <KpiCard label={t('dashboard.total')}           value={leads.length}  sub={`${newLeads} ${t('common.new')}`} icon={<Users    size={20} className="text-slate-600"  />} color="indigo" percent={100} />
       </div>
 
-      {/* AI Panel — stale lead follow-up + pipeline insights */}
+      {/* AI Panel — stale lead follow-up + pipeline insights + coach */}
       <DashboardAiPanel
         leads={leads}
         currentUser={currentUser}
@@ -253,6 +256,8 @@ export default function Dashboard({
         onCreateTask={onCreateTask}
         onUpdateLead={onUpdateLead}
         onToast={onToast}
+        team={team}
+        standaloneTask={standaloneTask}
       />
 
       {/* Search + Filters */}

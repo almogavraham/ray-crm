@@ -889,6 +889,8 @@ function AppInner() {
             currentUser={displayName}
             onCreateTask={handleStandaloneAdd}
             onUpdateLead={handleLeadUpdate}
+            team={team}
+            standaloneTask={standaloneTask}
           />
         )}
         {page === 'overview' && (

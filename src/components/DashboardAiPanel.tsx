@@ -3,9 +3,10 @@
  * Embedded AI assistant panel for the Leads/Dashboard page.
  *
  * Tabs:
- *  1. Follow-up  — stale leads (7+ days) with AI WhatsApp message generation
- *  2. Pipeline   — top-5 expected-value opportunities
+ *  1. Follow-up    — stale leads (7+ days) with AI WhatsApp message generation
+ *  2. Pipeline     — top-5 expected-value opportunities
  *  3. WA Templates — save/generate/send WhatsApp message templates per lead status
+ *  4. Sales Coach  — personal performance analysis + actionable coaching plan
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -13,11 +14,11 @@ import {
   ChevronDown, ChevronUp, Clock, MessageCircle,
   CheckCircle2, Calendar, Copy, Loader2, Brain,
   RefreshCw, TrendingUp, Star, Activity,
-  Smartphone, Plus, Trash2, Send, ChevronRight,
-  Sparkles,
+  Smartphone, Trash2, Send, ChevronRight,
+  Sparkles, Award,
 } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
-import type { Lead, WorkspaceProfile, StandaloneTask, TaskPriority } from '../types';
+import type { Lead, WorkspaceProfile, StandaloneTask, TaskPriority, TeamMember } from '../types';
 import { getApiKey } from '../lib/apiKey';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import {
@@ -111,21 +112,24 @@ const templateDoc = (workspaceId: string, id: string) =>
    Props
 ══════════════════════════════════════════════════════════════════════════════ */
 interface DashboardAiPanelProps {
-  leads:         Lead[];
-  currentUser?:  string;
-  workspace?:    WorkspaceProfile;
-  onCreateTask?: (task: StandaloneTask) => void;
-  onUpdateLead?: (lead: Lead) => void;
-  onToast?:      (msg: string, type?: 'success' | 'error' | 'info') => void;
+  leads:            Lead[];
+  currentUser?:     string;
+  workspace?:       WorkspaceProfile;
+  onCreateTask?:    (task: StandaloneTask) => void;
+  onUpdateLead?:    (lead: Lead) => void;
+  onToast?:         (msg: string, type?: 'success' | 'error' | 'info') => void;
+  team?:            TeamMember[];
+  standaloneTask?:  StandaloneTask[];
 }
 
-type Tab = 'followup' | 'pipeline' | 'templates';
+type Tab = 'followup' | 'pipeline' | 'templates' | 'coach';
 
 /* ══════════════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function DashboardAiPanel({
   leads, currentUser, workspace, onCreateTask, onUpdateLead, onToast,
+  team = [], standaloneTask = [],
 }: DashboardAiPanelProps) {
 
   /* ── shared state ── */
@@ -148,6 +152,11 @@ export default function DashboardAiPanel({
   const [sendPicker,        setSendPicker]        = useState<string | null>(null); // templateId
   const [expandedTemplate,  setExpandedTemplate]  = useState<string | null>(null);
   const sendPickerRef = useRef<HTMLDivElement>(null);
+
+  /* ── coach state ── */
+  const [coachLoading,  setCoachLoading]  = useState(false);
+  const [coachResult,   setCoachResult]   = useState('');
+  const [coachPeriod,   setCoachPeriod]   = useState<'week' | 'month' | 'quarter'>('month');
 
   /* ── load mirror styles once ── */
   useEffect(() => {
@@ -328,6 +337,56 @@ export default function DashboardAiPanel({
     });
   };
 
+  /* ── coach: analyze performance ── */
+  const analyzeCoach = useCallback(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
+    if (workspace?.id) {
+      const hasBal = await hasBalance(workspace.id);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש בדף החיוב.', 'error'); return; }
+    }
+    setCoachLoading(true); setCoachResult('');
+    try {
+      const client       = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const total        = leads.length;
+      const active       = leads.filter(l => l.status === 'לקוח פעיל').length;
+      const revenue      = leads.filter(l => l.status === 'לקוח פעיל').reduce((s, l) => s + l.budget, 0);
+      const avgScore     = total > 0 ? Math.round(leads.reduce((s, l) => s + l.aiScore, 0) / total) : 0;
+      const closeRate    = total > 0 ? Math.round((active / total) * 100) : 0;
+      const todayDate    = new Date(); todayDate.setHours(0, 0, 0, 0);
+      const overdueTasks = standaloneTask.filter(t => !t.completed && (() => { try { return new Date(t.date + 'T00:00:00') < todayDate; } catch { return false; } })()).length;
+      const stale        = leads.filter(l => ['חדש', 'בתהליך'].includes(l.status) && daysSince(l) >= 14).length;
+      const sourceConv   = leads.reduce((acc, l) => {
+        if (!acc[l.source]) acc[l.source] = { total: 0, active: 0 };
+        acc[l.source].total++;
+        if (l.status === 'לקוח פעיל') acc[l.source].active++;
+        return acc;
+      }, {} as Record<string, { total: number; active: number }>);
+      const bestSource   = Object.entries(sourceConv).sort((a, b) => {
+        const rA = a[1].total > 0 ? a[1].active / a[1].total : 0;
+        const rB = b[1].total > 0 ? b[1].active / b[1].total : 0;
+        return rB - rA;
+      })[0];
+      const periodLabel  = coachPeriod === 'week' ? 'שבועי' : coachPeriod === 'month' ? 'חודשי' : 'רבעוני';
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-5', max_tokens: 2000,
+        messages: [{ role: 'user', content:
+          `אתה מאמן מכירות מוביל. נתח את הנתונים ותן אימון אישי ל${currentUser ?? 'המשתמש'} בעברית.\n\n**נתוני ביצועים:**\n• סה"כ לידים: ${total} | לקוחות פעילים: ${active} | שיעור סגירה: ${closeRate}%\n• הכנסה חודשית: ₪${revenue.toLocaleString()} | ממוצע ציון AI: ${avgScore}%\n• לידים ישנים (14+ ימים): ${stale} | משימות באיחור: ${overdueTasks}\n• מקור המרה הטוב ביותר: ${bestSource?.[0] ?? 'לא ידוע'} (${bestSource ? Math.round(bestSource[1].active / bestSource[1].total * 100) : 0}%)\n• גודל צוות: ${team.length} אנשים\n**תקופת ניתוח:** ${periodLabel}\n\nכתוב אימון מכירות אישי ומעשי הכולל:\n\n## 🏆 הישגים לחגוג\n[מה עשית טוב — חגוג את זה!]\n\n## 📊 ניתוח מצב אמת\n[איפה אתה עומד ביחס לפוטנציאל]\n\n## 🎯 3 אזורי שיפור קריטיים\n1. [בעיה + פתרון ספציפי]\n2. [בעיה + פתרון ספציפי]\n3. [בעיה + פתרון ספציפי]\n\n## 💡 5 טקטיקות מכירה לשבוע הקרוב\n1.\n2.\n3.\n4.\n5.\n\n## 📅 משימות ל-7 ימים הקרובים\n[רשימה ספציפית עם מה לעשות ומתי]\n\n## 💪 מסר מעורר מהמאמן\n[אישי ומעצים]`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      setCoachResult(text);
+      try {
+        const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+        if (workspace?.id) await deductTokens(workspace.id, cost, 'claude-opus-4-5', 'Sales coach analysis');
+      } catch {}
+    } catch { onToast?.('שגיאה בניתוח המאמן', 'error'); }
+    finally  { setCoachLoading(false); }
+  }, [leads, standaloneTask, team, currentUser, coachPeriod, workspace, onToast]);
+
   /* ── follow-up actions ── */
   const markContacted = (lead: Lead) => {
     onUpdateLead?.({ ...lead, lastUpdate: new Date().toLocaleDateString('he-IL') });
@@ -402,13 +461,15 @@ export default function DashboardAiPanel({
         <div className="bg-slate-50 border-t border-indigo-100">
 
           {/* Tab bar */}
-          <div className="flex border-b border-slate-200 bg-white">
+          <div className="flex border-b border-slate-200 bg-white overflow-x-auto scrollbar-hide">
             <TabBtn active={tab === 'followup'}  onClick={() => setTab('followup')}
               icon={<Clock size={12}/>}       label={`מעקב${staleLeads.length > 0 ? ` (${staleLeads.length})` : ''}`} />
             <TabBtn active={tab === 'pipeline'}  onClick={() => setTab('pipeline')}
               icon={<TrendingUp size={12}/>}  label="פייפליין" />
             <TabBtn active={tab === 'templates'} onClick={() => setTab('templates')}
               icon={<Smartphone size={12}/>}  label={`תבניות WA${totalTemplates > 0 ? ` (${totalTemplates})` : ''}`} />
+            <TabBtn active={tab === 'coach'}     onClick={() => setTab('coach')}
+              icon={<Award size={12}/>}       label="מאמן מכירות" />
           </div>
 
           {/* ══ TAB: Follow-up ══ */}
@@ -678,6 +739,89 @@ export default function DashboardAiPanel({
               <p className="text-[10px] text-slate-400 text-center">
                 תבניות נשמרות אוטומטית · [שם הלקוח] יוחלף שמו בשליחה
               </p>
+            </div>
+          )}
+
+          {/* ══ TAB: Sales Coach ══ */}
+          {tab === 'coach' && (
+            <div className="p-3 space-y-3">
+
+              {/* KPI snapshot */}
+              {(() => {
+                const total      = leads.length;
+                const active     = leads.filter(l => l.status === 'לקוח פעיל').length;
+                const revenue    = leads.filter(l => l.status === 'לקוח פעיל').reduce((s, l) => s + l.budget, 0);
+                const avgScore   = total > 0 ? Math.round(leads.reduce((s, l) => s + l.aiScore, 0) / total) : 0;
+                const closeRate  = total > 0 ? Math.round((active / total) * 100) : 0;
+                const todayDate  = new Date(); todayDate.setHours(0, 0, 0, 0);
+                const overdue    = standaloneTask.filter(t => !t.completed && (() => { try { return new Date(t.date + 'T00:00:00') < todayDate; } catch { return false; } })()).length;
+
+                const stats = [
+                  { label: 'לידים',        val: total,                            color: 'text-blue-600',    bg: 'bg-blue-50   border-blue-200'   },
+                  { label: 'לקוחות',       val: active,                           color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' },
+                  { label: 'שיעור סגירה',  val: `${closeRate}%`,                  color: 'text-violet-600',  bg: 'bg-violet-50  border-violet-200'  },
+                  { label: 'הכנסה/חודש',   val: `₪${Math.round(revenue/1000)}K`, color: 'text-amber-600',   bg: 'bg-amber-50   border-amber-200'   },
+                  { label: 'ציון ממוצע',   val: `${avgScore}%`,                   color: 'text-cyan-600',    bg: 'bg-cyan-50    border-cyan-200'     },
+                  { label: 'משימות איחור', val: overdue, color: overdue > 0 ? 'text-red-600' : 'text-slate-400', bg: overdue > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200' },
+                ];
+
+                return (
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {stats.map(s => (
+                      <div key={s.label} className={`border rounded-xl p-2.5 text-center ${s.bg}`}>
+                        <div className={`text-lg font-black ${s.color}`}>{s.val}</div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 font-medium">{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* Period picker + run button */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {([['week','שבועי'],['month','חודשי'],['quarter','רבעוני']] as const).map(([key, label]) => (
+                  <button key={key} onClick={() => setCoachPeriod(key)}
+                    className={`text-xs px-3.5 py-1.5 rounded-xl border font-bold transition-all ${
+                      coachPeriod === key
+                        ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm shadow-emerald-200'
+                        : 'bg-white border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-700'
+                    }`}>
+                    {label}
+                  </button>
+                ))}
+                <button onClick={analyzeCoach} disabled={coachLoading}
+                  className="mr-auto flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold py-1.5 px-4 rounded-xl transition-colors text-sm shadow-sm shadow-emerald-200">
+                  {coachLoading
+                    ? <><Loader2 size={13} className="animate-spin"/> מנתח...</>
+                    : <><Brain size={13}/> קבל אימון</>
+                  }
+                </button>
+              </div>
+
+              {/* Result */}
+              {coachResult ? (
+                <div className="bg-white border border-emerald-200 rounded-xl overflow-hidden shadow-sm">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(coachResult); onToast?.('הועתק ✓', 'success'); }}
+                      className="flex items-center gap-1 text-xs bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-700 px-2.5 py-1 rounded-lg transition-colors font-medium">
+                      <Copy size={9}/> העתק
+                    </button>
+                    <span className="text-emerald-700 text-xs font-bold flex items-center gap-1">
+                      <Brain size={11}/> מאמן מכירות AI
+                    </span>
+                  </div>
+                  <div className="px-4 py-3 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap text-right max-h-[500px] overflow-y-auto">
+                    {coachResult}
+                  </div>
+                </div>
+              ) : !coachLoading && (
+                <div className="text-center py-10 bg-white border border-dashed border-slate-200 rounded-xl">
+                  <Award size={32} className="mx-auto mb-2 text-slate-200"/>
+                  <p className="text-sm font-medium text-slate-500">בחר תקופה ולחץ "קבל אימון"</p>
+                  <p className="text-xs text-slate-400 mt-1">AI ינתח את הביצועים ויכין תוכנית פעולה אישית</p>
+                </div>
+              )}
             </div>
           )}
         </div>
