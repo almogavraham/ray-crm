@@ -1300,7 +1300,9 @@ export default function AiAssistant({
       const status = (err as any)?.status;
 
       if (raw.includes('credit balance') || raw.includes('billing') || raw.includes('upgrade or purchase')) {
-        setError('💳 יתרת הקרדיט ב-Anthropic נגמרה. יש להוסיף קרדיט בכתובת: console.anthropic.com → Plans & Billing');
+        setError(workspace?.id
+          ? '⚠️ שירות ה-AI אינו זמין כרגע עקב בעיה טכנית. אנא נסה שנית מאוחר יותר או צור קשר עם התמיכה.'
+          : '💳 יתרת הקרדיט ב-Anthropic נגמרה. יש להוסיף קרדיט בכתובת: console.anthropic.com → Plans & Billing');
       } else if (status === 529 || raw.includes('overloaded') || raw.includes('529')) {
         setError('שרתי ה-AI עמוסים כרגע 😓 ניסינו מספר פעמים ולא הצלחנו. נסה שנית בעוד כמה דקות.');
       } else if (status === 401 || raw.includes('authentication') || raw.includes('API key')) {
