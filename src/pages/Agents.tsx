@@ -18,7 +18,7 @@ import { useLang } from '../contexts/LangContext';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
-type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'performance' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
+type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
 
 interface AgentsProps {
   leads: Lead[];
@@ -2805,7 +2805,6 @@ export default function Agents({
     { key: 'roi',         emoji: '📊', label: t('agents.tab.roi'),        badge: undefined },
     { key: 'enrich',      emoji: '🔍', label: t('agents.tab.enrich'),     badge: undefined },
     { key: 'workflow',    emoji: '⚡', label: t('agents.tab.workflow'),   badge: undefined },
-    { key: 'performance', emoji: '🏆', label: t('agents.tab.performance'), badge: undefined },
     { key: 'brief',       emoji: '📋', label: t('agents.tab.brief'),      badge: undefined },
     { key: 'marketing',   emoji: '🎨', label: t('agents.tab.marketing'),  badge: undefined },
     { key: 'campaign',    emoji: '📡', label: t('agents.tab.campaign'),   badge: undefined },
@@ -2818,8 +2817,8 @@ export default function Agents({
 
   const tabGroups: { label: string; desc: string; keys: AgentTab[] }[] = [
     { label: t('agents.group.sales'),     desc: '5', keys: ['followup','forecast','proposal','alerts','roi'] },
-    { label: t('agents.group.leads'),     desc: '4', keys: ['enrich','workflow','brief','performance'] },
-    { label: t('agents.group.clients'),   desc: '3', keys: ['portal','churn','templates'] },
+    { label: t('agents.group.leads'),     desc: '3', keys: ['enrich','workflow','brief'] },
+    { label: t('agents.group.clients'),   desc: '2', keys: ['churn','templates'] },
     { label: t('agents.group.marketing'), desc: '3', keys: ['marketing','campaign','coach'] },
   ];
 
@@ -2953,9 +2952,6 @@ export default function Agents({
               {tab === 'workflow'    && (
                 <WorkflowBuilder leads={leads} currentUser={currentUser}
                   onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}/>
-              )}
-              {tab === 'performance' && (
-                <AgentPerformance leads={leads} team={team} standaloneTask={standaloneTask}/>
               )}
               {tab === 'brief'       && <MeetingBrief leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'marketing'   && <MarketingAI leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}

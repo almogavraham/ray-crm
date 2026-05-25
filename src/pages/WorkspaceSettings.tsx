@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Building2, Mail, Users2, Image, Save, Copy,
   Lock, Eye, EyeOff, CheckCircle2, AlertCircle, UserPlus, Trash2,
   ChevronLeft, Crown, RefreshCw, Send, AlertTriangle,
   Link, Loader2, ExternalLink,
+  BarChart3, TrendingUp, Target, Award,
 } from 'lucide-react';
 import { useLang } from '../contexts/LangContext';
 import {
@@ -11,19 +12,20 @@ import {
 } from 'firebase/auth';
 import { doc, updateDoc, setDoc, deleteDoc, getDoc, getDocs, collection } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
-import type { WorkspaceProfile, TeamMember, Lead } from '../types';
+import type { WorkspaceProfile, TeamMember, Lead, StandaloneTask } from '../types';
 
 interface Props {
   workspace: WorkspaceProfile;
   team: TeamMember[];
   leads: Lead[];
+  standaloneTask: StandaloneTask[];
   currentUserUid: string;
   currentUserEmail: string;
   onToast: (msg: string, type?: 'success' | 'error' | 'info') => void;
   onWorkspaceUpdate: () => Promise<void>;
 }
 
-type Section = 'workspace' | 'password' | 'team' | 'plan' | 'email' | 'portal';
+type Section = 'workspace' | 'password' | 'team' | 'performance' | 'plan' | 'email' | 'portal';
 
 const INDUSTRIES = [
   'סוכנות שיווק', 'נדל"ן', 'טכנולוגיה', 'פיננסים',
@@ -33,7 +35,7 @@ const INDUSTRIES = [
 const INPUT = 'w-full bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500';
 
 export default function WorkspaceSettings({
-  workspace, team, leads, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
+  workspace, team, leads, standaloneTask, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
 }: Props) {
   const { t, dir } = useLang();
   const [section, setSection] = useState<Section>('workspace');
@@ -310,13 +312,35 @@ export default function WorkspaceSettings({
 
   const activeClients = leads.filter(l => l.status === 'לקוח פעיל');
 
+  // ── Performance stats (memoized) ─────────────────────────────────────────
+  const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+
+  const perfStats = useMemo(() => {
+    return team.map(member => {
+      const myLeads   = leads.filter(l => l.assignedTo === member.name || l.assignedTo === member.id);
+      const active    = myLeads.filter(l => l.status === 'לקוח פעיל');
+      const pipeline  = myLeads.filter(l => l.status === 'בתהליך');
+      const revenue   = active.reduce((s, l) => s + l.budget, 0);
+      const closeRate = myLeads.length > 0 ? (active.length / myLeads.length) * 100 : 0;
+      const avgScore  = myLeads.length > 0 ? myLeads.reduce((s, l) => s + l.aiScore, 0) / myLeads.length : 0;
+      const myTasks   = standaloneTask.filter(tk => tk.assignedTo === member.name);
+      const overdue   = myTasks.filter(tk => !tk.completed && (() => { try { return new Date(tk.date + 'T00:00:00') < today; } catch { return false; } })()).length;
+      const done      = myTasks.filter(tk => tk.completed).length;
+      const perf      = Math.min(100, Math.round(closeRate * 0.4 + (revenue > 0 ? Math.min(40, revenue / 500) : 0) + (overdue === 0 ? 20 : Math.max(0, 20 - overdue * 5))));
+      return { member, total: myLeads.length, active: active.length, pipeline: pipeline.length, revenue, closeRate, avgScore, overdue, done, perf };
+    }).sort((a, b) => b.perf - a.perf);
+  }, [leads, team, standaloneTask, today]);
+
+  const activePerfStats = perfStats.filter(s => s.total > 0);
+
   const SECTIONS: { key: Section; label: string; icon: React.ElementType }[] = [
-    { key: 'workspace', label: t('settings.workspaceProfile'), icon: Building2 },
-    { key: 'team',      label: t('settings.teamManagement'),   icon: Users2   },
-    { key: 'portal',    label: 'פורטל לקוחות',                 icon: Link     },
-    { key: 'email',     label: t('settings.emailSettings'),    icon: Mail     },
-    { key: 'password',  label: t('settings.changePassword'),   icon: Lock     },
-    { key: 'plan',      label: t('settings.planManagement'),   icon: Crown    },
+    { key: 'workspace',   label: t('settings.workspaceProfile'), icon: Building2 },
+    { key: 'team',        label: t('settings.teamManagement'),   icon: Users2    },
+    { key: 'performance', label: 'ביצועי צוות',                  icon: BarChart3 },
+    { key: 'portal',      label: 'פורטל לקוחות',                 icon: Link      },
+    { key: 'email',       label: t('settings.emailSettings'),    icon: Mail      },
+    { key: 'password',    label: t('settings.changePassword'),   icon: Lock      },
+    { key: 'plan',        label: t('settings.planManagement'),   icon: Crown     },
   ];
 
   const planLabel =
@@ -515,6 +539,149 @@ export default function WorkspaceSettings({
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </Card>
+            </div>
+          )}
+
+          {/* ── Team Performance ──────────────────────────────────────── */}
+          {section === 'performance' && (
+            <div className="space-y-5">
+
+              {/* Summary KPI row */}
+              {activePerfStats.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    {
+                      label: 'סה״כ הכנסות',
+                      val: `₪${activePerfStats.reduce((s,a)=>s+a.revenue,0).toLocaleString()}`,
+                      icon: <TrendingUp size={16} />,
+                      color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200',
+                    },
+                    {
+                      label: 'ממוצע סגירה',
+                      val: `${Math.round(activePerfStats.reduce((s,a)=>s+a.closeRate,0) / activePerfStats.length)}%`,
+                      icon: <Target size={16} />,
+                      color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200',
+                    },
+                    {
+                      label: 'סה״כ לידים',
+                      val: activePerfStats.reduce((s,a)=>s+a.total,0),
+                      icon: <Users2 size={16} />,
+                      color: 'text-slate-700', bg: 'bg-slate-50', border: 'border-slate-200',
+                    },
+                    {
+                      label: 'משימות באיחור',
+                      val: activePerfStats.reduce((s,a)=>s+a.overdue,0),
+                      icon: <AlertTriangle size={16} />,
+                      color: activePerfStats.reduce((s,a)=>s+a.overdue,0) > 0 ? 'text-red-600' : 'text-slate-400',
+                      bg: activePerfStats.reduce((s,a)=>s+a.overdue,0) > 0 ? 'bg-red-50' : 'bg-slate-50',
+                      border: activePerfStats.reduce((s,a)=>s+a.overdue,0) > 0 ? 'border-red-200' : 'border-slate-200',
+                    },
+                  ].map(({ label, val, icon, color, bg, border }) => (
+                    <div key={label} className={`${bg} border ${border} rounded-2xl p-4 flex items-center gap-3`}>
+                      <div className={`${color} flex-shrink-0`}>{icon}</div>
+                      <div>
+                        <p className={`text-xl font-black ${color}`}>{val}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Leaderboard */}
+              <Card title="לוח מובילים" icon={<Award size={18} />}>
+                {activePerfStats.length === 0 ? (
+                  <div className="text-center py-10">
+                    <BarChart3 size={32} className="text-slate-200 mx-auto mb-3" />
+                    <p className="text-slate-500 font-medium">אין נתונים עדיין</p>
+                    <p className="text-slate-400 text-sm mt-1">שייך לידים לאנשי הצוות כדי לראות ביצועים</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activePerfStats.map((s, idx) => {
+                      const perfColor   = s.perf >= 70 ? 'text-emerald-600' : s.perf >= 40 ? 'text-amber-500' : 'text-red-500';
+                      const perfBg      = s.perf >= 70 ? 'bg-emerald-500'   : s.perf >= 40 ? 'bg-amber-500'   : 'bg-red-500';
+                      const perfBorder  = s.perf >= 70 ? 'border-emerald-500' : s.perf >= 40 ? 'border-amber-400' : 'border-red-400';
+                      const medal       = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
+                      const isTop       = idx === 0;
+                      return (
+                        <div
+                          key={s.member.id}
+                          className={`rounded-2xl border p-4 transition-all ${
+                            isTop
+                              ? 'bg-gradient-to-l from-amber-50 to-white border-amber-200 shadow-sm'
+                              : 'bg-white border-slate-100 hover:border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-4">
+                            {/* Rank + Avatar */}
+                            <div className="flex flex-col items-center gap-1.5 flex-shrink-0 w-14">
+                              {medal
+                                ? <span className="text-2xl leading-none">{medal}</span>
+                                : <span className="text-xs font-black text-slate-400">#{idx + 1}</span>
+                              }
+                              <div className={`w-10 h-10 rounded-xl border-2 ${perfBorder} bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xs font-black shadow-sm`}>
+                                {s.member.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                              </div>
+                            </div>
+
+                            {/* Info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2.5">
+                                <span className="font-bold text-slate-800">{s.member.name}</span>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                                  s.member.role === 'מנהל'
+                                    ? 'bg-indigo-100 text-indigo-700'
+                                    : 'bg-slate-100 text-slate-500'
+                                }`}>
+                                  {s.member.role}
+                                </span>
+                              </div>
+
+                              {/* Metrics grid */}
+                              <div className="grid grid-cols-4 gap-2 mb-3">
+                                {[
+                                  { label: 'הכנסות', val: `₪${Math.round(s.revenue/1000)}K`, color: 'text-emerald-600' },
+                                  { label: 'סגירה',  val: `${Math.round(s.closeRate)}%`,      color: 'text-indigo-600' },
+                                  { label: 'לידים',  val: s.total,                            color: 'text-slate-700' },
+                                  { label: 'איחור',  val: s.overdue,                          color: s.overdue > 0 ? 'text-red-500' : 'text-slate-400' },
+                                ].map(({ label, val, color }) => (
+                                  <div key={label} className="text-center bg-slate-50 rounded-xl py-2 px-1">
+                                    <div className={`text-sm font-black ${color}`}>{val}</div>
+                                    <div className="text-[10px] text-slate-400 mt-0.5">{label}</div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Performance bar */}
+                              <div>
+                                <div className="flex justify-between items-center mb-1">
+                                  <span className="text-[10px] text-slate-400">ציון ביצועים</span>
+                                  <span className={`text-xs font-black ${perfColor}`}>{s.perf}%</span>
+                                </div>
+                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-700 ${perfBg}`}
+                                    style={{ width: `${s.perf}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Avg AI score badge */}
+                            <div className="flex-shrink-0 text-center hidden md:block">
+                              <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center">
+                                <span className="text-lg font-black text-indigo-600">{Math.round(s.avgScore)}</span>
+                                <span className="text-[9px] text-slate-400 leading-tight text-center">ציון<br/>AI</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </Card>

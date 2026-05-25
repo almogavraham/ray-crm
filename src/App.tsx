@@ -934,6 +934,7 @@ function AppInner() {
             workspace={workspace}
             team={team}
             leads={leads}
+            standaloneTask={standaloneTask}
             currentUserUid={user?.uid ?? ''}
             currentUserEmail={user?.email ?? ''}
             onToast={addToast}
