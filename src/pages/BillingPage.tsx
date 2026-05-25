@@ -53,6 +53,7 @@ const PLANS = [
     key: 'trial' as WorkspacePlan,
     nameKey: 'billing.plan.trial.name',
     price: 0,
+    tokenDollars: 1,   // $1 = 300K tokens
     periodKey: 'billing.trialLeft',
     descKey: 'billing.plan.trial.desc',
     highlight: false,
@@ -65,6 +66,7 @@ const PLANS = [
     nameKey: null,
     name: 'Pro',
     price: 89,
+    tokenDollars: 50,  // $50 = 15M tokens
     periodKey: 'billing.perMonth',
     descKey: 'billing.plan.pro.desc',
     highlight: true,
@@ -77,6 +79,7 @@ const PLANS = [
     nameKey: null,
     name: 'Enterprise',
     price: 199,
+    tokenDollars: 200, // $200 = 60M tokens
     periodKey: 'billing.perMonth',
     descKey: 'billing.plan.enterprise.desc',
     highlight: false,
@@ -359,7 +362,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
 
                   <p className="text-slate-400 text-xs mb-4">{planDesc}</p>
 
-                  <div className="flex items-baseline gap-1 mb-5">
+                  <div className="flex items-baseline gap-1 mb-3">
                     {plan.price === 0 ? (
                       <span className="text-3xl font-black text-white">{t('billing.free')}</span>
                     ) : (
@@ -369,6 +372,24 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                         <span className="text-slate-400 text-sm">/{planPeriod}</span>
                       </>
                     )}
+                  </div>
+
+                  {/* Token allocation badge */}
+                  <div className={`flex items-center gap-2 rounded-xl px-3 py-2 mb-4 ${
+                    plan.highlight
+                      ? 'bg-indigo-500/20 border border-indigo-400/30'
+                      : 'bg-emerald-500/10 border border-emerald-500/20'
+                  }`}>
+                    <span className="text-base">💎</span>
+                    <div>
+                      <span className={`font-black text-base ${plan.highlight ? 'text-indigo-300' : 'text-emerald-400'}`}>
+                        {formatTokenDisplay(plan.tokenDollars)}
+                      </span>
+                      <span className={`text-xs mr-1 ${plan.highlight ? 'text-indigo-400' : 'text-emerald-500'}`}>
+                        טוקני AI
+                      </span>
+                      <p className="text-[10px] text-slate-500 mt-0.5">כלולים בתוכנית · מתחדש חודשי</p>
+                    </div>
                   </div>
 
                   <ul className="space-y-2 flex-1 mb-5">
