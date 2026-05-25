@@ -7,7 +7,7 @@
  */
 
 import {
-  doc, getDoc, updateDoc, arrayUnion, increment, runTransaction,
+  doc, getDoc, updateDoc, arrayUnion, increment, runTransaction, setDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import type { TokenHistoryEntry } from '../types';
@@ -192,4 +192,76 @@ export function formatBalance(dollars: number): string {
 export function balancePercent(balance: number, planAllocation: number): number {
   if (planAllocation <= 0) return 100;
   return Math.min(100, Math.round((balance / planAllocation) * 100));
+}
+
+/* ── Token count display ─────────────────────────────────────────────────── */
+/** How many display tokens equal $1 */
+export const TOKENS_PER_DOLLAR = 300_000;
+
+/** Convert dollars → displayable token count */
+export function dollarsToTokens(dollars: number): number {
+  return Math.round(dollars * TOKENS_PER_DOLLAR);
+}
+
+/** Format a token count for display (e.g. 1500000 → "1.5M", 300000 → "300K") */
+export function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000)     return `${Math.round(tokens / 1_000)}K`;
+  return tokens.toLocaleString();
+}
+
+/** Format balance as token string (dollars input) */
+export function formatTokenDisplay(dollars: number): string {
+  return formatTokenCount(dollarsToTokens(dollars));
+}
+
+/* ── Admin quota (stored in system/adminQuota) ───────────────────────────── */
+
+const adminQuotaRef = () => doc(db, 'system', 'adminQuota');
+
+export interface AdminQuota {
+  totalBudget: number;   // dollars the admin has set as total budget
+  allocated:   number;   // dollars allocated to workspaces so far
+}
+
+export async function getAdminQuota(): Promise<AdminQuota> {
+  try {
+    const snap = await getDoc(adminQuotaRef());
+    if (!snap.exists()) return { totalBudget: 0, allocated: 0 };
+    return { totalBudget: snap.data().totalBudget ?? 0, allocated: snap.data().allocated ?? 0 };
+  } catch { return { totalBudget: 0, allocated: 0 }; }
+}
+
+/** Set admin total budget (does NOT change allocated) */
+export async function setAdminQuotaBudget(totalBudget: number): Promise<void> {
+  await setDoc(adminQuotaRef(), { totalBudget }, { merge: true });
+}
+
+/** Add to admin budget (when admin tops up their own supply) */
+export async function addToAdminBudget(dollars: number): Promise<void> {
+  await runTransaction(db, async tx => {
+    const snap = await tx.get(adminQuotaRef());
+    const prev = snap.data()?.totalBudget ?? 0;
+    tx.set(adminQuotaRef(), { totalBudget: prev + dollars, allocated: snap.data()?.allocated ?? 0 });
+  });
+}
+
+/**
+ * Check if admin quota has enough remaining budget.
+ * Returns false if quota not set (treat as unlimited in that case).
+ */
+export async function adminQuotaHasRoom(dollars: number): Promise<boolean> {
+  const { totalBudget, allocated } = await getAdminQuota();
+  if (totalBudget <= 0) return true; // no limit set
+  return (totalBudget - allocated) >= dollars;
+}
+
+/** Deduct from admin allocated (call after workspace purchase succeeds) */
+export async function deductFromAdminQuota(dollars: number): Promise<void> {
+  if (dollars <= 0) return;
+  await runTransaction(db, async tx => {
+    const snap = await tx.get(adminQuotaRef());
+    const allocated = (snap.data()?.allocated ?? 0) + dollars;
+    tx.set(adminQuotaRef(), { totalBudget: snap.data()?.totalBudget ?? 0, allocated });
+  });
 }

@@ -4,7 +4,7 @@ import {
   Building2, Phone, Mail, Hash, ArrowLeft,
 } from 'lucide-react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import type { UserProfile, WorkspaceProfile } from '../types';
 import { useLang } from '../contexts/LangContext';
@@ -80,6 +80,19 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
       if (industry) workspace.industry = industry;
 
       await setDoc(doc(db, 'workspaces', wid), workspace);
+
+      /* Grant welcome tokens ($1 = 300,000 AI tokens) — NO dollar display */
+      await updateDoc(doc(db, 'workspaces', wid), {
+        tokenBalance:        1,
+        tokenPlanAllocation: 1,
+        tokenHistory: [{
+          id:          `plan_${Date.now()}`,
+          type:        'plan',
+          amount:      1,
+          description: 'מתנת פתיחה — 300,000 טוקני AI',
+          timestamp:   new Date().toISOString(),
+        }],
+      });
 
       /* 3. Create user profile */
       const profile: UserProfile = {

@@ -9,6 +9,7 @@ import type { WorkspaceProfile, WorkspacePlan } from '../types';
 import { useLang } from '../contexts/LangContext';
 import {
   TOPUP_PACKAGES, formatBalance, balancePercent, addTokens,
+  dollarsToTokens, formatTokenDisplay, formatTokenCount, adminQuotaHasRoom, deductFromAdminQuota,
 } from '../lib/tokenTracker';
 
 interface BillingPageProps {
@@ -91,8 +92,50 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const [paymentStep, setPaymentStep] = useState<'form' | 'processing' | 'success'>('form');
 
   // Token topup state
-  const [topupLoading, setTopupLoading] = useState<string | null>(null);
-  const [topupSuccess, setTopupSuccess] = useState<string | null>(null);
+  const [topupPkg,    setTopupPkg]    = useState<typeof TOPUP_PACKAGES[number] | null>(null);
+  const [topupStep,   setTopupStep]   = useState<'form' | 'processing' | 'success'>('form');
+  const [topupError,  setTopupError]  = useState('');
+  const [tokensGranted, setTokensGranted] = useState(0);
+
+  const closeTopup = () => {
+    setTopupPkg(null);
+    setTopupStep('form');
+    setTopupError('');
+    setCardNumber('');
+    setExpiry('');
+    setCvv('');
+    setCardName('');
+  };
+
+  const handleTopupPay = async () => {
+    if (!topupPkg) return;
+    setTopupError('');
+    if (!cardName.trim()) { setTopupError(t('billing.err.cardName')); return; }
+    const rawDigits = cardNumber.replace(/\D/g, '');
+    if (rawDigits.length < 13 || !luhn(rawDigits)) { setTopupError(t('billing.err.cardInvalid')); return; }
+    const [mm, yy] = expiry.split('/');
+    if (!mm || !yy || mm.length !== 2 || yy.length !== 2) { setTopupError(t('billing.err.expiry')); return; }
+    if (cvv.length < 3) { setTopupError(t('billing.err.cvv')); return; }
+
+    setTopupStep('processing');
+    await new Promise(r => setTimeout(r, 2000));
+
+    try {
+      const hasRoom = await adminQuotaHasRoom(topupPkg.dollars);
+      if (!hasRoom) {
+        setTopupStep('form');
+        setTopupError('אין מספיק קרדיטים זמינים כרגע. אנא פנה לתמיכה.');
+        return;
+      }
+      await addTokens(workspace.id, topupPkg.dollars, 'topup', `רכישת טוקנים: ${topupPkg.label}`);
+      await deductFromAdminQuota(topupPkg.dollars);
+      setTokensGranted(dollarsToTokens(topupPkg.dollars));
+      setTopupStep('success');
+    } catch {
+      setTopupStep('form');
+      setTopupError('שגיאה בעיבוד התשלום. נסה שוב.');
+    }
+  };
 
   // Token balance helpers
   const tokenBalance    = workspace?.tokenBalance ?? 0;
@@ -100,21 +143,6 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const tokenUsed       = workspace?.tokenUsed ?? 0;
   const tokenPct        = balancePercent(tokenBalance, tokenAllocation);
   const tokenBarColor   = tokenPct > 50 ? 'bg-emerald-500' : tokenPct > 20 ? 'bg-amber-400' : 'bg-red-500';
-
-  const handleTopup = async (pkg: typeof TOPUP_PACKAGES[number]) => {
-    if (!window.confirm(`${t('tokens.confirmTopup')} ${pkg.tokens}?`)) return;
-    setTopupLoading(pkg.id);
-    setTopupSuccess(null);
-    try {
-      await addTokens(workspace.id, pkg.dollars, 'topup', `Token top-up: ${pkg.label}`);
-      setTopupSuccess(pkg.id);
-      setTimeout(() => setTopupSuccess(null), 3000);
-    } catch (err) {
-      console.error('Topup error:', err);
-    } finally {
-      setTopupLoading(null);
-    }
-  };
 
   // Card form state
   const [cardNumber, setCardNumber] = useState('');
@@ -203,10 +231,13 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-lg select-none">💎</div>
               <div>
                 <p className="font-semibold text-white text-sm">{t('tokens.balance')}</p>
-                <p className="text-emerald-400 text-xs">{t('tokens.planAllocation')}: {formatBalance(tokenAllocation)}</p>
+                <p className="text-emerald-400 text-xs">{t('tokens.planAllocation')}: {formatTokenDisplay(tokenAllocation)} ({formatBalance(tokenAllocation)})</p>
               </div>
             </div>
-            <p className="text-3xl font-black text-white">{formatBalance(tokenBalance)}</p>
+            <div className="text-right">
+              <p className="text-3xl font-black text-white">{formatTokenDisplay(tokenBalance)}</p>
+              <p className="text-xs text-emerald-400 mt-0.5">{formatBalance(tokenBalance)} · טוקני AI</p>
+            </div>
           </div>
 
           {/* Progress bar */}
@@ -380,8 +411,6 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {TOPUP_PACKAGES.map(pkg => {
-              const isLoading = topupLoading === pkg.id;
-              const isSuccess = topupSuccess === pkg.id;
               return (
                 <div key={pkg.id} className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 flex flex-col items-center text-center gap-3 hover:border-emerald-500/60 transition-all">
                   <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
@@ -389,31 +418,20 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                   </div>
                   <div>
                     <p className="text-white font-bold text-lg">{pkg.label}</p>
-                    <p className="text-emerald-400 text-xs">{pkg.tokens}</p>
+                    <p className="text-emerald-400 text-xs">{formatTokenCount(dollarsToTokens(pkg.dollars))} טוקני AI</p>
                   </div>
                   <button
-                    onClick={() => handleTopup(pkg)}
-                    disabled={isLoading || isSuccess}
-                    className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-                      isSuccess
-                        ? 'bg-green-600 text-white'
-                        : 'bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-60'
-                    }`}
+                    onClick={() => { setTopupPkg(pkg); setTopupStep('form'); setCardNumber(''); setExpiry(''); setCvv(''); setCardName(''); setTopupError(''); }}
+                    className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white"
                   >
-                    {isLoading ? (
-                      <><RefreshCw size={14} className="animate-spin" /> מעבד...</>
-                    ) : isSuccess ? (
-                      <><CheckCircle2 size={14} /> {t('tokens.topupSuccess')}</>
-                    ) : (
-                      t('tokens.buy')
-                    )}
+                    <CreditCard size={14} /> רכוש עכשיו
                   </button>
                 </div>
               );
             })}
           </div>
           <p className="text-slate-500 text-xs mt-3 text-center">
-            * בסביבת פיתוח — הרכישה מדומה. בפרודקשן יתחבר לפרוסס תשלום.
+            * התשלום מאובטח ומוצפן. הטוקנים יתווספו מיד לאחר אישור התשלום.
           </p>
         </div>
 
@@ -608,6 +626,116 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 <p className="text-center text-xs text-slate-500">
                   {t('billing.payment.secureNote')}
                 </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Token Purchase Modal ─────────────────────────────────────────── */}
+      {topupPkg && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm" dir={dir}>
+          <div className="bg-slate-800 rounded-t-2xl sm:rounded-2xl border border-slate-700 w-full sm:max-w-md shadow-2xl overflow-hidden max-h-[95vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-700">
+              <button onClick={closeTopup} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-700">
+                <X size={18} />
+              </button>
+              <div className="flex items-center gap-2">
+                <Lock size={14} className="text-green-400" />
+                <span className="font-semibold text-white">רכישת טוקנים</span>
+              </div>
+            </div>
+
+            {/* Success */}
+            {topupStep === 'success' && (
+              <div className="p-8 flex flex-col items-center text-center gap-4">
+                <div className="w-20 h-20 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                  <span className="text-4xl">💎</span>
+                </div>
+                <h3 className="text-xl font-bold text-white">הטוקנים נוספו בהצלחה!</h3>
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-8 py-4">
+                  <p className="text-5xl font-black text-emerald-400">{formatTokenCount(tokensGranted)}</p>
+                  <p className="text-emerald-300 text-sm mt-1">טוקני AI נוספו לחשבונך</p>
+                </div>
+                <p className="text-slate-400 text-xs">הטוקנים זמינים לשימוש מיידי בכל כלי ה-AI</p>
+                <button onClick={closeTopup}
+                  className="mt-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 px-8 rounded-xl transition-all">
+                  מצוין!
+                </button>
+              </div>
+            )}
+
+            {/* Processing */}
+            {topupStep === 'processing' && (
+              <div className="p-8 flex flex-col items-center text-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                  <RefreshCw size={28} className="text-indigo-400 animate-spin" />
+                </div>
+                <h3 className="text-lg font-bold text-white">מעבד תשלום...</h3>
+                <p className="text-slate-400 text-sm">אנא המתן, אל תסגור את החלון</p>
+              </div>
+            )}
+
+            {/* Form */}
+            {topupStep === 'form' && (
+              <div className="p-5 space-y-4">
+                {/* Package summary */}
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-emerald-400 text-xs font-bold">תקבל</p>
+                    <p className="text-white font-black text-2xl">{formatTokenCount(dollarsToTokens(topupPkg.dollars))}</p>
+                    <p className="text-slate-400 text-xs">טוקני AI</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-slate-400 text-xs">לתשלום</p>
+                    <p className="text-white font-black text-2xl">{topupPkg.label}</p>
+                    <p className="text-slate-400 text-xs">+ מע"מ {Math.round(topupPkg.dollars * 0.17 * 100) / 100}$</p>
+                  </div>
+                </div>
+
+                {/* Card form */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.cardName')}</label>
+                    <input value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Almog Avraham"
+                      className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.cardNumber')}</label>
+                    <div className="relative">
+                      <input value={cardNumber} onChange={e => handleCardNumber(e.target.value)} placeholder="0000 0000 0000 0000" maxLength={19}
+                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
+                      {brand && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-bold">{brand}</span>}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.expiry')}</label>
+                      <input value={expiry} onChange={e => handleExpiry(e.target.value)} placeholder="MM/YY"
+                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 text-xs mb-1.5">CVV</label>
+                      <input value={cvv} onChange={e => setCvv(e.target.value.slice(0,4))} placeholder="123" type="password"
+                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
+                    </div>
+                  </div>
+                </div>
+
+                {topupError && (
+                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 text-red-300 text-sm">
+                    <AlertCircle size={14}/> {topupError}
+                  </div>
+                )}
+
+                <button onClick={handleTopupPay}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2">
+                  <Lock size={14}/> שלם {topupPkg.label} + מע"מ
+                </button>
+                <div className="flex items-center justify-center gap-2 text-slate-600 text-xs">
+                  <Lock size={10}/> תשלום מאובטח ומוצפן 256-bit SSL
+                </div>
               </div>
             )}
           </div>

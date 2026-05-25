@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { Page, WorkspaceProfile } from '../types';
 import { useLang } from '../contexts/LangContext';
-import { formatBalance, balancePercent } from '../lib/tokenTracker';
+import { formatBalance, balancePercent, formatTokenDisplay } from '../lib/tokenTracker';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -202,9 +202,14 @@ function SidebarInner({
                     </span>
                     <div className="flex items-center gap-1">
                       <Gem size={9} style={{ color: barColor }} />
-                      <span className="text-[11px] font-black" style={{ color: barColor }}>
-                        {formatBalance(bal)}
-                      </span>
+                      <div className="text-right">
+                        <span className="text-[11px] font-black block" style={{ color: barColor }}>
+                          {formatTokenDisplay(bal)}
+                        </span>
+                        <span className="text-[9px] font-medium block" style={{ color: barColor, opacity: 0.7 }}>
+                          {formatBalance(bal)}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <div className="w-full h-1.5 rounded-full" style={{ backgroundColor: '#d1fae5' }}>

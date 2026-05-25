@@ -22,9 +22,10 @@ import { httpsCallable } from 'firebase/functions';
 import type { WorkspaceProfile, WorkspaceStatus, UserProfile, Page } from '../types';
 import {
   grantPlanTokens, addTokens, formatBalance, balancePercent,
-  DEFAULT_PLAN_TOKEN_AMOUNTS,
+  DEFAULT_PLAN_TOKEN_AMOUNTS, formatTokenDisplay, formatTokenCount, dollarsToTokens,
+  deductFromAdminQuota, getAdminQuota, setAdminQuotaBudget,
 } from '../lib/tokenTracker';
-import type { PlanTokenConfig } from '../lib/tokenTracker';
+import type { PlanTokenConfig, AdminQuota } from '../lib/tokenTracker';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'features' | 'announcements' | 'releases' | 'system';
@@ -829,8 +830,10 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
     setManualLoad(true);
     try {
       await addTokens(ws.id, amt, 'manual', 'Admin manual credit');
+      // Deduct from admin quota (best-effort — don't block on failure)
+      deductFromAdminQuota(amt).catch(console.error);
       setManualAmount('');
-      onToast(`$${amt} טוקנים נוספו ✓`, 'success');
+      onToast(`${formatTokenDisplay(amt)} טוקנים נוספו ✓`, 'success');
     } catch { onToast('שגיאה בהוספת טוקנים', 'error'); }
     finally { setManualLoad(false); }
   };
@@ -1114,7 +1117,8 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
           <div className="grid grid-cols-3 gap-2 mb-3">
             <div className="bg-emerald-50 rounded-lg px-2 py-2 text-center">
               <p className="text-[9px] text-emerald-600 font-medium mb-0.5">מאזן</p>
-              <p className="text-xs font-bold text-emerald-800">{formatBalance(tokenBalance)}</p>
+              <p className="text-xs font-bold text-emerald-800">{formatTokenDisplay(tokenBalance)}</p>
+              <p className="text-[9px] text-emerald-600">{formatBalance(tokenBalance)}</p>
             </div>
             <div className="bg-slate-50 rounded-lg px-2 py-2 text-center">
               <p className="text-[9px] text-slate-500 font-medium mb-0.5">הקצאה</p>
