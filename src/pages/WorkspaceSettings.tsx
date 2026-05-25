@@ -38,6 +38,18 @@ export default function WorkspaceSettings({
   const { t, dir } = useLang();
   const [section, setSection] = useState<Section>('workspace');
 
+  // ── Auto-fix: update current user's team record email if it's wrong ──────
+  useEffect(() => {
+    if (!currentUserUid || !currentUserEmail) return;
+    const myRecord = team.find(m => m.uid === currentUserUid);
+    if (!myRecord) return;
+    if (myRecord.email === currentUserEmail) return; // already correct
+    // Email mismatch — silently patch the team record in Firestore
+    updateDoc(doc(db, 'workspaces', workspace.id, 'team', myRecord.id), {
+      email: currentUserEmail,
+    }).catch(() => {});
+  }, [currentUserUid, currentUserEmail, team, workspace.id]); // eslint-disable-line
+
   // ── Workspace profile state ──────────────────────────────────────────────
   const [wsName,     setWsName]     = useState(workspace.name ?? '');
   const [wsEmail,    setWsEmail]    = useState(workspace.email ?? currentUserEmail);
@@ -481,7 +493,9 @@ export default function WorkspaceSettings({
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-slate-800">{member.name}</p>
-                            <p className="text-xs text-slate-500">{member.email}</p>
+                            <p className="text-xs text-slate-500">
+                              {member.uid === currentUserUid ? currentUserEmail : member.email}
+                            </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
