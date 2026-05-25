@@ -1,27 +1,29 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  Building2, Phone, Mail, Hash, Sparkles, Users2, Image, Save, Copy,
+  Building2, Mail, Users2, Image, Save, Copy,
   Lock, Eye, EyeOff, CheckCircle2, AlertCircle, UserPlus, Trash2,
-  ChevronLeft, Crown, User, RefreshCw, Send, AlertTriangle,
+  ChevronLeft, Crown, RefreshCw, Send, AlertTriangle,
+  Link, Loader2, ExternalLink,
 } from 'lucide-react';
 import { useLang } from '../contexts/LangContext';
 import {
   updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
-import { doc, updateDoc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, getDoc, getDocs, collection } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
-import type { WorkspaceProfile, TeamMember } from '../types';
+import type { WorkspaceProfile, TeamMember, Lead } from '../types';
 
 interface Props {
   workspace: WorkspaceProfile;
   team: TeamMember[];
+  leads: Lead[];
   currentUserUid: string;
   currentUserEmail: string;
   onToast: (msg: string, type?: 'success' | 'error' | 'info') => void;
   onWorkspaceUpdate: () => Promise<void>;
 }
 
-type Section = 'workspace' | 'password' | 'team' | 'plan' | 'email';
+type Section = 'workspace' | 'password' | 'team' | 'plan' | 'email' | 'portal';
 
 const INDUSTRIES = [
   'סוכנות שיווק', 'נדל"ן', 'טכנולוגיה', 'פיננסים',
@@ -31,7 +33,7 @@ const INDUSTRIES = [
 const INPUT = 'w-full bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500';
 
 export default function WorkspaceSettings({
-  workspace, team, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
+  workspace, team, leads, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
 }: Props) {
   const { t, dir } = useLang();
   const [section, setSection] = useState<Section>('workspace');
@@ -242,9 +244,62 @@ export default function WorkspaceSettings({
     }
   };
 
+  // ── Portal state ─────────────────────────────────────────────────────────
+  const [portals,   setPortals]   = useState<Record<string, string>>({});
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalLoaded,  setPortalLoaded]  = useState(false);
+  const [genFor,    setGenFor]    = useState<string | null>(null);
+  const [copiedPortalId, setCopiedPortalId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (section !== 'portal' || portalLoaded) return;
+    setPortalLoading(true);
+    getDocs(collection(db, 'portals'))
+      .then(snap => {
+        const map: Record<string, string> = {};
+        snap.docs.forEach(d => {
+          const data = d.data() as { leadId: string };
+          map[data.leadId] = d.id;
+        });
+        setPortals(map);
+        setPortalLoaded(true);
+      })
+      .catch(() => {})
+      .finally(() => setPortalLoading(false));
+  }, [section, portalLoaded]);
+
+  const generatePortal = async (lead: Lead) => {
+    setGenFor(lead.id);
+    const token = Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 8);
+    await setDoc(doc(db, 'portals', token), {
+      leadId: lead.id, company: lead.company, contactName: lead.contactName,
+      createdAt: new Date().toISOString(), views: 0,
+    }).catch(() => {});
+    setPortals(prev => ({ ...prev, [lead.id]: token }));
+    setGenFor(null);
+    onToast(`פורטל נוצר עבור ${lead.company} ✓`, 'success');
+  };
+
+  const copyPortalLink = (leadId: string) => {
+    const token = portals[leadId];
+    const url = `${window.location.origin}?portal=${token}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedPortalId(leadId);
+      setTimeout(() => setCopiedPortalId(null), 2000);
+    });
+  };
+
+  const openPortal = (leadId: string) => {
+    const token = portals[leadId];
+    window.open(`${window.location.origin}?portal=${token}`, '_blank');
+  };
+
+  const activeClients = leads.filter(l => l.status === 'לקוח פעיל');
+
   const SECTIONS: { key: Section; label: string; icon: React.ElementType }[] = [
     { key: 'workspace', label: t('settings.workspaceProfile'), icon: Building2 },
     { key: 'team',      label: t('settings.teamManagement'),   icon: Users2   },
+    { key: 'portal',    label: 'פורטל לקוחות',                 icon: Link     },
     { key: 'email',     label: t('settings.emailSettings'),    icon: Mail     },
     { key: 'password',  label: t('settings.changePassword'),   icon: Lock     },
     { key: 'plan',      label: t('settings.planManagement'),   icon: Crown    },
@@ -648,6 +703,91 @@ export default function WorkspaceSettings({
                 </button>
               </div>
             </Card>
+          )}
+
+          {/* ── Client Portal ─────────────────────────────────────────── */}
+          {section === 'portal' && (
+            <div className="space-y-4">
+              <Card title="פורטל לקוחות" icon={<Link size={18} />}>
+                <p className="text-slate-500 text-sm mb-4">
+                  צור קישור ייחודי לכל לקוח פעיל — הם יוכלו לצפות בסטטוס העבודה, מסמכים ועדכונים בזמן אמת.
+                </p>
+
+                {portalLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 size={22} className="animate-spin text-indigo-400" />
+                  </div>
+                ) : activeClients.length === 0 ? (
+                  <div className="text-center py-10 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    <Link size={30} className="text-slate-300 mx-auto mb-2" />
+                    <p className="text-slate-600 font-semibold">אין לקוחות פעילים</p>
+                    <p className="text-slate-400 text-sm mt-1">פורטל זמין ללקוחות בסטטוס "לקוח פעיל"</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activeClients.map(lead => {
+                      const token    = portals[lead.id];
+                      const hasPortal = !!token;
+                      return (
+                        <div key={lead.id} className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center text-white font-black text-sm flex-shrink-0">
+                            {lead.company[0]}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-slate-800">{lead.company}</p>
+                            <p className="text-slate-500 text-xs">{lead.contactName} · ₪{lead.budget.toLocaleString()}/חודש</p>
+                            {hasPortal && (
+                              <p className="text-teal-600 text-[11px] mt-0.5 font-mono truncate">
+                                {window.location.origin}?portal={token.slice(0, 8)}...
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex gap-2 flex-shrink-0">
+                            {hasPortal ? (
+                              <>
+                                <button
+                                  onClick={() => copyPortalLink(lead.id)}
+                                  className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 px-3 py-1.5 rounded-lg transition-colors font-medium"
+                                >
+                                  <Copy size={11} />
+                                  {copiedPortalId === lead.id ? '✓ הועתק' : 'העתק קישור'}
+                                </button>
+                                <button
+                                  onClick={() => openPortal(lead.id)}
+                                  className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 px-3 py-1.5 rounded-lg transition-colors font-medium"
+                                >
+                                  <ExternalLink size={11} /> פתח
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => generatePortal(lead)}
+                                disabled={genFor === lead.id}
+                                className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg transition-colors font-bold"
+                              >
+                                {genFor === lead.id
+                                  ? <Loader2 size={11} className="animate-spin" />
+                                  : <Link size={11} />
+                                }
+                                צור פורטל
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+
+              <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4 text-sm text-teal-800 space-y-1.5">
+                <p className="font-bold text-teal-900">מה הלקוח רואה בפורטל?</p>
+                <p>📋 סטטוס הפרויקט ועדכונים אחרונים</p>
+                <p>📁 מסמכים וקבצים משותפים</p>
+                <p>✅ רשימת משימות ואבני דרך</p>
+                <p>💬 ערוץ תקשורת ישיר איתך</p>
+              </div>
+            </div>
           )}
 
           {/* ── Plan Info ──────────────────────────────────────────────── */}

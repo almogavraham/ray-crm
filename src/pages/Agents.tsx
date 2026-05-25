@@ -18,7 +18,7 @@ import { useLang } from '../contexts/LangContext';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
-type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'performance' | 'brief' | 'portal' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
+type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'performance' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
 
 interface AgentsProps {
   leads: Lead[];
@@ -2805,7 +2805,6 @@ export default function Agents({
     { key: 'roi',         emoji: '📊', label: t('agents.tab.roi'),        badge: undefined },
     { key: 'enrich',      emoji: '🔍', label: t('agents.tab.enrich'),     badge: undefined },
     { key: 'workflow',    emoji: '⚡', label: t('agents.tab.workflow'),   badge: undefined },
-    { key: 'portal',      emoji: '🔗', label: t('agents.tab.portal'),    badge: undefined },
     { key: 'performance', emoji: '🏆', label: t('agents.tab.performance'), badge: undefined },
     { key: 'brief',       emoji: '📋', label: t('agents.tab.brief'),      badge: undefined },
     { key: 'marketing',   emoji: '🎨', label: t('agents.tab.marketing'),  badge: undefined },
@@ -2955,7 +2954,6 @@ export default function Agents({
                 <WorkflowBuilder leads={leads} currentUser={currentUser}
                   onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}/>
               )}
-              {tab === 'portal'      && <PortalManager leads={leads} onToast={onToast}/>}
               {tab === 'performance' && (
                 <AgentPerformance leads={leads} team={team} standaloneTask={standaloneTask}/>
               )}

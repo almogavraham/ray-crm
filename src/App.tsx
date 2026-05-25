@@ -933,6 +933,7 @@ function AppInner() {
           <WorkspaceSettings
             workspace={workspace}
             team={team}
+            leads={leads}
             currentUserUid={user?.uid ?? ''}
             currentUserEmail={user?.email ?? ''}
             onToast={addToast}
