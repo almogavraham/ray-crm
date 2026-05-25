@@ -1135,7 +1135,9 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
 
   /* match a lead against workflow conditions */
   const matches = (lead: Lead, wf: Workflow) => {
-    const results = wf.conditions.map(c => {
+    const conditions = wf.conditions ?? [];
+    if (conditions.length === 0) return false;
+    const results = conditions.map(c => {
       switch (c.type) {
         case 'days_inactive':    return daysSinceUpdate(lead) >= parseInt(c.value);
         case 'status_is':        return lead.status === c.value;
@@ -1145,7 +1147,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
         case 'source_is':        return lead.source === c.value;
         case 'has_overdue_task': {
           const t = new Date(); t.setHours(0,0,0,0);
-          return lead.tasks.some(tk => !tk.completed && (() => { try { return new Date(tk.date+'T00:00:00') < t; } catch { return false; } })());
+          return (lead.tasks ?? []).some(tk => !tk.completed && (() => { try { return new Date(tk.date+'T00:00:00') < t; } catch { return false; } })());
         }
         default: return false;
       }
@@ -1211,7 +1213,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
   const runWf = async (wf: Workflow) => {
     const matching = matchLeads(wf);
     if (!matching.length) { onToast?.('אין לידים תואמים', 'info'); return; }
-    const hasAiAction = wf.actions.some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
+    const hasAiAction = (wf.actions ?? []).some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
     if (hasAiAction && workspaceId) {
       const ok = await hasBalance(workspaceId);
       if (!ok) { onToast?.('⚠️ אין מספיק טוקנים לפעולות AI.', 'error'); return; }
@@ -1220,7 +1222,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
     const results: RunResult[] = [];
     for (const lead of matching) {
       const actionResults: RunResult['actionResults'] = [];
-      for (const action of wf.actions) {
+      for (const action of (wf.actions ?? [])) {
         try {
           if (action.type === 'create_task') {
             const desc = (action.config.description || 'מעקב — {company}')
@@ -1297,7 +1299,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
     setWorkflows(p => p.map(w => w.id === wf.id ? updated : w));
     setRunning(null);
 
-    if (results.some(r => r.actionResults.some(a => a.message))) {
+    if (results.some(r => (r.actionResults ?? []).some(a => a.message))) {
       setRunResults(results);
     } else {
       onToast?.(`הופעל על ${results.length} לידים ✓`, 'success');
@@ -1500,7 +1502,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
         <div className="space-y-3">
           {workflows.map(wf => {
             const mc     = matchLeads(wf).length;
-            const hasAi  = wf.actions.some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
+            const hasAi  = (wf.actions ?? []).some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
             const isPrev = previewWf === wf.id;
             return (
               <div key={wf.id} className={`border rounded-2xl p-4 transition-all ${wf.active ? 'bg-slate-800/60 border-slate-700/50' : 'bg-black/40 border-slate-800/50 opacity-60'}`}>
@@ -1514,14 +1516,14 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
                     {wf.description && <p className="text-slate-500 text-xs mt-0.5">{wf.description}</p>}
                     {/* Conditions + actions summary */}
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap justify-end">
-                      {wf.conditions.map((c, i) => (
+                      {(wf.conditions ?? []).map((c, i) => (
                         <span key={c.id} className="flex items-center gap-1">
                           {i > 0 && <span className={`text-[9px] font-black px-1 rounded ${wf.conditionLogic === 'and' ? 'text-blue-400' : 'text-violet-400'}`}>{wf.conditionLogic.toUpperCase()}</span>}
                           <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{TRIGGER_LABELS[c.type]} {c.value}</span>
                         </span>
                       ))}
                       <span className="text-slate-600 text-[10px]">→</span>
-                      {wf.actions.map(a => (
+                      {(wf.actions ?? []).map(a => (
                         <span key={a.id} className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30 text-[10px]">
                           {ACTION_ICON[a.type]} {ACTION_LABELS[a.type].replace(/^.\s/,'')}
                         </span>
