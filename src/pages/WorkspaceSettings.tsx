@@ -40,6 +40,7 @@ export default function WorkspaceSettings({
 
   // ── Workspace profile state ──────────────────────────────────────────────
   const [wsName,     setWsName]     = useState(workspace.name ?? '');
+  const [wsEmail,    setWsEmail]    = useState(workspace.email ?? currentUserEmail);
   const [wsPhone,    setWsPhone]    = useState(workspace.phone ?? '');
   const [wsBizId,    setWsBizId]    = useState(workspace.businessId ?? '');
   const [wsIndustry, setWsIndustry] = useState(workspace.industry ?? '');
@@ -78,6 +79,7 @@ export default function WorkspaceSettings({
     try {
       const updates: Record<string, unknown> = {
         name: wsName.trim(),
+        email: wsEmail.trim(),
         phone: wsPhone.trim(),
         businessId: wsBizId.trim(),
         prompt: wsPrompt.trim(),
@@ -373,6 +375,16 @@ export default function WorkspaceSettings({
               <div className="space-y-4">
                 <Field label={t('settings.businessName')}>
                   <input value={wsName} onChange={e => setWsName(e.target.value)} className={INPUT} placeholder={t('settings.businessName')} />
+                </Field>
+                <Field label="מייל עסקי">
+                  <input
+                    type="email"
+                    value={wsEmail}
+                    onChange={e => setWsEmail(e.target.value)}
+                    className={INPUT}
+                    placeholder="email@company.com"
+                    dir="ltr"
+                  />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label={t('settings.businessId')}>
@@ -819,7 +831,7 @@ export default function WorkspaceSettings({
 
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2 text-sm">
                   <Row label={t('settings.businessName')}    value={workspace.name} />
-                  <Row label={t('team.email')}      value={workspace.email} />
+                  <Row label={t('team.email')}      value={wsEmail || workspace.email} />
                   {workspace.phone      && <Row label={t('settings.businessPhone')}   value={workspace.phone} />}
                   {workspace.businessId && <Row label={t('settings.businessId')}     value={workspace.businessId} />}
                   {workspace.industry   && <Row label={t('settings.industry')}    value={workspace.industry} />}
