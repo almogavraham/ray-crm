@@ -40,17 +40,28 @@ export default function WorkspaceSettings({
   const { t, dir } = useLang();
   const [section, setSection] = useState<Section>('workspace');
 
-  // ── Auto-fix: update current user's team record email if it's wrong ──────
+  // ── Identify current user's team record (UID match → fallback: sole admin) ─
+  const myTeamRecord = useMemo(() => {
+    const byUid = team.find(m => m.uid === currentUserUid);
+    if (byUid) return byUid;
+    // Fallback: if there is exactly one admin in this workspace, that must be
+    // the currently logged-in workspace owner (whose UID was stored incorrectly).
+    const admins = team.filter(m => m.role === 'מנהל');
+    return admins.length === 1 ? admins[0] : null;
+  }, [team, currentUserUid]);
+
+  // ── Auto-fix: patch Firestore record with correct uid + email ─────────────
   useEffect(() => {
-    if (!currentUserUid || !currentUserEmail) return;
-    const myRecord = team.find(m => m.uid === currentUserUid);
-    if (!myRecord) return;
-    if (myRecord.email === currentUserEmail) return; // already correct
-    // Email mismatch — silently patch the team record in Firestore
-    updateDoc(doc(db, 'workspaces', workspace.id, 'team', myRecord.id), {
+    if (!currentUserUid || !currentUserEmail || !myTeamRecord) return;
+    const needsUpdate =
+      myTeamRecord.email !== currentUserEmail ||
+      myTeamRecord.uid   !== currentUserUid;
+    if (!needsUpdate) return;
+    updateDoc(doc(db, 'workspaces', workspace.id, 'team', myTeamRecord.id), {
       email: currentUserEmail,
+      uid:   currentUserUid,
     }).catch(() => {});
-  }, [currentUserUid, currentUserEmail, team, workspace.id]); // eslint-disable-line
+  }, [currentUserUid, currentUserEmail, myTeamRecord, workspace.id]); // eslint-disable-line
 
   // ── Workspace profile state ──────────────────────────────────────────────
   const [wsName,     setWsName]     = useState(workspace.name ?? '');
@@ -518,7 +529,7 @@ export default function WorkspaceSettings({
                           <div>
                             <p className="text-sm font-semibold text-slate-800">{member.name}</p>
                             <p className="text-xs text-slate-500">
-                              {member.uid === currentUserUid ? currentUserEmail : member.email}
+                              {member.id === myTeamRecord?.id ? currentUserEmail : member.email}
                             </p>
                           </div>
                         </div>
@@ -528,7 +539,7 @@ export default function WorkspaceSettings({
                           }`}>
                             {member.role === 'מנהל' ? t('team.manager') : t('team.agent')}
                           </span>
-                          {member.uid !== currentUserUid && (
+                          {member.id !== myTeamRecord?.id && (
                             <button
                               onClick={() => handleRemove(member)}
                               className="text-slate-400 hover:text-red-500 transition-colors"
