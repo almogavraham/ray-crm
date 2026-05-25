@@ -895,7 +895,7 @@ function AppInner() {
           />
         )}
         {page === 'overview' && (
-          <Overview leads={leads} onLeadClick={setSelectedLead} />
+          <Overview leads={leads} onLeadClick={setSelectedLead} workspaceId={wid ?? undefined} />
         )}
         {page === 'ai' && (
           <AiAssistant

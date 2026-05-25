@@ -18,7 +18,7 @@ import { useLang } from '../contexts/LangContext';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
-type AgentTab = 'followup' | 'forecast' | 'alerts' | 'roi' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
+type AgentTab = 'followup' | 'forecast' | 'alerts' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
 
 interface AgentsProps {
   leads: Lead[];
@@ -2802,7 +2802,6 @@ export default function Agents({
     { key: 'forecast',    emoji: '📈', label: t('agents.tab.forecast'),    badge: `₪${Math.round(confirmed/1000)}K` },
     { key: 'proposal',    emoji: '✍️', label: t('agents.tab.proposal'),   badge: undefined },
     { key: 'alerts',      emoji: '🚨', label: t('agents.tab.alerts'),     badge: alertCount > 0 ? alertCount : undefined },
-    { key: 'roi',         emoji: '📊', label: t('agents.tab.roi'),        badge: undefined },
     { key: 'enrich',      emoji: '🔍', label: t('agents.tab.enrich'),     badge: undefined },
     { key: 'workflow',    emoji: '⚡', label: t('agents.tab.workflow'),   badge: undefined },
     { key: 'brief',       emoji: '📋', label: t('agents.tab.brief'),      badge: undefined },
@@ -2947,7 +2946,6 @@ export default function Agents({
               {tab === 'forecast'    && <RevenueForecast leads={leads}/>}
               {tab === 'proposal'    && <ProposalGenerator leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'alerts'      && <SmartAlerts leads={leads} standaloneTask={standaloneTask}/>}
-              {tab === 'roi'         && <SourceROI leads={leads}/>}
               {tab === 'enrich'      && <LeadEnrichment leads={leads} onUpdateLead={onUpdateLead} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'workflow'    && (
                 <WorkflowBuilder leads={leads} currentUser={currentUser}

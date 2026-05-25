@@ -8,8 +8,11 @@ import {
   Download, FileText, TrendingUp, TrendingDown, Users, DollarSign,
   Target, Award, Activity, Brain, Flame, Calendar,
   ChevronDown, ArrowUpRight, ArrowDownRight, Star, Zap,
-  BarChart2, PieChartIcon, TableIcon, Sparkles,
+  BarChart2, PieChartIcon, TableIcon, Sparkles, Loader2, Copy,
 } from 'lucide-react';
+import Anthropic from '@anthropic-ai/sdk';
+import { getApiKey } from '../lib/apiKey';
+import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import type { Lead, LeadStatus } from '../types';
 
 /* ─── constants ───────────────────────────────────────────────────────────── */
@@ -24,7 +27,7 @@ const ALL_SOURCES = ['אורגני','פרסום ממומן','הפניה','אינ
 const HEB_MONTHS  = ['ינו','פבר','מרץ','אפר','מאי','יונ','יול','אוג','ספט','אוק','נוב','דצמ'];
 
 type TimeRange = '7'|'30'|'90'|'all';
-type ReportTab = 'overview'|'leads'|'revenue'|'team';
+type ReportTab = 'overview'|'leads'|'revenue'|'team'|'sources';
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 function parseDateStr(s: string): Date {
@@ -120,10 +123,312 @@ const tooltipStyle = {
   cursor: { fill: 'rgba(99,102,241,0.04)' },
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════ */
-interface OverviewProps { leads: Lead[]; onLeadClick: (lead: Lead) => void; }
+/* ─── SOURCE COLORS ────────────────────────────────────────────────────────── */
+const SOURCE_COLORS: Record<string, string> = {
+  'אורגני':      '#22c55e',
+  'פרסום ממומן': '#6366f1',
+  'הפניה':       '#8b5cf6',
+  'אינסטגרם':   '#ec4899',
+  'פייסבוק':    '#3b82f6',
+  'גוגל':        '#f59e0b',
+};
+const SOURCE_EMOJI: Record<string, string> = {
+  'אורגני':'🌱','פרסום ממומן':'💰','הפניה':'🤝','אינסטגרם':'📸','פייסבוק':'👤','גוגל':'🔍',
+};
+function getSrcColor(src: string) { return SOURCE_COLORS[src] ?? '#94a3b8'; }
+function getSrcEmoji(src: string) { return SOURCE_EMOJI[src]  ?? '📊'; }
 
-export default function Overview({ leads, onLeadClick }: OverviewProps) {
+/* ─── SOURCES ANALYSIS COMPONENT ───────────────────────────────────────────── */
+function SourcesAnalysis({ leads, workspaceId }: { leads: Lead[]; workspaceId?: string }) {
+  const [loading,  setLoading]  = useState(false);
+  const [analysis, setAnalysis] = useState('');
+  const [budget,   setBudget]   = useState('10000');
+  const [copied,   setCopied]   = useState(false);
+
+  /* dynamic stats — all sources found in leads, not a hardcoded list */
+  const stats = useMemo(() => {
+    const map = new Map<string, { total: number; active: number; rev: number; scores: number[] }>();
+    leads.forEach(l => {
+      if (!l.source) return;
+      const e = map.get(l.source) ?? { total: 0, active: 0, rev: 0, scores: [] };
+      e.total++; e.scores.push(l.aiScore);
+      if (l.status === 'לקוח פעיל') { e.active++; e.rev += (l.budget ?? 0); }
+      map.set(l.source, e);
+    });
+    return [...map.entries()].map(([src, d]) => ({
+      src,
+      total:    d.total,
+      active:   d.active,
+      rev:      d.rev,
+      conv:     d.total > 0 ? Math.round((d.active / d.total) * 100) : 0,
+      avgScore: d.scores.length > 0 ? Math.round(d.scores.reduce((a, b) => a + b, 0) / d.scores.length) : 0,
+    })).sort((a, b) => b.rev - a.rev);
+  }, [leads]);
+
+  const best    = stats[0];
+  const maxRev  = Math.max(...stats.map(d => d.rev),   1);
+
+  const exportSources = () => exportCSV('sources_report.csv',
+    stats.map(s => [s.src, String(s.total), String(s.active), `${s.conv}%`, `₪${s.rev.toLocaleString()}`, `${s.avgScore}%`]),
+    ['מקור','לידים','לקוחות פעילים','המרה','הכנסה/חודש','ציון AI ממוצע'],
+  );
+
+  const analyze = async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    if (workspaceId) {
+      const ok = await hasBalance(workspaceId);
+      if (!ok) return;
+    }
+    setLoading(true); setAnalysis('');
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const statsText = stats.map(s =>
+        `${s.src}: ${s.total} לידים → ${s.active} לקוחות (${s.conv}% המרה) → ₪${s.rev.toLocaleString()}/חודש, ציון AI ממוצע ${s.avgScore}%`
+      ).join('\n');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await (client.messages as any).create({
+        model: 'claude-opus-4-5', max_tokens: 1200,
+        messages: [{ role: 'user', content:
+`אתה יועץ מרקטינג ישראלי בכיר. נתח את ביצועי המקורות ותן המלצות מבוססות נתונים.
+
+**נתוני מקורות לידים:**
+${statsText}
+
+**תקציב חודשי זמין:** ₪${Number(budget).toLocaleString()}
+
+ספק ניתוח מקצועי:
+
+## 🏆 המקור המנצח
+[מה הכי משתלם ולמה — בנתונים]
+
+## 💰 הקצאת תקציב מומלצת
+[פירוט מדויק לכל ערוץ + אחוז מהתקציב]
+
+## 🚀 3 פעולות מיידיות
+1.
+2.
+3.
+
+## ⚠️ מה להפסיק
+[ערוץ עם ביצועים נמוכים]
+
+## 📈 תחזית לחודש הבא
+[לידים, לקוחות והכנסה צפויים]` }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = res.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      setAnalysis(text);
+      const cost = calculateCost('claude-opus-4-5', res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+      if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', 'Source ROI analysis');
+    } catch { /* silent */ } finally { setLoading(false); }
+  };
+
+  if (stats.length === 0) return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-16 text-center shadow-sm">
+      <BarChart2 size={44} className="mx-auto mb-3 text-slate-200"/>
+      <p className="text-slate-500 font-medium">אין נתוני מקורות — הוסף מקור ללידים</p>
+    </div>
+  );
+
+  const avgConv = Math.round(stats.reduce((s, d) => s + d.conv, 0) / stats.length);
+
+  return (
+    <div className="space-y-5">
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <button onClick={exportSources}
+          className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm transition-all">
+          <Download size={12}/> ייצוא CSV
+        </button>
+        <h2 className="font-black text-slate-800 flex items-center gap-2">
+          <BarChart2 size={18} className="text-indigo-500"/> ניתוח מקורות לידים
+        </h2>
+      </div>
+
+      {/* KPI summary */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard icon={BarChart2}   label="מקורות פעילים"  value={stats.length}            color="#6366f1"/>
+        <KpiCard icon={Target}      label="מקור מוביל"      value={best?.src ?? '—'}        color="#22c55e" sub={`${best?.conv ?? 0}% המרה`}/>
+        <KpiCard icon={DollarSign}  label="הכנסה מובילה"   value={fmtMoney(best?.rev ?? 0)} color="#10b981" sub={best?.src}/>
+        <KpiCard icon={Activity}    label="ממוצע המרה"      value={`${avgConv}%`}            color="#8b5cf6"/>
+      </div>
+
+      {/* Best source banner */}
+      {best && (
+        <div className="bg-gradient-to-l from-emerald-50 to-indigo-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0"
+            style={{ backgroundColor: getSrcColor(best.src) + '20' }}>
+            {getSrcEmoji(best.src)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">🏆 המקור הטוב ביותר</p>
+            <p className="text-lg font-black text-slate-800">{best.src}</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {best.total} לידים · {best.active} לקוחות פעילים · {fmtMoney(best.rev)}/חודש
+            </p>
+          </div>
+          <div className="text-center flex-shrink-0">
+            <p className="text-3xl font-black" style={{ color: getSrcColor(best.src) }}>{best.conv}%</p>
+            <p className="text-xs text-slate-400">המרה</p>
+          </div>
+        </div>
+      )}
+
+      {/* Charts row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Revenue bars */}
+        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+          <h3 className="font-bold text-slate-800 mb-4 text-right">הכנסה לפי מקור</h3>
+          <div className="space-y-3">
+            {stats.map(s => (
+              <div key={s.src}>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="font-bold text-slate-700">{fmtMoney(s.rev)}/חודש</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-600">{s.src}</span>
+                    <span className="text-lg leading-none">{getSrcEmoji(s.src)}</span>
+                  </div>
+                </div>
+                <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-700"
+                    style={{ width: `${Math.max(4, (s.rev / maxRev) * 100)}%`, backgroundColor: getSrcColor(s.src) }}/>
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+                  <span>{s.active} לקוחות · {s.conv}% המרה</span>
+                  <span>{s.total} לידים</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Volume Recharts bar */}
+        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+          <h3 className="font-bold text-slate-800 mb-4 text-right">נפח לידים vs לקוחות</h3>
+          <ResponsiveContainer width="100%" height={190}>
+            <BarChart data={stats} margin={{ top: 4, right: 4, left: -20, bottom: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
+              <XAxis dataKey="src" tick={{ fontSize: 9, fill: '#94a3b8' }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" interval={0}/>
+              <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={24}/>
+              <Tooltip {...tooltipStyle}/>
+              <Legend iconType="circle" iconSize={7}
+                formatter={v => <span style={{ fontSize: 10, color: '#64748b' }}>{v}</span>}/>
+              <Bar dataKey="total"  name="לידים"        radius={[4,4,0,0]} maxBarSize={30} fill="#e0e7ff"/>
+              <Bar dataKey="active" name="לקוחות פעילים" radius={[4,4,0,0]} maxBarSize={30}>
+                {stats.map((s, i) => <Cell key={i} fill={getSrcColor(s.src)}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Detailed table */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <span className="text-xs text-slate-400">{stats.length} מקורות</span>
+          <h3 className="font-bold text-slate-800">ביצועים מפורטים לפי מקור</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-right">
+                <th className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">מקור</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">לידים</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">לקוחות</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">המרה</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">ציון AI</th>
+                <th className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-left">הכנסה/חודש</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map((s, i) => (
+                <tr key={s.src} className={`border-b border-slate-50 ${
+                  i === 0 ? 'bg-emerald-50/40' : i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
+                }`}>
+                  <td className="px-5 py-3 text-right">
+                    <div className="flex items-center gap-2 justify-end">
+                      {i === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded-full">🏆</span>}
+                      <span className="font-semibold text-slate-800">{s.src}</span>
+                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: getSrcColor(s.src) }}/>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-center font-semibold text-slate-700">{s.total}</td>
+                  <td className="px-4 py-3 text-center font-bold text-emerald-600">{s.active}</td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                      s.conv >= 30 ? 'bg-emerald-100 text-emerald-700'
+                      : s.conv >= 15 ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-100 text-slate-500'
+                    }`}>{s.conv}%</span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`text-xs font-semibold ${
+                      s.avgScore >= 70 ? 'text-emerald-600' : s.avgScore >= 50 ? 'text-amber-600' : 'text-slate-400'
+                    }`}>{s.avgScore}%</span>
+                  </td>
+                  <td className="px-5 py-3 text-left font-black text-slate-800">₪{s.rev.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* AI Analysis panel */}
+      <div className="bg-gradient-to-bl from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-5">
+        <div className="flex items-center gap-2 mb-4 justify-end">
+          <h3 className="font-bold text-slate-800">ניתוח AI + המלצות תקציב</h3>
+          <Brain size={16} className="text-indigo-500"/>
+        </div>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="space-y-3">
+            <div>
+              <label className="block text-slate-600 text-xs font-semibold mb-1.5 text-right">תקציב שיווק חודשי (₪)</label>
+              <input type="number" value={budget} onChange={e => setBudget(e.target.value)}
+                className="w-full bg-white border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 text-right focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200"/>
+            </div>
+            <button onClick={analyze} disabled={loading}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+              {loading
+                ? <><Loader2 size={14} className="animate-spin"/> מנתח...</>
+                : <><Brain size={14}/> נתח ויעץ</>}
+            </button>
+            <p className="text-[10px] text-slate-400 text-center">מנתח את כל מקורות הלידים של סביבת העבודה</p>
+          </div>
+          <div className="md:col-span-2 bg-white border border-indigo-100 rounded-2xl p-4 min-h-[160px]">
+            {analysis ? (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(analysis).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
+                    className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg transition-colors font-medium">
+                    <Copy size={10}/> {copied ? '✓ הועתק' : 'העתק'}
+                  </button>
+                  <span className="text-xs text-indigo-400 flex items-center gap-1"><Sparkles size={9}/> ניתוח AI</span>
+                </div>
+                <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap text-right overflow-y-auto max-h-[400px]">
+                  {analysis}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full py-8 text-center">
+                <Brain size={36} className="text-indigo-200 mb-2"/>
+                <p className="text-slate-500 text-sm font-medium">הכנס תקציב ולחץ "נתח"</p>
+                <p className="text-slate-400 text-xs mt-1">AI ימליץ על חלוקת תקציב אופטימלית לכל מקור</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+interface OverviewProps { leads: Lead[]; onLeadClick: (lead: Lead) => void; workspaceId?: string; }
+
+export default function Overview({ leads, onLeadClick, workspaceId }: OverviewProps) {
   const { t, dir } = useLang();
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [tab,       setTab]       = useState<ReportTab>('overview');
@@ -298,9 +603,10 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
       <div className="flex gap-1 bg-slate-100 rounded-2xl p-1 w-fit">
         {([
           { key:'overview', label:t('overview.tabOverview'),  icon: PieChartIcon },
-          { key:'leads',    label:t('overview.tabLeads'),   icon: TableIcon },
-          { key:'revenue',  label:t('overview.tabRevenue'),        icon: TrendingUp },
-          { key:'team',     label:t('overview.tabTeam'),  icon: Users },
+          { key:'leads',    label:t('overview.tabLeads'),     icon: TableIcon },
+          { key:'revenue',  label:t('overview.tabRevenue'),   icon: TrendingUp },
+          { key:'team',     label:t('overview.tabTeam'),      icon: Users },
+          { key:'sources',  label:'מקורות ROI',               icon: BarChart2 },
         ] as {key:ReportTab;label:string;icon:React.ElementType}[]).map(t => (
           <button key={t.key} onClick={()=>setTab(t.key)}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
@@ -722,6 +1028,12 @@ export default function Overview({ leads, onLeadClick }: OverviewProps) {
           )}
         </>
       )}
+
+      {/* ══ TAB: SOURCES ROI ═══════════════════════════════════════════════════ */}
+      {tab==='sources' && (
+        <SourcesAnalysis leads={filtered} workspaceId={workspaceId}/>
+      )}
+
     </div>
   );
 }
