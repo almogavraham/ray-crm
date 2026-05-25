@@ -121,14 +121,16 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
     await new Promise(r => setTimeout(r, 2000));
 
     try {
-      const hasRoom = await adminQuotaHasRoom(topupPkg.dollars);
+      // Check quota against half the amount (50% admin margin)
+      const hasRoom = await adminQuotaHasRoom(topupPkg.dollars / 2);
       if (!hasRoom) {
         setTopupStep('form');
         setTopupError('אין מספיק קרדיטים זמינים כרגע. אנא פנה לתמיכה.');
         return;
       }
       await addTokens(workspace.id, topupPkg.dollars, 'topup', `רכישת טוקנים: ${topupPkg.label}`);
-      await deductFromAdminQuota(topupPkg.dollars);
+      // Admin earns 50% margin: deduct only half from admin quota
+      await deductFromAdminQuota(topupPkg.dollars / 2);
       setTokensGranted(dollarsToTokens(topupPkg.dollars));
       setTopupStep('success');
     } catch {
