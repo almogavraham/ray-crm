@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, GitBranch, Briefcase, CheckSquare,
   Layers, BarChart3, Sparkles, Settings, CreditCard,
   Plus, Menu, X, ChevronLeft, Bell, Zap, LogOut, Bot, Shield,
-  Clock, AlertTriangle, Search, Globe, Gem,
+  Clock, AlertTriangle, Search, Globe, Gem, Network,
 } from 'lucide-react';
 import type { Page, WorkspaceProfile } from '../types';
 import { useLang } from '../contexts/LangContext';
@@ -52,8 +52,9 @@ const NAV_GROUPS = [
     label: 'כלים חכמים',
     labelKey: 'nav.groupTools',
     items: [
-      { page: 'agents'   as Page, label: 'סוכנים AI',   labelKey: 'nav.agents',   icon: Bot        },
-      { page: 'ai'       as Page, label: 'עוזר AI',     labelKey: 'nav.ai',       icon: Sparkles   },
+      { page: 'agents'    as Page, label: 'סוכנים AI',        labelKey: 'nav.agents',    icon: Bot     },
+      { page: 'workflows' as Page, label: 'בונה אוטומציות', labelKey: 'nav.workflows', icon: Network },
+      { page: 'ai'        as Page, label: 'עוזר AI',         labelKey: 'nav.ai',        icon: Sparkles },
       { page: 'settings' as Page, label: 'הגדרות',      labelKey: 'nav.settings', icon: Settings   },
       { page: 'billing'  as Page, label: 'מנוי ותשלום', labelKey: 'nav.billing',  icon: CreditCard },
     ],

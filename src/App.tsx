@@ -12,6 +12,7 @@ import ContentHub from './pages/ContentHub';
 import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
 import Agents from './pages/Agents';
+import Workflows from './pages/Workflows';
 import LeadModal from './components/LeadModal';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
@@ -847,7 +848,7 @@ function AppInner() {
                 return pages.filter((p: Page) => p !== 'admin');
               })()
             // Super admin / dev bypass: full access
-            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','admin','billing'] as Page[] : []))
+            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','workflows','admin','billing'] as Page[] : []))
         }
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
@@ -963,6 +964,18 @@ function AppInner() {
             onCreateTask={handleStandaloneAdd}
             onUpdateLead={handleLeadUpdate}
             onToast={addToast}
+            workspaceId={wid ?? undefined}
+          />
+        )}
+        {page === 'workflows' && (
+          <Workflows
+            leads={leads}
+            currentUser={displayName}
+            standaloneTask={standaloneTask}
+            onCreateTask={handleStandaloneAdd}
+            onUpdateLead={handleLeadUpdate}
+            onToast={addToast}
+            workspaceId={wid ?? undefined}
           />
         )}
         {page === 'content' && (

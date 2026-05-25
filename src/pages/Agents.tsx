@@ -1099,7 +1099,7 @@ const ACTION_ICON: Record<WFActionType, string> = {
 const mkCond = (): WorkflowCondition => ({ id: `${Date.now()}${Math.random()}`, type: 'days_inactive', value: '7' });
 const mkAct  = (): WorkflowAction    => ({ id: `${Date.now()}${Math.random()}`, type: 'create_task',   config: {} });
 
-function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId }: {
+export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId }: {
   leads: Lead[]; currentUser: string;
   onCreateTask: (task: StandaloneTask) => void;
   onUpdateLead: (lead: Lead) => void;
