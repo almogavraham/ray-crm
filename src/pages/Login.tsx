@@ -61,12 +61,17 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
       await signIn(email, password);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
+      console.error('[Login] Firebase auth error:', code, err);
       if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password') {
         setError('אימייל או סיסמה שגויים');
       } else if (code === 'auth/too-many-requests') {
         setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
+      } else if (code === 'auth/network-request-failed') {
+        setError('בעיית רשת — בדוק חיבור לאינטרנט ונסה שוב');
+      } else if (code === 'auth/internal-error' || code === 'auth/requests-to-this-api-are-blocked') {
+        setError('שגיאת שרת. נסה לרענן את הדף ולהתחבר שוב');
       } else {
-        setError('שגיאה בהתחברות. נסה שוב');
+        setError(`שגיאה בהתחברות (${code || 'unknown'}). נסה שוב`);
       }
     } finally {
       setLoading(false);
@@ -74,7 +79,7 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="min-h-screen flex items-center justify-center p-4" dir="rtl" style={{ background: 'linear-gradient(135deg,#f5f3ff 0%,#eef2ff 50%,#f0fdf4 100%)' }}>
       <div className="w-full max-w-md">
 
         {/* ── Logo / Branding ──────────────────────────────────────────── */}
@@ -107,7 +112,7 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
                 <Zap size={24} className="text-white" />
               </div>
               <div>
-                <p className="text-white font-black text-3xl leading-tight">RAY</p>
+                <p className="font-black text-3xl leading-tight" style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>RAY</p>
                 <p className="text-slate-500 text-xs font-medium -mt-1">Lead Manager</p>
               </div>
             </>
@@ -115,34 +120,34 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
         </div>
 
         {/* ── Card ─────────────────────────────────────────────────────── */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
-          <h1 className="text-white font-bold text-xl mb-1">ברוך הבא</h1>
-          <p className="text-slate-400 text-sm mb-8">
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-2xl">
+          <h1 className="text-slate-800 font-bold text-xl mb-1">ברוך הבא</h1>
+          <p className="text-slate-500 text-sm mb-8">
             {branding ? `התחבר לסביבת ${branding.name}` : 'התחבר כדי להמשיך'}
           </p>
 
           <form onSubmit={handle} className="space-y-5">
             <div>
-              <label className="block text-slate-400 text-sm font-medium mb-2">{t('auth.email')}</label>
+              <label className="block text-slate-600 text-sm font-medium mb-2">{t('auth.email')}</label>
               <div className="relative">
                 <Mail size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
                   type="email" value={email} onChange={e => setEmail(e.target.value)} required
                   placeholder="your@email.com"
-                  className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                  className="w-full bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-colors"
                   dir="ltr"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-400 text-sm font-medium mb-2">{t('auth.password')}</label>
+              <label className="block text-slate-600 text-sm font-medium mb-2">{t('auth.password')}</label>
               <div className="relative">
                 <Lock size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
                   type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required
                   placeholder="••••••••"
-                  className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-10 pl-10 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                  className="w-full bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-xl pr-10 pl-10 py-3 text-sm focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-colors"
                   dir="ltr"
                 />
                 <button type="button" onClick={() => setShowPw(p => !p)}
@@ -159,7 +164,8 @@ export default function Login({ wsSlug, onSignUp, onBack }: { wsSlug?: string; o
             )}
 
             <button type="submit" disabled={loading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25">
+              className="w-full disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+              style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow: '0 4px 16px #8b5cf640' }}>
               {loading ? t('common.loading') : t('auth.signIn')}
             </button>
 

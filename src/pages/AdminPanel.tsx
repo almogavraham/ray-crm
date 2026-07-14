@@ -3,6 +3,7 @@
  * Only accessible to super-admin (almogavraham30@gmail.com)
  */
 import { useState, useEffect, useCallback } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import {
   Users, Building2, TrendingUp, Shield, AlertTriangle, CheckCircle2,
   Clock, XCircle, RefreshCw, Search, BarChart3, Zap, Copy, ExternalLink,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
-  query, orderBy, where, setDoc, getDoc, onSnapshot,
+  query, orderBy, where, setDoc, getDoc, onSnapshot, writeBatch,
 } from 'firebase/firestore';
 import { db, auth, functions } from '../lib/firebase';
 import { sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
@@ -28,7 +29,7 @@ import {
 import type { PlanTokenConfig, AdminQuota } from '../lib/tokenTracker';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
-type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'features' | 'announcements' | 'releases' | 'system';
+type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'tokens' | 'features' | 'announcements' | 'releases' | 'system' | 'emails' | 'integrations';
 type PlanKey  = 'trial' | 'basic' | 'pro' | 'enterprise';
 type PlanPages = Record<PlanKey, Page[]>;
 
@@ -56,58 +57,95 @@ interface FeatureFlags {
   [feature: string]: { trial: boolean; basic: boolean; pro: boolean; enterprise: boolean };
 }
 
+interface EmailTemplate {
+  id: string;
+  name: string;
+  subject: string;
+  htmlBody: string;
+  previewText: string;
+  updatedAt: string;
+}
+
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
-const STATUS_CFG: Record<WorkspaceStatus, { label: string; color: string; bg: string; dot: string }> = {
-  active:    { label: 'פעיל',   color: 'text-emerald-700', bg: 'bg-emerald-50 border-emerald-200',  dot: 'bg-emerald-500' },
-  trial:     { label: 'ניסיון', color: 'text-blue-700',    bg: 'bg-blue-50 border-blue-200',        dot: 'bg-blue-500'    },
-  pending:   { label: 'ממתין',  color: 'text-amber-700',   bg: 'bg-amber-50 border-amber-200',      dot: 'bg-amber-500'   },
-  suspended: { label: 'מושהה', color: 'text-red-700',     bg: 'bg-red-50 border-red-200',          dot: 'bg-red-500'     },
+const STATUS_CFG: Record<WorkspaceStatus, { label: string; color: string; bg: string; dot: string; style?: React.CSSProperties }> = {
+  active:    { label: 'פעיל',   color: '', bg: '', dot: 'bg-emerald-400', style: { background: 'rgba(16,185,129,0.15)', color: '#34d399', border: '1px solid rgba(16,185,129,0.28)' } },
+  trial:     { label: 'ניסיון', color: '', bg: '', dot: 'bg-blue-400',    style: { background: 'rgba(59,130,246,0.15)',  color: '#60a5fa', border: '1px solid rgba(59,130,246,0.28)'  } },
+  pending:   { label: 'ממתין',  color: '', bg: '', dot: 'bg-amber-400',   style: { background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.28)'  } },
+  suspended: { label: 'מושהה', color: '', bg: '', dot: 'bg-red-400',     style: { background: 'rgba(239,68,68,0.15)',  color: '#f87171', border: '1px solid rgba(239,68,68,0.28)'   } },
 };
 
 const PLAN_COLORS: Record<string, string> = {
-  trial: 'bg-slate-100 text-slate-600', basic: 'bg-sky-100 text-sky-700',
-  pro: 'bg-violet-100 text-violet-700', enterprise: 'bg-amber-100 text-amber-700',
+  trial: '', basic: '', pro: '', enterprise: '',
+};
+const PLAN_COLOR_STYLES: Record<string, React.CSSProperties> = {
+  trial:      { background: 'rgba(148,163,184,0.15)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.25)' },
+  basic:      { background: 'rgba(56,189,248,0.15)',  color: '#38bdf8', border: '1px solid rgba(56,189,248,0.25)'  },
+  pro:        { background: 'rgba(139,92,246,0.15)',  color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)'  },
+  enterprise: { background: 'rgba(251,191,36,0.15)',  color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)'  },
 };
 
 const FEATURE_LABELS: Record<string, string> = {
   ai:       'עוזר AI',    kanban:   'פייפליין Kanban', deals:    'ניהול לקוחות',
   content:  'קריאייטיב', agents:   'סוכנים חכמים',   overview: 'דוחות',
   tasks:    'משימות',     team:     'ניהול צוות',
+  workflows:    'בונה אוטומציות',
+  integrations: 'אינטגרציות',
+  'ai-studio':      'AI Studio',
+  'email-agent':    'סוכן מכירות AI',
+  'marketing-agent':'סוכן שיווק',
 };
 
 const PAGE_LABELS: Partial<Record<Page, string>> = {
-  home:      'לוח בקרה',
-  dashboard: 'לידים',
-  kanban:    'פייפליין',
-  deals:     'לקוחות פעילים',
-  tasks:     'משימות',
-  content:   'קריאייטיב',
-  overview:  'דוחות',
-  agents:    'סוכנים AI',
-  ai:        'עוזר AI',
-  settings:  'הגדרות',
-  billing:   'מנוי ותשלום',
-  team:      'ניהול צוות',
+  home:             'לוח בקרה',
+  dashboard:        'לידים',
+  kanban:           'פייפליין',
+  deals:            'לקוחות פעילים',
+  tasks:            'משימות',
+  content:          'קריאייטיב',
+  overview:         'דוחות',
+  analytics:        'אנליטיקס',
+  agents:           'סוכנים AI',
+  workflows:        'בונה אוטומציות',
+  integrations:     'אינטגרציות',
+  ai:               'עוזר AI',
+  'ai-studio':      'AI Studio',
+  'email-agent':    'סוכן מכירות AI',
+  'marketing-agent':'סוכן שיווק',
+  settings:         'הגדרות',
+  billing:          'מנוי ותשלום',
+  team:             'ניהול צוות',
 };
+
 // Pages manageable per-plan (exclude 'admin' — always hidden from workspace users)
-const MANAGED_PAGES: Page[] = ['home','dashboard','kanban','deals','tasks','content','overview','agents','ai','team','settings','billing'];
+const MANAGED_PAGES: Page[] = [
+  'home','dashboard','kanban','deals','tasks',
+  'content','overview','analytics',
+  'agents','workflows','integrations',
+  'ai','ai-studio','email-agent','marketing-agent',
+  'team','settings','billing',
+];
 
 const DEFAULT_PLAN_PAGES: PlanPages = {
   trial:      ['home','dashboard','kanban','tasks','ai','settings','billing'],
   basic:      ['home','dashboard','kanban','tasks','ai','overview','team','settings','billing','content'],
-  pro:        ['home','dashboard','kanban','deals','tasks','ai','overview','team','settings','billing','content','agents'],
-  enterprise: ['home','dashboard','kanban','deals','tasks','ai','overview','team','settings','billing','content','agents'],
+  pro:        ['home','dashboard','kanban','deals','tasks','ai','ai-studio','overview','analytics','team','settings','billing','content','agents','workflows','integrations','email-agent','marketing-agent'],
+  enterprise: ['home','dashboard','kanban','deals','tasks','ai','ai-studio','overview','analytics','team','settings','billing','content','agents','workflows','integrations','email-agent','marketing-agent'],
 };
 
 const DEFAULT_FLAGS: FeatureFlags = {
-  ai:       { trial: true,  basic: true,  pro: true,  enterprise: true },
-  kanban:   { trial: true,  basic: true,  pro: true,  enterprise: true },
-  deals:    { trial: true,  basic: true,  pro: true,  enterprise: true },
-  content:  { trial: false, basic: true,  pro: true,  enterprise: true },
-  agents:   { trial: false, basic: false, pro: true,  enterprise: true },
-  overview: { trial: true,  basic: true,  pro: true,  enterprise: true },
-  tasks:    { trial: true,  basic: true,  pro: true,  enterprise: true },
-  team:     { trial: true,  basic: true,  pro: true,  enterprise: true },
+  ai:               { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  kanban:           { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  deals:            { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  content:          { trial: false, basic: true,  pro: true,  enterprise: true  },
+  agents:           { trial: false, basic: false, pro: true,  enterprise: true  },
+  overview:         { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  tasks:            { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  team:             { trial: true,  basic: true,  pro: true,  enterprise: true  },
+  workflows:        { trial: false, basic: false, pro: true,  enterprise: true  },
+  integrations:     { trial: false, basic: false, pro: true,  enterprise: true  },
+  'ai-studio':      { trial: false, basic: false, pro: true,  enterprise: true  },
+  'email-agent':    { trial: false, basic: false, pro: true,  enterprise: true  },
+  'marketing-agent':{ trial: false, basic: false, pro: true,  enterprise: true  },
 };
 
 /* ─── Revenue / health helpers ─────────────────────────────────────────────── */
@@ -156,6 +194,7 @@ function thisMonth(iso: string) {
 /* ─── Main Component ──────────────────────────────────────────────────────── */
 export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'success'|'error'|'info') => void }) {
   const toast = onToast ?? (() => {});
+  const { isDark, c } = useTheme();
 
   const [tab,        setTab]        = useState<AdminTab>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -171,6 +210,12 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   const [planPagesSaving, setPlanPagesSaving] = useState(false);
   const [planTokenAmounts, setPlanTokenAmounts] = useState<PlanTokenConfig>(DEFAULT_PLAN_TOKEN_AMOUNTS);
   const [tokenAmountsSaving, setTokenAmountsSaving] = useState(false);
+
+  /* ── Email templates state ──────────────────────────────────────────────── */
+  const [emailTemplates,   setEmailTemplates]   = useState<EmailTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null);
+  const [emailSaving,      setEmailSaving]       = useState(false);
+  const [emailPreview,     setEmailPreview]      = useState(false);
 
   /* ── Load all data ──────────────────────────────────────────────────────── */
   const loadAll = useCallback(async () => {
@@ -198,6 +243,256 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  /* ── Email templates ────────────────────────────────────────────────────── */
+  const seedDefaultTemplates = async () => {
+    const welcomeHtml = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ברוכים הבאים ל-RAY</title>
+</head>
+<body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+        <!-- Header -->
+        <tr><td style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);border-radius:20px 20px 0 0;padding:40px 40px 32px;text-align:center;">
+          <div style="display:inline-block;background:rgba(255,255,255,0.15);border-radius:16px;padding:12px 28px;margin-bottom:20px;">
+            <span style="font-size:28px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">RAY</span>
+            <span style="font-size:12px;color:rgba(255,255,255,0.7);margin-right:8px;font-weight:500;">CRM</span>
+          </div>
+          <h1 style="margin:0;font-size:26px;font-weight:800;color:#ffffff;line-height:1.3;">ברוכים הבאים! 🚀</h1>
+          <p style="margin:12px 0 0;font-size:15px;color:rgba(255,255,255,0.8);line-height:1.6;">המערכת שלך מוכנה — בואו נתחיל</p>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="background:#1e293b;padding:40px;">
+
+          <p style="margin:0 0 28px;font-size:15px;color:#cbd5e1;line-height:1.7;">היי,<br/><br/>אנחנו שמחים שהצטרפת ל-RAY! הנה כמה דברים שתוכל לעשות כבר עכשיו כדי להפיק את המקסימום מהמערכת.</p>
+
+          <!-- Feature cards -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:32px;">
+            <tr>
+              <td width="33%" style="padding:0 6px 0 0;vertical-align:top;">
+                <div style="background:#0f172a;border:1px solid rgba(99,102,241,0.3);border-radius:14px;padding:20px;text-align:center;">
+                  <div style="font-size:26px;margin-bottom:10px;">📋</div>
+                  <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#e2e8f0;">ניהול לידים</p>
+                  <p style="margin:0;font-size:11px;color:#64748b;line-height:1.5;">עקוב אחר כל ליד ממקור עד סגירה</p>
+                </div>
+              </td>
+              <td width="33%" style="padding:0 3px;vertical-align:top;">
+                <div style="background:#0f172a;border:1px solid rgba(99,102,241,0.3);border-radius:14px;padding:20px;text-align:center;">
+                  <div style="font-size:26px;margin-bottom:10px;">🤖</div>
+                  <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#e2e8f0;">AI חכם</p>
+                  <p style="margin:0;font-size:11px;color:#64748b;line-height:1.5;">תובנות אוטומטיות לכל ליד</p>
+                </div>
+              </td>
+              <td width="33%" style="padding:0 0 0 6px;vertical-align:top;">
+                <div style="background:#0f172a;border:1px solid rgba(99,102,241,0.3);border-radius:14px;padding:20px;text-align:center;">
+                  <div style="font-size:26px;margin-bottom:10px;">👥</div>
+                  <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#e2e8f0;">ניהול צוות</p>
+                  <p style="margin:0;font-size:11px;color:#64748b;line-height:1.5;">שתף ועבוד יחד בזמן אמת</p>
+                </div>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Getting started checklist -->
+          <div style="background:#0f172a;border:1px solid rgba(99,102,241,0.2);border-radius:14px;padding:24px;margin-bottom:32px;">
+            <p style="margin:0 0 16px;font-size:14px;font-weight:700;color:#a78bfa;">✅ צ'קליסט התחלה מהירה</p>
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+                <span style="display:inline-block;width:20px;height:20px;background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);border-radius:6px;margin-left:10px;vertical-align:middle;"></span>
+                <span style="font-size:13px;color:#cbd5e1;vertical-align:middle;">הגדר פרופיל עסקי — שם, לוגו ותיאור</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+                <span style="display:inline-block;width:20px;height:20px;background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);border-radius:6px;margin-left:10px;vertical-align:middle;"></span>
+                <span style="font-size:13px;color:#cbd5e1;vertical-align:middle;">הוסף את הלידים הראשונים שלך</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;">
+                <span style="display:inline-block;width:20px;height:20px;background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);border-radius:6px;margin-left:10px;vertical-align:middle;"></span>
+                <span style="font-size:13px;color:#cbd5e1;vertical-align:middle;">הגדר את הצוות שלך והענק גישות</span>
+              </td></tr>
+            </table>
+          </div>
+
+          <!-- CTA button -->
+          <div style="text-align:center;">
+            <a href="https://ray-crm-app.web.app" style="display:inline-block;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 36px;border-radius:12px;letter-spacing:0.3px;">כנס למערכת &rarr;</a>
+          </div>
+
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#0f172a;border-radius:0 0 20px 20px;padding:24px 40px;text-align:center;border-top:1px solid rgba(255,255,255,0.06);">
+          <p style="margin:0 0 6px;font-size:12px;color:#475569;">RAY CRM &mdash; מערכת ניהול לידים חכמה</p>
+          <p style="margin:0;font-size:11px;color:#334155;"><a href="#" style="color:#6366f1;text-decoration:none;">הסר מנוי</a> &nbsp;|&nbsp; <a href="#" style="color:#6366f1;text-decoration:none;">הגדרות מייל</a></p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    const newLeadHtml = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ליד חדש נכנס</title>
+</head>
+<body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+        <!-- Header -->
+        <tr><td style="background:linear-gradient(135deg,#059669 0%,#10b981 100%);border-radius:20px 20px 0 0;padding:32px 40px;text-align:center;">
+          <div style="font-size:40px;margin-bottom:12px;">🎯</div>
+          <h1 style="margin:0;font-size:22px;font-weight:800;color:#ffffff;">ליד חדש נכנס!</h1>
+          <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">{{leadName}} ממתין לטיפול</p>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="background:#1e293b;padding:36px 40px;">
+
+          <div style="background:#0f172a;border:1px solid rgba(16,185,129,0.25);border-radius:14px;padding:24px;margin-bottom:28px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">שם הליד</span><br/>
+                <span style="font-size:15px;color:#e2e8f0;font-weight:700;">{{leadName}}</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">מקור</span><br/>
+                <span style="font-size:14px;color:#cbd5e1;">{{leadSource}}</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">נציג מטפל</span><br/>
+                <span style="font-size:14px;color:#cbd5e1;">{{agentName}}</span>
+              </td></tr>
+            </table>
+          </div>
+
+          <div style="text-align:center;">
+            <a href="https://ray-crm-app.web.app" style="display:inline-block;background:linear-gradient(135deg,#059669,#10b981);color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:12px;">צפה בליד &rarr;</a>
+          </div>
+
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#0f172a;border-radius:0 0 20px 20px;padding:20px 40px;text-align:center;border-top:1px solid rgba(255,255,255,0.06);">
+          <p style="margin:0;font-size:11px;color:#334155;">RAY CRM &mdash; <a href="#" style="color:#6366f1;text-decoration:none;">הסר מנוי</a></p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    const newTaskHtml = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>משימה חדשה</title>
+</head>
+<body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+        <!-- Header -->
+        <tr><td style="background:linear-gradient(135deg,#f59e0b 0%,#f97316 100%);border-radius:20px 20px 0 0;padding:32px 40px;text-align:center;">
+          <div style="font-size:40px;margin-bottom:12px;">📌</div>
+          <h1 style="margin:0;font-size:22px;font-weight:800;color:#ffffff;">משימה חדשה הוקצתה לך</h1>
+          <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.85);">יש לך משימה חדשה ב-RAY</p>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="background:#1e293b;padding:36px 40px;">
+
+          <div style="background:#0f172a;border:1px solid rgba(245,158,11,0.25);border-radius:14px;padding:24px;margin-bottom:28px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">תיאור המשימה</span><br/>
+                <span style="font-size:15px;color:#e2e8f0;font-weight:700;">{{taskDescription}}</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">תאריך יעד</span><br/>
+                <span style="font-size:14px;color:#fbbf24;">{{dueDate}}</span>
+              </td></tr>
+              <tr><td style="padding:8px 0;">
+                <span style="font-size:12px;color:#64748b;font-weight:600;">הוקצה על ידי</span><br/>
+                <span style="font-size:14px;color:#cbd5e1;">{{assignedBy}}</span>
+              </td></tr>
+            </table>
+          </div>
+
+          <div style="text-align:center;">
+            <a href="https://ray-crm-app.web.app" style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#f97316);color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:12px;">צפה במשימה &rarr;</a>
+          </div>
+
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#0f172a;border-radius:0 0 20px 20px;padding:20px 40px;text-align:center;border-top:1px solid rgba(255,255,255,0.06);">
+          <p style="margin:0;font-size:11px;color:#334155;">RAY CRM &mdash; <a href="#" style="color:#6366f1;text-decoration:none;">הסר מנוי</a></p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    const defaults: EmailTemplate[] = [
+      {
+        id: 'welcome',
+        name: 'ברוכים הבאים ל-RAY',
+        subject: 'ברוכים הבאים! המערכת שלך מוכנה 🚀',
+        previewText: 'כמה צעדים פשוטים כדי להתחיל',
+        htmlBody: welcomeHtml,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'new_lead',
+        name: 'ליד חדש נכנס',
+        subject: '{{leadName}} נכנס כליד חדש 🎯',
+        previewText: 'ליד חדש ממתין לטיפול',
+        htmlBody: newLeadHtml,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'new_task',
+        name: 'משימה חדשה',
+        subject: 'משימה חדשה: {{taskDescription}}',
+        previewText: 'יש לך משימה חדשה ב-RAY',
+        htmlBody: newTaskHtml,
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+
+    for (const tmpl of defaults) {
+      await setDoc(doc(db, 'emailTemplates', tmpl.id), tmpl);
+    }
+  };
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'emailTemplates'), snap => {
+      const templates = snap.docs.map(d => ({ id: d.id, ...d.data() } as EmailTemplate));
+      setEmailTemplates(templates);
+      if (templates.length === 0) {
+        seedDefaultTemplates();
+      }
+    });
+    return unsub;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ── Workspace actions ──────────────────────────────────────────────────── */
   const setStatus = async (wid: string, status: WorkspaceStatus) => {
@@ -295,10 +590,29 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
   const savePlanPages = async (next: PlanPages) => {
     setPlanPagesSaving(true);
     try {
+      // 1. Save plan-pages template to system config
       await setDoc(doc(db, 'system', 'config'), { planPages: next }, { merge: true });
       setPlanPages(next);
-      toast('דפי מסלול עודכנו ✓', 'success');
-    } catch { toast('שגיאה בשמירת דפי מסלול', 'error'); }
+
+      // 2. Propagate to every workspace that has NO custom page override
+      //    (allowedPages === null/undefined → uses plan default)
+      //    Batch writes in chunks of 400 to stay under Firestore's 500-op limit
+      const nonCustom = workspaces.filter(w => !Array.isArray(w.allowedPages));
+      if (nonCustom.length > 0) {
+        const CHUNK = 400;
+        for (let i = 0; i < nonCustom.length; i += CHUNK) {
+          const b = writeBatch(db);
+          nonCustom.slice(i, i + CHUNK).forEach(ws => {
+            const pages = next[ws.plan as PlanKey] ?? next.trial;
+            b.update(doc(db, 'workspaces', ws.id), { allowedPages: pages });
+          });
+          await b.commit();
+        }
+        toast(`דפי מסלול עודכנו ✓ — ${nonCustom.length} סביבות עובדו`, 'success');
+      } else {
+        toast('דפי מסלול עודכנו ✓', 'success');
+      }
+    } catch (e) { console.error(e); toast('שגיאה בשמירת דפי מסלול', 'error'); }
     finally { setPlanPagesSaving(false); }
   };
   /* ── Plan token amounts ──────────────────────────────────────────────────── */
@@ -346,17 +660,20 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     { key: 'workspaces',    label: 'סביבות עבודה',   icon: Building2,  group: 'main' },
     { key: 'analytics',     label: 'אנליטיקס',        icon: BarChart3,  group: 'main' },
     { key: 'users',         label: 'משתמשים',         icon: Users,      group: 'main' },
+    { key: 'tokens',        label: 'טוקנים',           icon: Zap,        group: 'main' },
     { key: 'features',      label: 'תכונות',           icon: Settings2,  group: 'ops'  },
     { key: 'announcements', label: 'הודעות',           icon: Megaphone,  group: 'ops'  },
     { key: 'releases',      label: 'פרסום גרסאות',    icon: Rocket,     group: 'ops'  },
+    { key: 'integrations',  label: 'אינטגרציות',      icon: KeyRound,   group: 'ops'  },
     { key: 'system',        label: 'מערכת',            icon: Globe,      group: 'ops'  },
+    { key: 'emails',        label: 'מיילים',           icon: Mail,       group: 'ops'  },
   ] as { key: AdminTab; label: string; icon: React.ElementType; group: string }[];
 
   const currentTabLabel = NAV_ITEMS.find(n => n.key === tab)?.label ?? '';
 
   /* ─── UI ──────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex h-[calc(100vh-theme(spacing.16))] -m-4 md:-m-6 overflow-hidden bg-slate-50" dir="rtl">
+    <div className="flex h-[calc(100vh-theme(spacing.16))] -m-4 md:-m-6 overflow-hidden admin-panel" dir="rtl" style={{ background: c.pageBg, backgroundImage: c.pageBgImage, backgroundSize: c.pageBgSize }}>
 
       {/* Mobile overlay backdrop */}
       {sidebarOpen && (
@@ -365,12 +682,12 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
 
       {/* ── Left sidebar nav ────────────────────────────────────────────── */}
       <aside className={`
-        fixed md:relative inset-y-0 right-0 z-50 w-64 md:w-52 bg-slate-900 flex flex-col flex-shrink-0 border-l border-slate-800
+        fixed md:relative inset-y-0 right-0 z-50 w-64 md:w-52 flex flex-col flex-shrink-0
         transform transition-transform duration-300 md:transform-none
         ${sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
-      `}>
-        <div className="px-4 py-5 border-b border-slate-800 flex items-center justify-between">
-          <button onClick={() => setSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white p-1 transition-colors">
+      `} style={{ background: 'rgba(10,15,30,0.95)', borderLeft: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(16px)' }}>
+        <div className="px-4 py-5 flex items-center justify-between" style={{ background: 'rgba(99,102,241,0.15)', borderBottom: '1px solid rgba(99,102,241,0.2)' }}>
+          <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 transition-colors" style={{ color: 'rgba(255,255,255,0.4)' }}>
             <X size={16} />
           </button>
           <div className="flex items-center gap-2.5">
@@ -378,8 +695,8 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
               <Shield size={15} className="text-white" />
             </div>
             <div>
-              <p className="text-white font-bold text-sm">Admin Console</p>
-              <p className="text-slate-500 text-[10px]">Super Admin</p>
+              <p className="font-bold text-sm" style={{ color: 'white' }}>Admin Console</p>
+              <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.45)' }}>Super Admin</p>
             </div>
           </div>
         </div>
@@ -389,12 +706,15 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
             <div key={key}>
               {/* Divider between groups */}
               {idx > 0 && arr[idx].group !== arr[idx-1].group && (
-                <div className="border-t border-slate-800 my-2 mx-1" />
+                <div className="my-2 mx-1" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }} />
               )}
               <button onClick={() => { setTab(key); setSidebarOpen(false); }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  tab === key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                }`}>
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
+                style={tab === key
+                  ? { background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: 'white' }
+                  : { color: 'rgba(255,255,255,0.45)' }}
+                onMouseEnter={e => { if (tab !== key) { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(99,102,241,0.12)'; (e.currentTarget as HTMLButtonElement).style.color = 'rgba(255,255,255,0.8)'; } }}
+                onMouseLeave={e => { if (tab !== key) { (e.currentTarget as HTMLButtonElement).style.background = ''; (e.currentTarget as HTMLButtonElement).style.color = 'rgba(255,255,255,0.45)'; } }}>
                 <Icon size={15} />
                 <span>{label}</span>
                 {key === 'workspaces' && trialExpiringSoon > 0 && (
@@ -408,13 +728,14 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
         </nav>
 
         {/* ── New Workspace button ─────────────────────────────────── */}
-        <div className="px-3 pb-3 border-t border-slate-800 pt-3">
+        <div className="px-3 pb-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <SignupLinkButton onToast={toast} />
         </div>
 
-        <div className="px-4 py-3 border-t border-slate-800">
+        <div className="px-4 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <button onClick={loadAll}
-            className="w-full flex items-center justify-center gap-2 text-slate-500 hover:text-slate-300 text-xs transition-colors">
+            className="w-full flex items-center justify-center gap-2 text-xs transition-colors"
+            style={{ color: 'rgba(255,255,255,0.35)' }}>
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
             רענן נתונים
           </button>
@@ -424,15 +745,15 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
       {/* ── Main content ────────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto min-w-0">
         {/* Mobile header */}
-        <div className="md:hidden flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+        <div className="md:hidden flex items-center justify-between px-4 py-3" style={{ background: 'rgba(10,15,30,0.9)', borderBottom: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(16px)' }}>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
               <Shield size={13} className="text-white" />
             </div>
-            <span className="text-white font-bold text-sm">Admin Console</span>
-            {currentTabLabel && <span className="text-slate-400 text-xs">· {currentTabLabel}</span>}
+            <span className="font-bold text-sm" style={{ color: 'white' }}>Admin Console</span>
+            {currentTabLabel && <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>· {currentTabLabel}</span>}
           </div>
-          <button onClick={() => setSidebarOpen(true)} className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors">
+          <button onClick={() => setSidebarOpen(true)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'rgba(255,255,255,0.4)' }}>
             <Menu size={18} />
           </button>
         </div>
@@ -446,10 +767,159 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
             {tab === 'workspaces'    && <WorkspacesTab workspaces={workspaces} selected={selected} onSelect={setSelected} onStatus={setStatus} onPlan={setPlan} onDelete={deleteWorkspace} onToast={toast} planPages={planPages} onSetPages={setWorkspacePages} planTokenAmounts={planTokenAmounts} />}
             {tab === 'analytics'     && <AnalyticsTab workspaces={workspaces} />}
             {tab === 'users'         && <UsersTab users={users} workspaces={workspaces} />}
+            {tab === 'tokens'        && <TokensTab workspaces={workspaces} onToast={toast} onRefresh={loadAll} />}
             {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} planPages={planPages} onTogglePage={togglePlanPage} onSavePlanPages={savePlanPages} planPagesSaving={planPagesSaving} planTokenAmounts={planTokenAmounts} onSavePlanTokenAmounts={savePlanTokenAmounts} tokenAmountsSaving={tokenAmountsSaving} />}
             {tab === 'announcements' && <AnnouncementsTab announcements={announcements} onRefresh={loadAll} onToast={toast} />}
             {tab === 'releases'      && <ReleasesTab releases={releases} workspaces={workspaces} onRefresh={loadAll} onToast={toast} />}
+            {tab === 'integrations'  && <IntegrationsTab onToast={toast} />}
             {tab === 'system'        && <SystemTab workspaces={workspaces} onToast={toast} />}
+            {tab === 'emails'        && (
+              <div className="p-6 h-full flex flex-col">
+                <div className="flex items-start justify-between gap-4 mb-5">
+                  <div>
+                    <h1 className="text-xl font-black" style={{ color: 'white' }}>תבניות מייל</h1>
+                    <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>ערוך ותצוגה מקדימה של תבניות האימייל</p>
+                  </div>
+                </div>
+                <div className="flex gap-5 flex-1 min-h-0">
+                  {/* Template list */}
+                  <div className="w-56 flex-shrink-0 space-y-2 overflow-y-auto">
+                    <h3 className="font-bold text-sm mb-3" style={{ color: 'rgba(255,255,255,0.7)' }}>תבניות</h3>
+                    {emailTemplates.length === 0 && (
+                      <p className="text-xs" style={{ color: 'rgba(255,255,255,0.3)' }}>טוען תבניות...</p>
+                    )}
+                    {emailTemplates.map(tmpl => (
+                      <button
+                        key={tmpl.id}
+                        onClick={() => { setSelectedTemplate({ ...tmpl }); setEmailPreview(false); }}
+                        className="w-full text-right p-3 rounded-xl text-sm font-medium transition-all"
+                        style={selectedTemplate?.id === tmpl.id
+                          ? { background: 'rgba(99,102,241,0.25)', color: '#a78bfa', border: '1px solid rgba(99,102,241,0.5)' }
+                          : { background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.55)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                        {tmpl.name}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Editor panel */}
+                  {selectedTemplate ? (
+                    <div className="flex-1 flex flex-col gap-3 min-w-0 overflow-y-auto">
+                      {/* Tab switcher + title */}
+                      <div className="flex items-center gap-2 justify-between flex-shrink-0">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setEmailPreview(false)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                            style={!emailPreview
+                              ? { background: 'rgba(99,102,241,0.25)', color: '#a78bfa', border: '1px solid rgba(99,102,241,0.4)' }
+                              : { color: 'rgba(255,255,255,0.4)', border: '1px solid transparent' }}>
+                            עריכה
+                          </button>
+                          <button
+                            onClick={() => setEmailPreview(true)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                            style={emailPreview
+                              ? { background: 'rgba(99,102,241,0.25)', color: '#a78bfa', border: '1px solid rgba(99,102,241,0.4)' }
+                              : { color: 'rgba(255,255,255,0.4)', border: '1px solid transparent' }}>
+                            תצוגה מקדימה
+                          </button>
+                        </div>
+                        <h3 className="font-bold text-sm" style={{ color: 'white' }}>{selectedTemplate.name}</h3>
+                      </div>
+
+                      {!emailPreview ? (
+                        <>
+                          {/* Subject */}
+                          <div className="flex-shrink-0">
+                            <label className="text-xs font-semibold mb-1 block" style={{ color: 'rgba(255,255,255,0.45)' }}>נושא המייל</label>
+                            <input
+                              value={selectedTemplate.subject}
+                              onChange={e => setSelectedTemplate(t => t ? { ...t, subject: e.target.value } : t)}
+                              className="w-full rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none"
+                              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+                            />
+                          </div>
+
+                          {/* Preview text */}
+                          <div className="flex-shrink-0">
+                            <label className="text-xs font-semibold mb-1 block" style={{ color: 'rgba(255,255,255,0.45)' }}>טקסט תצוגה מקדימה</label>
+                            <input
+                              value={selectedTemplate.previewText}
+                              onChange={e => setSelectedTemplate(t => t ? { ...t, previewText: e.target.value } : t)}
+                              className="w-full rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none"
+                              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+                            />
+                          </div>
+
+                          {/* HTML Body */}
+                          <div className="flex-1 flex flex-col min-h-0">
+                            <label className="text-xs font-semibold mb-1 block flex-shrink-0" style={{ color: 'rgba(255,255,255,0.45)' }}>HTML Body</label>
+                            <textarea
+                              value={selectedTemplate.htmlBody}
+                              onChange={e => setSelectedTemplate(t => t ? { ...t, htmlBody: e.target.value } : t)}
+                              rows={18}
+                              className="w-full rounded-xl px-3 py-2.5 text-xs font-mono focus:outline-none resize-none flex-1"
+                              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8', direction: 'ltr' }}
+                            />
+                          </div>
+
+                          {/* Actions row */}
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            <button
+                              onClick={async () => {
+                                if (!selectedTemplate) return;
+                                setEmailSaving(true);
+                                try {
+                                  await setDoc(doc(db, 'emailTemplates', selectedTemplate.id), {
+                                    ...selectedTemplate,
+                                    updatedAt: new Date().toISOString(),
+                                  });
+                                  toast('תבנית נשמרה בהצלחה ✓', 'success');
+                                } catch {
+                                  toast('שגיאה בשמירת תבנית', 'error');
+                                } finally {
+                                  setEmailSaving(false);
+                                }
+                              }}
+                              disabled={emailSaving}
+                              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-opacity"
+                              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', opacity: emailSaving ? 0.6 : 1 }}>
+                              {emailSaving ? 'שומר...' : 'שמור תבנית'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                copyText(selectedTemplate.htmlBody);
+                                toast('HTML הועתק ללוח ✓', 'success');
+                              }}
+                              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+                              style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                              <Copy size={13} />
+                              העתק HTML
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex-1 flex flex-col min-h-0 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+                          <div className="px-3 py-2 text-xs flex-shrink-0" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)' }}>
+                            תצוגה מקדימה: {selectedTemplate.subject}
+                          </div>
+                          <iframe
+                            srcDoc={selectedTemplate.htmlBody}
+                            className="w-full flex-1"
+                            style={{ minHeight: 520, border: 'none' }}
+                            title="email preview"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center">
+                      <p style={{ color: 'rgba(255,255,255,0.25)' }}>בחר תבנית לעריכה</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -491,8 +961,8 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-black text-slate-800">סקירה כללית</h1>
-          <p className="text-slate-500 text-sm mt-0.5">מבט על כל המערכת — {new Date().toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+          <h1 className="text-xl font-black" style={{ color: 'white' }}>סקירה כללית</h1>
+          <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>מבט על כל המערכת — {new Date().toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         </div>
         <SignupLinkButton />
       </div>
@@ -501,20 +971,20 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
       {(expiring.length > 0 || atRisk.length > 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {expiring.length > 0 && (
-            <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex items-center gap-3">
-              <AlertTriangle size={16} className="text-amber-600 flex-shrink-0" />
+            <div className="rounded-2xl px-4 py-3 flex items-center gap-3" style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)' }}>
+              <AlertTriangle size={16} className="flex-shrink-0" style={{ color: '#fbbf24' }} />
               <div>
-                <p className="text-amber-800 font-bold text-sm">{expiring.length} ניסיונות יפוגו בקרוב</p>
-                <p className="text-amber-600 text-xs">{expiring.map(w => w.name).join(', ')}</p>
+                <p className="font-bold text-sm" style={{ color: '#fbbf24' }}>{expiring.length} ניסיונות יפוגו בקרוב</p>
+                <p className="text-xs" style={{ color: 'rgba(251,191,36,0.7)' }}>{expiring.map(w => w.name).join(', ')}</p>
               </div>
             </div>
           )}
           {atRisk.length > 0 && (
-            <div className="bg-red-50 border border-red-300 rounded-2xl px-4 py-3 flex items-center gap-3">
-              <XCircle size={16} className="text-red-500 flex-shrink-0" />
+            <div className="rounded-2xl px-4 py-3 flex items-center gap-3" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)' }}>
+              <XCircle size={16} className="flex-shrink-0" style={{ color: '#f87171' }} />
               <div>
-                <p className="text-red-800 font-bold text-sm">{atRisk.length} סביבות בסיכון</p>
-                <p className="text-red-600 text-xs">ציון בריאות נמוך מ-50</p>
+                <p className="font-bold text-sm" style={{ color: '#f87171' }}>{atRisk.length} סביבות בסיכון</p>
+                <p className="text-xs" style={{ color: 'rgba(248,113,113,0.7)' }}>ציון בריאות נמוך מ-50</p>
               </div>
             </div>
           )}
@@ -541,17 +1011,17 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
           <p className="text-3xl font-black">₪{annualRevenue.toLocaleString()}</p>
           <p className="text-emerald-300 text-xs mt-1">תחזית שנתית</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <p className="text-slate-500 text-xs font-semibold mb-2">הכנסה לפי תוכנית</p>
+        <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <p className="text-xs font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.45)' }}>הכנסה לפי תוכנית</p>
           <div className="space-y-2">
             {['enterprise','pro','basic','trial'].map(p => {
               const count = workspaces.filter(w => w.plan === p && w.status === 'active').length;
               const rev   = count * (PLAN_MRR[p] ?? 0);
               return (
                 <div key={p} className="flex items-center justify-between text-xs">
-                  <span className={`px-2 py-0.5 rounded-full font-bold ${PLAN_COLORS[p] ?? 'bg-slate-100 text-slate-600'}`}>{p}</span>
-                  <span className="text-slate-500">{count} לקוחות</span>
-                  <span className="font-bold text-slate-800">₪{rev.toLocaleString()}</span>
+                  <span className="px-2 py-0.5 rounded-full font-bold" style={PLAN_COLOR_STYLES[p] ?? { background: 'rgba(148,163,184,0.15)', color: '#94a3b8' }}>{p}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.45)' }}>{count} לקוחות</span>
+                  <span className="font-bold" style={{ color: 'white' }}>₪{rev.toLocaleString()}</span>
                 </div>
               );
             })}
@@ -562,34 +1032,34 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
       {/* Chart + Status breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* 30-day signups chart */}
-        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div className="md:col-span-2 rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="font-bold text-slate-800 text-sm">הצטרפויות — 30 יום אחרונים</h2>
-              <p className="text-slate-500 text-xs mt-0.5">סביבות עבודה חדשות ליום</p>
+              <h2 className="font-bold text-sm" style={{ color: 'white' }}>הצטרפויות — 30 יום אחרונים</h2>
+              <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>סביבות עבודה חדשות ליום</p>
             </div>
-            <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full">+{newMonth} החודש</span>
+            <span className="text-xs font-semibold px-2 py-1 rounded-full" style={{ background: 'rgba(99,102,241,0.2)', color: '#818cf8' }}>+{newMonth} החודש</span>
           </div>
           <div className="flex items-end gap-0.5 h-24">
             {bars.map((v, i) => (
               <div key={i} className="flex-1 flex items-end">
                 <div
-                  className="w-full rounded-sm bg-indigo-500 opacity-80 hover:opacity-100 transition-opacity"
-                  style={{ height: `${(v / maxBar) * 100}%`, minHeight: v > 0 ? 4 : 0 }}
+                  className="w-full rounded-sm opacity-80 hover:opacity-100 transition-opacity"
+                  style={{ height: `${(v / maxBar) * 100}%`, minHeight: v > 0 ? 4 : 0, background: 'linear-gradient(180deg,#818cf8,#6366f1)' }}
                   title={`${v} הצטרפויות`}
                 />
               </div>
             ))}
           </div>
-          <div className="flex justify-between mt-2 text-[10px] text-slate-400">
+          <div className="flex justify-between mt-2 text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
             <span>30 ימים אחורה</span>
             <span>היום</span>
           </div>
         </div>
 
         {/* Status breakdown */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח סטטוס</h2>
+        <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <h2 className="font-bold text-sm mb-4" style={{ color: 'white' }}>פילוח סטטוס</h2>
           <div className="space-y-3">
             {(['active','trial','pending','suspended'] as WorkspaceStatus[]).map(s => {
               const count = workspaces.filter(w => w.status === s).length;
@@ -597,10 +1067,10 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
               return (
                 <div key={s}>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-600">{STATUS_CFG[s].label}</span>
-                    <span className="font-semibold text-slate-800">{count}</span>
+                    <span style={{ color: 'rgba(255,255,255,0.55)' }}>{STATUS_CFG[s].label}</span>
+                    <span className="font-semibold" style={{ color: 'white' }}>{count}</span>
                   </div>
-                  <div className="h-1.5 bg-slate-100 rounded-full">
+                  <div className="h-1.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
                     <div className={`h-full rounded-full ${STATUS_CFG[s].dot}`} style={{ width: `${pct}%` }} />
                   </div>
                 </div>
@@ -609,8 +1079,8 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
           </div>
 
           {expiring.length > 0 && (
-            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
-              <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold">
+            <div className="mt-4 rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.25)' }}>
+              <div className="flex items-center gap-2 text-xs font-semibold" style={{ color: '#fbbf24' }}>
                 <AlertTriangle size={12} />
                 {expiring.length} ניסיונות יפוגו בקרוב
               </div>
@@ -620,34 +1090,36 @@ function OverviewTab({ workspaces, users, total, active, trial, suspended, newMo
       </div>
 
       {/* Recent workspaces with health score */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="font-bold text-slate-800 text-sm">הצטרפויות אחרונות</h2>
-          <span className="text-xs text-slate-500">{workspaces.length} סביבות סה״כ</span>
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <h2 className="font-bold text-sm" style={{ color: 'white' }}>הצטרפויות אחרונות</h2>
+          <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{workspaces.length} סביבות סה״כ</span>
         </div>
-        <div className="divide-y divide-slate-50">
-          {recent.map(w => {
+        <div>
+          {recent.map((w, idx) => {
             const hs  = healthScore(w);
             const hc  = healthColor(hs);
             return (
-              <div key={w.id} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
+              <div key={w.id} className="flex items-center px-5 py-3 transition-colors" style={{ borderBottom: idx < recent.length - 1 ? '1px solid rgba(255,255,255,0.04)' : undefined }}
+                onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.02)'}
+                onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = ''}>
                 <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
                   {w.name?.[0]?.toUpperCase() ?? '?'}
                 </div>
                 <div className="mr-3 flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 truncate">{w.name}</p>
-                  <p className="text-xs text-slate-500 truncate">{w.email}</p>
+                  <p className="text-sm font-semibold truncate" style={{ color: 'white' }}>{w.name}</p>
+                  <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.4)' }}>{w.email}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   {/* Health score mini bar */}
                   <div className="flex items-center gap-1.5 w-20">
-                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full">
+                    <div className="flex-1 h-1.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
                       <div className={`h-full rounded-full ${hc.bar}`} style={{ width: `${hs}%` }} />
                     </div>
                     <span className={`text-[10px] font-bold ${hc.text}`}>{hs}</span>
                   </div>
                   <StatusBadge status={w.status} />
-                  <span className="text-xs text-slate-400 hidden md:block">{fmtDate(w.createdAt)}</span>
+                  <span className="text-xs hidden md:block" style={{ color: 'rgba(255,255,255,0.3)' }}>{fmtDate(w.createdAt)}</span>
                 </div>
               </div>
             );
@@ -689,26 +1161,30 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
       {/* List */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Toolbar */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-white flex flex-col md:flex-row gap-3">
+        <div className="px-6 py-4 flex flex-col md:flex-row gap-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(10,15,30,0.6)' }}>
           <div className="relative flex-1">
-            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.35)' }} />
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="חיפוש לפי שם, אימייל..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-3 py-2 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" />
+              className="w-full rounded-xl pr-9 pl-3 py-2 text-sm focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }} />
           </div>
           <div className="flex gap-2">
             <select value={status} onChange={e => setStatus(e.target.value as WorkspaceStatus|'all')}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 focus:outline-none">
+              className="rounded-xl px-3 py-2 text-sm focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' }}>
               <option value="all">כל הסטטוסים</option>
               {Object.entries(STATUS_CFG).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
             <select value={plan} onChange={e => setPlan(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 focus:outline-none">
+              className="rounded-xl px-3 py-2 text-sm focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' }}>
               <option value="all">כל התוכניות</option>
               {['trial','basic','pro','enterprise'].map(p => <option key={p} value={p}>{p}</option>)}
             </select>
             <select value={sort} onChange={e => setSort(e.target.value as 'createdAt'|'name')}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 focus:outline-none">
+              className="rounded-xl px-3 py-2 text-sm focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' }}>
               <option value="createdAt">הכי חדש</option>
               <option value="name">לפי שם</option>
             </select>
@@ -716,41 +1192,48 @@ function WorkspacesTab({ workspaces, selected, onSelect, onStatus, onPlan, onDel
         </div>
 
         {/* Count */}
-        <div className="px-6 py-2 bg-slate-50 border-b border-slate-200">
-          <p className="text-xs text-slate-500">{filtered.length} סביבות עבודה</p>
+        <div className="px-6 py-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{filtered.length} סביבות עבודה</p>
         </div>
 
         {/* Table */}
         <div className="flex-1 overflow-y-auto">
           {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400 py-20">
+            <div className="flex flex-col items-center justify-center h-full py-20" style={{ color: 'rgba(255,255,255,0.3)' }}>
               <Building2 size={32} className="mb-3 opacity-30" />
               <p className="text-sm">אין תוצאות</p>
             </div>
           ) : filtered.map(w => {
             const d = daysLeft(w.trialEndsAt);
             const expiring = w.status === 'trial' && d !== null && d <= 3 && d >= 0;
+            const isSelected = selected?.id === w.id;
             return (
               <div key={w.id}
-                onClick={() => onSelect(selected?.id === w.id ? null : w)}
-                className={`flex items-center px-6 py-3.5 border-b border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors ${selected?.id === w.id ? 'bg-indigo-50 border-indigo-100' : ''}`}>
+                onClick={() => onSelect(isSelected ? null : w)}
+                className="flex items-center px-6 py-3.5 cursor-pointer transition-colors"
+                style={{
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  background: isSelected ? 'rgba(99,102,241,0.1)' : undefined,
+                }}
+                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.02)'; }}
+                onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = ''; }}>
                 {/* Logo / initial */}
                 <div className="w-9 h-9 rounded-xl flex-shrink-0 overflow-hidden bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-sm font-bold">
                   {w.logoUrl ? <img src={w.logoUrl} alt="" className="w-full h-full object-contain" /> : w.name?.[0]?.toUpperCase()}
                 </div>
                 <div className="mr-3 flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{w.name}</p>
-                    {expiring && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-bold">יפוג ב-{d} ימים</span>}
+                    <p className="text-sm font-semibold truncate" style={{ color: 'white' }}>{w.name}</p>
+                    {expiring && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: 'rgba(245,158,11,0.2)', color: '#fbbf24' }}>יפוג ב-{d} ימים</span>}
                   </div>
-                  <p className="text-xs text-slate-500 truncate">{w.email} · {fmtDate(w.createdAt)}</p>
+                  <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.4)' }}>{w.email} · {fmtDate(w.createdAt)}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${PLAN_COLORS[w.plan] ?? 'bg-slate-100 text-slate-600'}`}>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={PLAN_COLOR_STYLES[w.plan] ?? { background: 'rgba(148,163,184,0.15)', color: '#94a3b8' }}>
                     {w.plan}
                   </span>
                   <StatusBadge status={w.status} />
-                  <ChevronRight size={14} className={`text-slate-400 transition-transform ${selected?.id === w.id ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={14} className={`transition-transform ${isSelected ? 'rotate-90' : ''}`} style={{ color: 'rgba(255,255,255,0.3)' }} />
                 </div>
               </div>
             );
@@ -906,33 +1389,33 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
   };
 
   return (
-    <aside className="fixed inset-0 z-50 bg-white flex flex-col overflow-hidden md:relative md:inset-auto md:z-auto md:w-80 md:border-r md:border-slate-200">
+    <aside className="fixed inset-0 z-50 flex flex-col overflow-hidden md:relative md:inset-auto md:z-auto md:w-80" style={{ background: 'rgba(10,15,30,0.97)', borderRight: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(20px)' }}>
       {/* Header */}
-      <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between">
+      <div className="px-5 py-4 flex items-start justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white font-bold">
             {ws.logoUrl ? <img src={ws.logoUrl} alt="" className="w-full h-full object-contain" /> : ws.name?.[0]?.toUpperCase()}
           </div>
           <div>
-            <p className="font-bold text-slate-800 text-sm">{ws.name}</p>
+            <p className="font-bold text-sm" style={{ color: 'white' }}>{ws.name}</p>
             <StatusBadge status={ws.status} />
           </div>
         </div>
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-600 mt-0.5"><X size={15} /></button>
+        <button onClick={onClose} className="mt-0.5" style={{ color: 'rgba(255,255,255,0.3)' }}><X size={15} /></button>
       </div>
 
       <div className="flex-1 overflow-y-auto">
         {/* Info */}
-        <div className="px-5 py-4 space-y-2.5 border-b border-slate-100">
+        <div className="px-5 py-4 space-y-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           {ws.slug && (
             <div className="flex items-start gap-2">
-              <span className="text-slate-400 mt-0.5 flex-shrink-0"><Globe size={12} /></span>
+              <span className="text-white/35 mt-0.5 flex-shrink-0"><Globe size={12} /></span>
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-slate-400 font-medium">URL ייחודי</p>
+                <p className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.35)' }}>URL ייחודי</p>
                 <div className="flex items-center gap-1.5">
-                  <p className="text-xs text-indigo-600 font-mono font-semibold truncate">/{ws.slug}</p>
+                  <p className="text-xs font-mono font-semibold truncate" style={{ color: '#818cf8' }}>/{ws.slug}</p>
                   <button onClick={() => { copyText(`https://${ws.slug}.ray-crm.com`); onToast('URL הועתק ✓', 'success'); }}
-                    className="text-slate-300 hover:text-slate-600 flex-shrink-0 transition-colors">
+                    className="flex-shrink-0 transition-colors" style={{ color: 'rgba(255,255,255,0.25)' }}>
                     <Copy size={10} />
                   </button>
                 </div>
@@ -946,13 +1429,13 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
           <InfoRow icon={<Clock size={12} />}     label="הצטרף"     value={fmtDate(ws.createdAt)} />
           {ws.ownerId && (
             <div className="flex items-start gap-2">
-              <span className="text-slate-400 mt-0.5 flex-shrink-0"><Shield size={12} /></span>
+              <span className="mt-0.5 flex-shrink-0" style={{ color: 'rgba(255,255,255,0.3)' }}><Shield size={12} /></span>
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-slate-400 font-medium">UID בעלים</p>
+                <p className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.35)' }}>UID בעלים</p>
                 <div className="flex items-center gap-1.5">
-                  <p className="text-[10px] text-slate-600 font-mono truncate">{ws.ownerId}</p>
+                  <p className="text-[10px] font-mono truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>{ws.ownerId}</p>
                   <button onClick={() => { copyText(ws.ownerId!); onToast('UID הועתק ✓', 'success'); }}
-                    className="text-slate-300 hover:text-slate-600 flex-shrink-0 transition-colors">
+                    className="flex-shrink-0 transition-colors" style={{ color: 'rgba(255,255,255,0.25)' }}>
                     <Copy size={10} />
                   </button>
                 </div>
@@ -965,24 +1448,26 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
         </div>
 
         {/* Status & Plan */}
-        <div className="px-5 py-4 space-y-3 border-b border-slate-100">
+        <div className="px-5 py-4 space-y-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div>
-            <p className="text-xs font-semibold text-slate-500 mb-1.5">סטטוס</p>
+            <p className="text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>סטטוס</p>
             <div className="grid grid-cols-2 gap-1.5">
               {(['active','trial','pending','suspended'] as WorkspaceStatus[]).map(s => (
                 <button key={s} onClick={() => onStatus(s)}
-                  className={`py-1.5 rounded-lg text-xs font-semibold border transition-all ${ws.status===s ? STATUS_CFG[s].bg+' '+STATUS_CFG[s].color+' border-current' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}`}>
+                  className="py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={ws.status===s ? (STATUS_CFG[s].style ?? {}) : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   {STATUS_CFG[s].label}
                 </button>
               ))}
             </div>
           </div>
           <div>
-            <p className="text-xs font-semibold text-slate-500 mb-1.5">תוכנית</p>
+            <p className="text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>תוכנית</p>
             <div className="grid grid-cols-2 gap-1.5">
               {['trial','basic','pro','enterprise'].map(p => (
                 <button key={p} onClick={() => onPlan(p)}
-                  className={`py-1.5 rounded-lg text-xs font-semibold border transition-all capitalize ${ws.plan===p ? PLAN_COLORS[p]+' border-current' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}`}>
+                  className="py-1.5 rounded-lg text-xs font-semibold transition-all capitalize"
+                  style={ws.plan===p ? (PLAN_COLOR_STYLES[p] ?? {}) : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   {p}
                 </button>
               ))}
@@ -991,13 +1476,13 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
         </div>
 
         {/* ── Page access control ──────────────────────────────────── */}
-        <div className="px-5 py-4 border-b border-slate-100">
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+            <p className="text-xs font-semibold flex items-center gap-1" style={{ color: 'rgba(255,255,255,0.45)' }}>
               <Layers size={11} /> דפים מורשים
             </p>
             {isCustomPages && (
-              <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">מותאם אישית</span>
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(99,102,241,0.25)', color: '#818cf8' }}>מותאם אישית</span>
             )}
           </div>
 
@@ -1008,9 +1493,10 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               return (
                 <button key={p}
                   onClick={() => setLocalPages(prev => active ? prev.filter(x => x !== p) : [...prev, p])}
-                  className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition-all ${
-                    active ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-400'
-                  }`}>
+                  className="text-[10px] font-semibold px-2 py-1 rounded-lg transition-all"
+                  style={active
+                    ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', border: '1px solid rgba(99,102,241,0.5)' }
+                    : { background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }}>
                   {PAGE_LABELS[p] ?? p}
                 </button>
               );
@@ -1019,34 +1505,36 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
 
           <div className="flex gap-1.5">
             <button onClick={handleSavePages} disabled={pagesSaving}
-              className="flex-1 flex items-center justify-center gap-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white py-1.5 rounded-lg text-[10px] font-bold transition-colors">
+              className="flex-1 flex items-center justify-center gap-1 disabled:opacity-60 text-white py-1.5 rounded-lg text-[10px] font-bold transition-colors"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
               {pagesSaving ? <RefreshCw size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
               שמור דפים
             </button>
             {isCustomPages && (
               <button onClick={handleResetPages} disabled={pagesSaving}
-                className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-600 py-1.5 px-2.5 rounded-lg text-[10px] font-bold transition-colors">
+                className="flex items-center gap-1 disabled:opacity-60 py-1.5 px-2.5 rounded-lg text-[10px] font-bold transition-colors"
+                style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.1)' }}>
                 איפוס למסלול
               </button>
             )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-1.5">
+          <p className="text-[10px] mt-1.5" style={{ color: 'rgba(255,255,255,0.3)' }}>
             {isCustomPages ? `הגדרה ידנית · מסלול: ${ws.plan}` : `נגזר ממסלול: ${ws.plan}`}
           </p>
         </div>
 
         {/* AI Prompt */}
         {ws.prompt && (
-          <div className="px-5 py-4 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1"><Sparkles size={11} /> הנחיות AI</p>
-            <p className="text-xs text-slate-600 leading-relaxed line-clamp-4">{ws.prompt}</p>
+          <div className="px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <p className="text-xs font-semibold mb-2 flex items-center gap-1" style={{ color: 'rgba(255,255,255,0.45)' }}><Sparkles size={11} /> הנחיות AI</p>
+            <p className="text-xs leading-relaxed line-clamp-4" style={{ color: 'rgba(255,255,255,0.55)' }}>{ws.prompt}</p>
           </div>
         )}
 
         {/* Workspace links */}
         <div className="px-5 py-4 border-b border-slate-100 space-y-3">
           <div>
-            <p className="text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1">
+            <p className="text-xs font-semibold text-white/45 mb-1.5 flex items-center gap-1">
               <Globe size={11} /> קישור כניסה ייחודי
             </p>
             <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
@@ -1060,16 +1548,16 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
                 <ExternalLink size={12} />
               </a>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">הלקוח יראה שם חברה ולוגו בדף הכניסה</p>
+            <p className="text-[10px] text-white/35 mt-1">הלקוח יראה שם חברה ולוגו בדף הכניסה</p>
           </div>
           <div>
-            <p className="text-xs font-semibold text-slate-500 mb-1.5 flex items-center gap-1">
+            <p className="text-xs font-semibold text-white/45 mb-1.5 flex items-center gap-1">
               <UserCheck size={11} /> קישור הזמנת חבר צוות
             </p>
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-              <p className="flex-1 text-xs text-slate-600 truncate">{inviteLink}</p>
+            <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+              <p className="flex-1 text-xs text-white/60 truncate">{inviteLink}</p>
               <button onClick={() => { copyText(inviteLink); onToast('קישור הזמנה הועתק ✓', 'success'); }}
-                className="text-slate-400 hover:text-indigo-600 transition-colors flex-shrink-0">
+                className="text-white/35 hover:text-indigo-600 transition-colors flex-shrink-0">
                 <Copy size={12} />
               </button>
             </div>
@@ -1078,27 +1566,27 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
 
         {/* Team members */}
         <div className="px-5 py-4 border-b border-slate-100">
-          <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1.5">
+          <p className="text-xs font-semibold text-white/45 mb-2 flex items-center gap-1.5">
             <Users size={11} /> חברי צוות ({members.length})
           </p>
           {membersLoad ? (
-            <div className="flex items-center gap-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-white/35">
               <RefreshCw size={11} className="animate-spin" /> טוען...
             </div>
           ) : members.length === 0 ? (
-            <p className="text-xs text-slate-400">אין חברי צוות רשומים</p>
+            <p className="text-xs text-white/35">אין חברי צוות רשומים</p>
           ) : (
             <div className="space-y-1.5 max-h-28 overflow-y-auto">
               {members.map(m => (
-                <div key={m.id} className="flex items-center gap-2 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                <div key={m.id} className="flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5">
                   <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
                     {(m.name?.[0] ?? '?').toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-700 truncate">{m.name}</p>
-                    <p className="text-[10px] text-slate-400 truncate">{m.email}</p>
+                    <p className="text-xs font-medium text-white/75 truncate">{m.name}</p>
+                    <p className="text-[10px] text-white/35 truncate">{m.email}</p>
                   </div>
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${m.role === 'מנהל' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${m.role === 'מנהל' ? 'bg-indigo-500/15 text-indigo-400' : 'bg-white/10 text-white/60'}`}>
                     {m.role}
                   </span>
                 </div>
@@ -1109,7 +1597,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
 
         {/* ── Token Balance ─────────────────────────────────────── */}
         <div className="px-5 py-4 border-b border-slate-100">
-          <p className="text-xs font-semibold text-emerald-700 mb-3 flex items-center gap-1.5">
+          <p className="text-xs font-semibold text-emerald-400 mb-3 flex items-center gap-1.5">
             <DollarSign size={11} /> מאזן טוקנים AI
           </p>
 
@@ -1117,26 +1605,26 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
           <div className="grid grid-cols-3 gap-2 mb-3">
             <div className="bg-emerald-50 rounded-lg px-2 py-2 text-center">
               <p className="text-[9px] text-emerald-600 font-medium mb-0.5">מאזן</p>
-              <p className="text-xs font-bold text-emerald-800">{formatTokenDisplay(tokenBalance)}</p>
+              <p className="text-xs font-bold text-emerald-400">{formatTokenDisplay(tokenBalance)}</p>
               <p className="text-[9px] text-emerald-600">{formatBalance(tokenBalance)}</p>
             </div>
-            <div className="bg-slate-50 rounded-lg px-2 py-2 text-center">
-              <p className="text-[9px] text-slate-500 font-medium mb-0.5">הקצאה</p>
-              <p className="text-xs font-bold text-slate-700">{formatBalance(tokenAllocation)}</p>
+            <div className="bg-white/5 rounded-lg px-2 py-2 text-center">
+              <p className="text-[9px] text-white/45 font-medium mb-0.5">הקצאה</p>
+              <p className="text-xs font-bold text-white/75">{formatBalance(tokenAllocation)}</p>
             </div>
-            <div className="bg-slate-50 rounded-lg px-2 py-2 text-center">
-              <p className="text-[9px] text-slate-500 font-medium mb-0.5">שומש</p>
-              <p className="text-xs font-bold text-slate-700">{formatBalance(tokenUsed)}</p>
+            <div className="bg-white/5 rounded-lg px-2 py-2 text-center">
+              <p className="text-[9px] text-white/45 font-medium mb-0.5">שומש</p>
+              <p className="text-xs font-bold text-white/75">{formatBalance(tokenUsed)}</p>
             </div>
           </div>
 
           {/* Progress bar */}
           <div className="mb-3">
-            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+            <div className="flex justify-between text-[10px] text-white/45 mb-1">
               <span>{tokenPct}% נותר</span>
               <span>{formatBalance(tokenBalance)} מתוך {formatBalance(tokenAllocation)}</span>
             </div>
-            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-2 bg-white/[0.06] rounded-full overflow-hidden">
               <div className={`h-full rounded-full transition-all ${tokenBarColor}`} style={{ width: `${tokenPct}%` }} />
             </div>
           </div>
@@ -1160,26 +1648,26 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               placeholder="סכום $"
               value={manualAmount}
               onChange={e => setManualAmount(e.target.value)}
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-emerald-500"
+              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-emerald-500"
               dir="ltr"
             />
             <button
               onClick={handleManualTokens}
               disabled={manualLoad}
-              className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              className="flex items-center gap-1 bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-60 text-white/75 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors"
             >
               {manualLoad ? <RefreshCw size={10} className="animate-spin" /> : <Plus size={10} />}
               הוסף ידנית
             </button>
           </div>
-          <p className="text-[10px] text-slate-400 mt-1.5">
+          <p className="text-[10px] text-white/35 mt-1.5">
             תוכנית {ws.plan} · הקצאה מוגדרת: {formatBalance(planTokenAmount)}
           </p>
         </div>
 
         {/* Technical support tools */}
         <div className="px-5 py-4 border-b border-slate-100">
-          <p className="text-xs font-semibold text-slate-500 mb-2.5 flex items-center gap-1.5">
+          <p className="text-xs font-semibold text-white/45 mb-2.5 flex items-center gap-1.5">
             <Settings2 size={11} /> כלי תמיכה טכנית
           </p>
           <div className="space-y-2">
@@ -1187,7 +1675,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
             <button
               onClick={handlePasswordReset}
               disabled={resetLoad}
-              className="w-full flex items-center gap-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
+              className="w-full flex items-center gap-2 bg-blue-500/10 hover:bg-blue-100 border border-blue-200 text-blue-400 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
             >
               {resetLoad ? <RefreshCw size={12} className="animate-spin" /> : <Mail size={12} />}
               שלח איפוס סיסמה לבעלים
@@ -1197,7 +1685,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
             {ws.ownerId && (
               <button
                 onClick={() => { copyText(ws.ownerId!); onToast('UID הועתק ✓', 'success'); }}
-                className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
+                className="w-full flex items-center gap-2 bg-white/5 hover:bg-white/[0.06] border border-white/10 text-white/75 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
               >
                 <Copy size={12} />
                 העתק UID (לקונסול Firebase)
@@ -1209,7 +1697,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               <button
                 onClick={handleDeleteAuthOnly}
                 disabled={authLoad}
-                className="w-full flex items-center gap-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-700 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
+                className="w-full flex items-center gap-2 bg-orange-500/10 hover:bg-orange-500/15 border border-orange-500/25 text-orange-400 py-2 px-3 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
               >
                 {authLoad ? <RefreshCw size={12} className="animate-spin" /> : <UserCheck size={12} />}
                 שחרר אימייל מ-Auth בלבד
@@ -1221,13 +1709,13 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
               href="https://console.firebase.google.com/project/chex-crm/authentication/users"
               target="_blank"
               rel="noreferrer"
-              className="w-full flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
+              className="w-full flex items-center gap-2 bg-white/5 hover:bg-white/[0.06] border border-white/10 text-white/60 py-2 px-3 rounded-xl text-xs font-semibold transition-colors"
             >
               <ExternalLink size={12} />
               מחק ידנית ב-Firebase Console
             </a>
           </div>
-          <p className="text-[10px] text-slate-400 mt-2">
+          <p className="text-[10px] text-white/35 mt-2">
             "שחרר אימייל" דורש Firebase Blaze plan. לחלופין — השתמש בקישור ה-Firebase Console למחיקה ידנית
           </p>
         </div>
@@ -1236,7 +1724,7 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
       {/* Delete workspace */}
       <div className="px-5 py-4 border-t border-slate-100">
         <button onClick={onDelete}
-          className="w-full flex items-center justify-center gap-2 text-red-500 hover:bg-red-50 border border-red-200 py-2 rounded-xl text-xs font-semibold transition-colors">
+          className="w-full flex items-center justify-center gap-2 text-red-500 hover:bg-red-500/10 border border-red-500/20 py-2 rounded-xl text-xs font-semibold transition-colors">
           <Trash2 size={12} /> מחק סביבת עבודה לצמיתות
         </button>
       </div>
@@ -1263,16 +1751,16 @@ function UsersTab({ users, workspaces }:
   const members   = users.filter(u => u.workspaceId && !ownerUids.has(u.uid));
 
   const PLAN_BADGE: Record<string, string> = {
-    trial:      'bg-amber-100 text-amber-700',
-    basic:      'bg-blue-100 text-blue-700',
-    pro:        'bg-indigo-100 text-indigo-700',
-    enterprise: 'bg-violet-100 text-violet-700',
+    trial:      'bg-amber-100 text-amber-400',
+    basic:      'bg-blue-100 text-blue-400',
+    pro:        'bg-indigo-500/15 text-indigo-400',
+    enterprise: 'bg-violet-500/15 text-violet-400',
   };
   const STATUS_DOT: Record<WorkspaceStatus, string> = {
     active:    'bg-emerald-500',
     trial:     'bg-amber-400',
     suspended: 'bg-red-500',
-    pending:   'bg-slate-400',
+    pending:   'bg-white/25',
   };
 
   // Filter workspaces (owners) by search
@@ -1299,8 +1787,8 @@ function UsersTab({ users, workspaces }:
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-black text-slate-800">משתמשים</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
+          <h1 className="text-xl font-black text-white/90">משתמשים</h1>
+          <p className="text-white/45 text-sm mt-0.5">
             {workspaces.length} בעלי סביבה · {members.length} חברי צוות
           </p>
         </div>
@@ -1308,7 +1796,7 @@ function UsersTab({ users, workspaces }:
           <span className="flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold px-3 py-1.5 rounded-xl">
             <Building2 size={12} /> {workspaces.length} בעלי סביבה
           </span>
-          <span className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 text-slate-600 text-xs font-semibold px-3 py-1.5 rounded-xl">
+          <span className="flex items-center gap-1.5 bg-white/5 border border-white/10 text-white/60 text-xs font-semibold px-3 py-1.5 rounded-xl">
             <Users size={12} /> {members.length} חברי צוות
           </span>
         </div>
@@ -1316,10 +1804,10 @@ function UsersTab({ users, workspaces }:
 
       {/* Search */}
       <div className="relative">
-        <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/35" />
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="חיפוש לפי שם עסק, שם, אימייל..."
-          className="w-full bg-white border border-slate-200 rounded-xl pr-9 pl-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-sm" />
+          className="w-full bg-white/5 border border-white/10 rounded-xl pr-9 pl-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 " />
       </div>
 
       {/* ── Workspace Owners ─────────────────────────────────────────────── */}
@@ -1327,12 +1815,12 @@ function UsersTab({ users, workspaces }:
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <Crown size={15} className="text-indigo-500" />
-          <h2 className="font-bold text-slate-700 text-sm">בעלי סביבות עבודה</h2>
-          <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredWorkspaces.length}</span>
+          <h2 className="font-bold text-white/75 text-sm">בעלי סביבות עבודה</h2>
+          <span className="text-xs text-white/35 bg-white/[0.06] px-2 py-0.5 rounded-full">{filteredWorkspaces.length}</span>
         </div>
 
         {filteredWorkspaces.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 py-10 text-center text-slate-400 text-sm">
+          <div className="bg-white/5 rounded-2xl border border-white/10 py-10 text-center text-white/35 text-sm">
             לא נמצאו תוצאות
           </div>
         ) : (
@@ -1350,10 +1838,10 @@ function UsersTab({ users, workspaces }:
               const hc = healthColor(hs);
 
               return (
-                <div key={ws.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-indigo-300 hover:shadow-md transition-all">
+                <div key={ws.id} className="bg-white/5 border border-white/10 rounded-2xl p-4  hover:border-indigo-300 hover:shadow-md transition-all">
                   {/* Owner identity */}
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-black flex-shrink-0 shadow-sm">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-black flex-shrink-0 ">
                       {ws.logoUrl
                         ? <img src={ws.logoUrl} alt="" className="w-full h-full rounded-xl object-cover" />
                         : initials}
@@ -1361,43 +1849,43 @@ function UsersTab({ users, workspaces }:
                     <div className="flex-1 min-w-0">
                       {displayName ? (
                         <>
-                          <p className="font-bold text-slate-800 text-sm leading-tight truncate">{displayName}</p>
-                          <p className="text-xs text-slate-500 truncate" dir="ltr">{ws.email}</p>
+                          <p className="font-bold text-white/90 text-sm leading-tight truncate">{displayName}</p>
+                          <p className="text-xs text-white/45 truncate" dir="ltr">{ws.email}</p>
                         </>
                       ) : (
                         <>
-                          <p className="font-bold text-slate-800 text-sm leading-tight truncate" dir="ltr">{ws.email}</p>
-                          <p className="text-[10px] text-slate-400">שם לא זמין — פרופיל חסר</p>
+                          <p className="font-bold text-white/90 text-sm leading-tight truncate" dir="ltr">{ws.email}</p>
+                          <p className="text-[10px] text-white/35">שם לא זמין — פרופיל חסר</p>
                         </>
                       )}
                     </div>
                     <div className="flex flex-col items-end gap-1">
-                      <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-2 py-0.5 rounded-full">בעלים</span>
+                      <span className="text-[10px] bg-indigo-500/15 text-indigo-400 font-bold px-2 py-0.5 rounded-full">בעלים</span>
                       <span className={`text-[10px] font-bold ${hc.text}`}>{hc.label} {hs}</span>
                     </div>
                   </div>
 
                   {/* Workspace info card */}
-                  <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+                  <div className="bg-white/5 rounded-xl p-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT[ws.status] ?? 'bg-slate-400'}`} />
-                        <span className="font-semibold text-slate-800 text-sm truncate">{ws.name}</span>
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT[ws.status] ?? 'bg-white/25'}`} />
+                        <span className="font-semibold text-white/90 text-sm truncate">{ws.name}</span>
                       </div>
                       <StatusBadge status={ws.status} />
                     </div>
 
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-400">
+                      <span className="text-xs text-white/35">
                         {ws.createdAt ? new Date(ws.createdAt).toLocaleDateString('he-IL') : '—'}
                       </span>
                       <div className="flex items-center gap-1.5">
                         {ws.industry && (
-                          <span className="text-[10px] text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded-lg">
+                          <span className="text-[10px] text-white/45 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded-lg">
                             {ws.industry}
                           </span>
                         )}
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${PLAN_BADGE[ws.plan] ?? 'bg-slate-100 text-slate-600'}`}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${PLAN_BADGE[ws.plan] ?? 'bg-white/[0.06] text-white/60'}`}>
                           {ws.plan}
                         </span>
                       </div>
@@ -1405,15 +1893,15 @@ function UsersTab({ users, workspaces }:
 
                     {/* Health bar */}
                     <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1 bg-slate-200 rounded-full">
+                      <div className="flex-1 h-1 bg-white/10 rounded-full">
                         <div className={`h-full rounded-full ${hc.bar}`} style={{ width: `${hs}%` }} />
                       </div>
-                      <span className="text-[10px] text-slate-400">בריאות {hs}%</span>
+                      <span className="text-[10px] text-white/35">בריאות {hs}%</span>
                     </div>
 
                     {/* Missing profile warning */}
                     {!profile && (
-                      <div className="flex items-center gap-1.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+                      <div className="flex items-center gap-1.5 text-[10px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded-lg px-2 py-1">
                         <AlertTriangle size={10} />
                         פרופיל משתמש חסר ב-Firestore — הרישום אולי לא הסתיים
                       </div>
@@ -1430,34 +1918,34 @@ function UsersTab({ users, workspaces }:
       {members.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2 pt-2">
-            <Users size={15} className="text-slate-500" />
-            <h2 className="font-bold text-slate-700 text-sm">חברי צוות</h2>
-            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredMembers.length}</span>
+            <Users size={15} className="text-white/45" />
+            <h2 className="font-bold text-white/75 text-sm">חברי צוות</h2>
+            <span className="text-xs text-white/35 bg-white/[0.06] px-2 py-0.5 rounded-full">{filteredMembers.length}</span>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white/5 rounded-2xl border border-white/10  overflow-hidden">
             <div className="divide-y divide-slate-50">
               {filteredMembers.length === 0 ? (
-                <div className="py-8 text-center text-slate-400 text-sm">לא נמצאו חברי צוות</div>
+                <div className="py-8 text-center text-white/35 text-sm">לא נמצאו חברי צוות</div>
               ) : filteredMembers.map(u => {
                 const ws = u.workspaceId ? workspaces.find(w => w.id === u.workspaceId) : null;
                 return (
-                  <div key={u.uid} className="flex items-center px-5 py-3 hover:bg-slate-50 transition-colors">
+                  <div key={u.uid} className="flex items-center px-5 py-3 hover:bg-white/5 transition-colors">
                     <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
                       {(u.firstName?.[0] ?? '?').toUpperCase()}
                     </div>
                     <div className="mr-3 flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-800">{u.firstName} {u.lastName}</p>
-                      <p className="text-xs text-slate-500 truncate" dir="ltr">{u.email}</p>
+                      <p className="text-sm font-semibold text-white/90">{u.firstName} {u.lastName}</p>
+                      <p className="text-xs text-white/45 truncate" dir="ltr">{u.email}</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {ws && (
-                        <div className="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded-lg truncate max-w-[110px]">
+                        <div className="text-xs text-white/60 bg-white/[0.06] px-2 py-1 rounded-lg truncate max-w-[110px]">
                           {ws.name}
                         </div>
                       )}
                       <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                        u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                        u.role === 'admin' ? 'bg-indigo-500/15 text-indigo-400' : 'bg-white/[0.06] text-white/60'
                       }`}>
                         {u.role === 'admin' ? 'מנהל' : 'סוכן'}
                       </span>
@@ -1474,6 +1962,402 @@ function UsersTab({ users, workspaces }:
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   TAB: Tokens — Admin quota + per-workspace breakdown
+══════════════════════════════════════════════════════════════════════════ */
+function TokensTab({ workspaces, onToast, onRefresh }: {
+  workspaces: WorkspaceProfile[];
+  onToast: (m: string, t?: 'success' | 'error' | 'info') => void;
+  onRefresh: () => void;
+}) {
+  const [quota,        setQuota]        = useState<AdminQuota>({ totalBudget: 0, allocated: 0 });
+  const [quotaLoading, setQuotaLoading] = useState(true);
+  const [budgetInput,  setBudgetInput]  = useState('');
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [addingTo,     setAddingTo]     = useState<string | null>(null);
+  const [addAmount,    setAddAmount]    = useState('');
+  const [addLoading,   setAddLoading]   = useState(false);
+  const [resettingId,  setResettingId]  = useState<string | null>(null);
+  const [search,       setSearch]       = useState('');
+
+  useEffect(() => {
+    getAdminQuota().then(q => { setQuota(q); setQuotaLoading(false); });
+  }, []);
+
+  /* Real admin cost per workspace — virtual dollars ÷ 2 = real Anthropic cost */
+  const realAdminCostForWs = (ws: WorkspaceProfile): number => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hist: any[] = (ws as any).tokenHistory ?? [];
+    return hist.reduce((sum, e) => {
+      if (!e || e.amount <= 0) return sum;
+      // Every virtual dollar granted costs admin $0.50 real (2x markup)
+      return sum + e.amount * 0.5;
+    }, 0);
+  };
+
+  /* Total virtual dollars ever granted to a workspace */
+  const tokensGranted = (ws: WorkspaceProfile): number => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hist: any[] = (ws as any).tokenHistory ?? [];
+    return hist.reduce((sum, e) => (e?.amount > 0 ? sum + e.amount : sum), 0);
+  };
+
+  const handleSaveBudget = async () => {
+    const amt = parseFloat(budgetInput);
+    if (isNaN(amt) || amt < 0) return;
+    setSavingBudget(true);
+    try {
+      await setAdminQuotaBudget(amt);
+      setQuota(q => ({ ...q, totalBudget: amt }));
+      onToast('יתרת Anthropic עודכנה ✓', 'success');
+      setBudgetInput('');
+    } finally { setSavingBudget(false); }
+  };
+
+  const handleAddTokens = async (ws: WorkspaceProfile) => {
+    const amt = parseFloat(addAmount);
+    if (isNaN(amt) || amt <= 0) return;
+    setAddLoading(true);
+    try {
+      await addTokens(ws.id, amt, 'manual', 'Admin manual credit');
+      deductFromAdminQuota(amt * 0.5).catch(console.error); // real cost = virtual / 2
+      onToast(`${formatTokenDisplay(amt)} טוקנים נוספו ✓`, 'success');
+      setAddingTo(null);
+      setAddAmount('');
+      onRefresh();
+    } finally { setAddLoading(false); }
+  };
+
+  const handleResetTokens = async (ws: WorkspaceProfile) => {
+    if (!window.confirm(`לאפס את כל הטוקנים של "${ws.name}"?`)) return;
+    setResettingId(ws.id);
+    try {
+      await updateDoc(doc(db, 'workspaces', ws.id), {
+        tokenBalance: 0, tokenUsed: 0, tokenPlanAllocation: 0, tokenHistory: [],
+      });
+      onToast(`טוקנים של ${ws.name} אופסו ✓`, 'success');
+      onRefresh();
+    } finally { setResettingId(null); }
+  };
+
+  // Real Anthropic balance = budget - REAL usage (not allocated virtual)
+  const totalRealUsed      = workspaces.reduce((s, ws) => s + (ws.tokenUsed ?? 0), 0);
+  const totalClientBalance = workspaces.reduce((s, ws) => s + (ws.tokenBalance ?? 0), 0);
+  const totalGranted       = workspaces.reduce((s, ws) => s + tokensGranted(ws), 0);
+  const totalMyRealCost    = workspaces.reduce((s, ws) => s + realAdminCostForWs(ws), 0);
+
+  // Real remaining = what admin loaded into Anthropic minus actual API spending
+  const realRemaining = Math.max(0, quota.totalBudget - totalRealUsed);
+  const realRemainPct = quota.totalBudget > 0 ? Math.min(100, Math.round((realRemaining / quota.totalBudget) * 100)) : 100;
+  const realUsedPct   = 100 - realRemainPct;
+
+  // Tokens as count strings
+  const remainingTokens = formatTokenCount(Math.round(realRemaining * 300_000));
+  const usedTokens      = formatTokenCount(Math.round(totalRealUsed * 300_000));
+  const clientTokens    = formatTokenCount(Math.round(totalClientBalance * 300_000));
+
+  const sorted = [...workspaces]
+    .filter(ws => !search || ws.name?.includes(search) || ws.ownerEmail?.includes(search))
+    .sort((a, b) => (b.tokenUsed ?? 0) - (a.tokenUsed ?? 0));
+
+  // ── Exposure risk: if all client balances were used, can admin cover it?
+  const maxExposure    = totalClientBalance / 2; // real Anthropic cost if ALL virtual used
+  const exposureRisk   = maxExposure - realRemaining; // positive = admin could run out
+  const isAdminLow     = realRemaining < 2 || (quota.totalBudget > 0 && realRemainPct < 20);
+
+  return (
+    <div className="p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
+
+      {/* ── ADMIN LOW-BALANCE ALERT BANNER ────────────────────────────────── */}
+      {!quotaLoading && isAdminLow && (
+        <div className="rounded-2xl px-5 py-4 flex items-start gap-4"
+          style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)' }}>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(239,68,68,0.2)' }}>
+            <AlertTriangle size={18} className="text-red-400" />
+          </div>
+          <div className="flex-1">
+            <p className="font-bold text-red-400 text-base">⚠️ יתרת Anthropic שלך נמוכה!</p>
+            <p className="text-red-300/80 text-sm mt-1">
+              נשאר לך <span className="font-black text-red-300">${realRemaining.toFixed(2)}</span> ({realRemainPct}%) מתוך ${quota.totalBudget.toFixed(2)} שטענת.
+              {exposureRisk > 0 && (
+                <span> הלקוחות שלך יכולים לצרוך עוד <span className="font-black">${exposureRisk.toFixed(2)}</span> ממך — טען כסף ב-Anthropic עכשיו.</span>
+              )}
+            </p>
+            <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-bold mt-2 text-red-300 hover:text-red-200 underline underline-offset-2">
+              <ExternalLink size={11} /> פתח Anthropic Console → Billing
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* ── EXPOSURE WARNING (when committed > available) ──────────────────── */}
+      {!quotaLoading && exposureRisk > 0.5 && !isAdminLow && (
+        <div className="rounded-2xl px-5 py-3.5 flex items-center gap-3"
+          style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
+          <AlertTriangle size={16} className="text-amber-400 flex-shrink-0" />
+          <p className="text-amber-300/90 text-sm">
+            <span className="font-bold">שים לב:</span> אם כל הלקוחות ישתמשו בטוקנים שלהם, תצטרך עוד <span className="font-black text-amber-300">${exposureRisk.toFixed(2)}</span> ב-Anthropic.
+            הלקוחות "קיבלו" טוקנים וירטואליים שעלותם האמיתית גבוהה מהיתרה הנוכחית שלך.
+          </p>
+        </div>
+      )}
+
+      {/* ── REAL BALANCE CARD ─────────────────────────────────────────────── */}
+      <div className="rounded-2xl p-6" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5">
+          {/* Left — main balance */}
+          <div>
+            <p className="text-white/50 text-xs font-semibold uppercase tracking-widest mb-2">💳 יתרת Anthropic שלי — כסף אמיתי</p>
+            <div className="flex items-end gap-3">
+              <span className={`text-5xl font-black tabular-nums ${realRemaining > 3 ? 'text-emerald-400' : realRemaining > 1 ? 'text-amber-400' : 'text-red-400'}`}>
+                {quotaLoading ? '...' : `$${realRemaining.toFixed(2)}`}
+              </span>
+              <div className="mb-1.5">
+                <p className="text-white/40 text-xs">נשאר מתוך ${quota.totalBudget.toFixed(2)}</p>
+                <p className="text-white/55 text-xs font-medium">{remainingTokens} טוקנים אמיתיים</p>
+              </div>
+            </div>
+            <p className="text-white/35 text-xs mt-2">
+              השתמשת ב-${totalRealUsed.toFixed(4)} ({realUsedPct}%) · {usedTokens} טוקנים בפועל
+            </p>
+          </div>
+          {/* Right — update budget */}
+          <div className="flex flex-col gap-2 items-start sm:items-end">
+            <p className="text-white/40 text-[11px] font-medium">עדכן לאחר טעינה ב-Anthropic Console</p>
+            <div className="flex gap-2">
+              <input
+                type="number" min="0" step="0.01" placeholder="$0.00"
+                value={budgetInput}
+                onChange={e => setBudgetInput(e.target.value)}
+                className="w-28 bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white/90 placeholder-white/25 focus:outline-none focus:border-violet-400 text-center"
+                dir="ltr"
+              />
+              <button
+                onClick={handleSaveBudget} disabled={savingBudget || !budgetInput}
+                className="disabled:opacity-40 text-white text-sm font-bold px-4 py-2 rounded-xl transition-all hover:scale-105"
+                style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}
+              >
+                {savingBudget ? <RefreshCw size={14} className="animate-spin" /> : 'עדכן'}
+              </button>
+            </div>
+            <p className="text-white/25 text-[10px]">console.anthropic.com → Billing → Credits</p>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-3 bg-white/5 border border-white/10 rounded-full overflow-hidden mb-2">
+          <div
+            className={`h-full rounded-full transition-all duration-700 ${realRemaining > 3 ? 'bg-emerald-500' : realRemaining > 1 ? 'bg-amber-400' : 'bg-red-400'}`}
+            style={{ width: `${realRemainPct}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-white/35 mb-4" dir="ltr">
+          <span>$0</span>
+          <span>${(quota.totalBudget * 0.25).toFixed(2)}</span>
+          <span>${(quota.totalBudget * 0.5).toFixed(2)}</span>
+          <span>${(quota.totalBudget * 0.75).toFixed(2)}</span>
+          <span>${quota.totalBudget.toFixed(2)}</span>
+        </div>
+
+        {/* Stats row — 4 cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)' }}>
+            <p className="text-[10px] text-white/45 mb-1">🔥 שימוש AI אמיתי</p>
+            <p className="text-base font-black text-rose-400">${totalRealUsed.toFixed(4)}</p>
+            <p className="text-[10px] text-white/30">{usedTokens} טוקנים</p>
+          </div>
+          <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.18)' }}>
+            <p className="text-[10px] text-white/45 mb-1">👥 יתרה אצל לקוחות</p>
+            <p className="text-base font-black text-indigo-400">{clientTokens}</p>
+            <p className="text-[10px] text-white/30">${totalClientBalance.toFixed(2)} וירטואלי</p>
+          </div>
+          <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.18)' }}>
+            <p className="text-[10px] text-white/45 mb-1">💰 עלות אמיתית שלי</p>
+            <p className="text-base font-black text-emerald-400">${totalMyRealCost.toFixed(2)}</p>
+            <p className="text-[10px] text-white/30">הוקצה ÷ 2 (×2 מארק-אפ)</p>
+          </div>
+          <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.18)' }}>
+            <p className="text-[10px] text-white/45 mb-1">📦 סה"כ הוקצה ללקוחות</p>
+            <p className="text-base font-black text-amber-400">{formatTokenCount(Math.round(totalGranted * 300_000))}</p>
+            <p className="text-[10px] text-white/30">${totalGranted.toFixed(2)} וירטואלי</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Legend ────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-3 text-[11px]" dir="rtl">
+        <span className="flex items-center gap-1.5 text-white/50">
+          <span className="w-2 h-2 rounded-full bg-indigo-400 inline-block" />
+          יתרה (לקוח) = טוקנים וירטואליים שנשארו
+        </span>
+        <span className="flex items-center gap-1.5 text-white/50">
+          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+          שימוש אמיתי = עלות Anthropic בפועל
+        </span>
+        <span className="flex items-center gap-1.5 text-white/50">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+          עלות לי = וירטואלי ÷ 2 (מארק-אפ ×2)
+        </span>
+      </div>
+
+      {/* ── Workspace table ────────────────────────────────────────────────── */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div>
+            <h3 className="font-bold text-white/90 text-base">פירוט לפי סביבת עבודה</h3>
+            <p className="text-xs text-white/40 mt-0.5">יתרה וירטואלית ללקוח · עלות אמיתית מ-Anthropic</p>
+          </div>
+          <input
+            placeholder="חפש שם / מייל..."
+            value={search} onChange={e => setSearch(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white/80 placeholder-white/25 focus:outline-none focus:border-indigo-400 w-52"
+          />
+        </div>
+
+        <div className="overflow-x-auto" dir="ltr">
+          <table className="w-full text-sm" dir="rtl">
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th className="text-right px-4 py-3 text-white/50 text-xs font-semibold">סביבת עבודה</th>
+                <th className="text-center px-3 py-3 text-white/50 text-xs font-semibold">תוכנית</th>
+                <th className="text-center px-3 py-3 text-indigo-400 text-xs font-semibold">יתרה (לקוח)</th>
+                <th className="text-center px-3 py-3 text-amber-400 text-xs font-semibold">שימוש (אמיתי)</th>
+                <th className="text-center px-3 py-3 text-rose-400 text-xs font-semibold">עלות אמיתית לי</th>
+                <th className="text-center px-3 py-3 text-white/50 text-xs font-semibold">פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((ws, idx) => {
+                const used    = ws.tokenUsed ?? 0;
+                const balance = ws.tokenBalance ?? 0;
+                const granted = tokensGranted(ws);
+                const myCost  = realAdminCostForWs(ws);
+                const balPct  = granted > 0 ? Math.min(100, Math.round((balance / granted) * 100)) : 0;
+                const isAdding    = addingTo === ws.id;
+                const isResetting = resettingId === ws.id;
+
+                return (
+                  <tr key={ws.id}
+                    className="transition-colors hover:bg-white/[0.03]"
+                    style={{ borderTop: idx > 0 ? '1px solid rgba(255,255,255,0.04)' : undefined }}
+                  >
+                    {/* Name */}
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center gap-1.5">
+                        <div className="font-semibold text-white/85 text-sm">{ws.name || '—'}</div>
+                        {balance <= 0.000001 && (
+                          <span title="טוקנים נגמרו!" className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-red-300"
+                            style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                            ⚠️ ריק
+                          </span>
+                        )}
+                        {balance > 0.000001 && balPct < 20 && (
+                          <span title="טוקנים עומדים להיגמר" className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-amber-300"
+                            style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                            ⚡ נמוך
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-white/35 mt-0.5">{ws.ownerEmail}</div>
+                    </td>
+                    {/* Plan */}
+                    <td className="px-3 py-3.5 text-center">
+                      <span className="text-[10px] font-bold px-2.5 py-1 rounded-full"
+                        style={PLAN_COLOR_STYLES[ws.plan ?? 'trial']}>
+                        {ws.plan ?? 'trial'}
+                      </span>
+                    </td>
+                    {/* Client virtual balance */}
+                    <td className="px-3 py-3.5 text-center">
+                      <div className={`font-bold text-sm ${balance > 0.05 ? 'text-indigo-300' : 'text-red-400'}`}>
+                        {formatTokenCount(Math.round(balance * 300_000))}
+                      </div>
+                      <div className="text-[10px] text-white/40">${balance.toFixed(2)}</div>
+                      <div className="w-20 mx-auto mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                        <div className={`h-full rounded-full transition-all ${balPct > 40 ? 'bg-indigo-400' : balPct > 15 ? 'bg-amber-400' : 'bg-red-400'}`}
+                          style={{ width: `${balPct}%` }} />
+                      </div>
+                      <div className="text-[9px] text-white/30 mt-0.5">{balPct}% נותר</div>
+                    </td>
+                    {/* Real AI usage */}
+                    <td className="px-3 py-3.5 text-center">
+                      <div className="font-bold text-amber-300 text-sm">${used.toFixed(4)}</div>
+                      <div className="text-[10px] text-white/35">{formatTokenCount(Math.round(used * 300_000))} טוקנים</div>
+                    </td>
+                    {/* My real cost (virtual ÷ 2) */}
+                    <td className="px-3 py-3.5 text-center">
+                      <div className="font-bold text-rose-300 text-sm">${myCost.toFixed(2)}</div>
+                      <div className="text-[10px] text-white/35">הקצאה + שימוש</div>
+                    </td>
+                    {/* Actions */}
+                    <td className="px-3 py-3.5 text-center">
+                      {isAdding ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <input
+                            type="number" min="0.5" step="0.5" placeholder="$"
+                            value={addAmount}
+                            onChange={e => setAddAmount(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleAddTokens(ws)}
+                            className="w-16 bg-white/5 border border-white/15 rounded-lg px-2 py-1.5 text-xs text-white/85 text-center focus:outline-none focus:border-emerald-400"
+                            autoFocus dir="ltr"
+                          />
+                          <button onClick={() => handleAddTokens(ws)} disabled={addLoading || !addAmount}
+                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors">
+                            {addLoading ? '...' : '✓'}
+                          </button>
+                          <button onClick={() => { setAddingTo(null); setAddAmount(''); }}
+                            className="text-white/30 hover:text-white/60 text-xs px-1.5 py-1.5">✕</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 justify-center">
+                          <button
+                            onClick={() => { setAddingTo(ws.id); setAddAmount(''); }}
+                            className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                            style={{ background: 'rgba(16,185,129,0.1)' }}
+                          >
+                            <Plus size={10} /> הוסף
+                          </button>
+                          <button
+                            onClick={() => handleResetTokens(ws)}
+                            disabled={isResetting}
+                            className="text-[11px] font-bold text-red-400 hover:text-red-300 px-2.5 py-1.5 rounded-lg transition-colors"
+                            style={{ background: 'rgba(239,68,68,0.08)' }}
+                            title="אפס טוקנים"
+                          >
+                            {isResetting ? <RefreshCw size={10} className="animate-spin" /> : '↺'}
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-center py-16 text-white/30 text-sm">
+                    לא נמצאו סביבות עבודה
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer summary */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-5 py-3.5 text-xs font-semibold"
+          style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+          <span className="text-white/40">{sorted.length} סביבות</span>
+          <span className="text-indigo-300">יתרה כוללת: {clientTokens} ({formatTokenCount(Math.round(totalClientBalance * 300_000))})</span>
+          <span className="text-amber-300">שימוש AI: ${totalRealUsed.toFixed(4)}</span>
+          <span className="text-rose-300">עלות כוללת לי: ${totalMyRealCost.toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    TAB: Feature Flags
 ══════════════════════════════════════════════════════════════════════════ */
 function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage, onSavePlanPages, planPagesSaving, planTokenAmounts, onSavePlanTokenAmounts, tokenAmountsSaving }:
@@ -1484,165 +2368,257 @@ function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage,
 
   const PLANS: PlanKey[] = ['trial','basic','pro','enterprise'];
   const [localTokenAmounts, setLocalTokenAmounts] = useState<PlanTokenConfig>(planTokenAmounts);
+  const [activeView, setActiveView] = useState<'unified'|'tokens'>('unified');
 
   // sync if parent changes
   useEffect(() => { setLocalTokenAmounts(planTokenAmounts); }, [planTokenAmounts]);
 
+  const anyUnsaved = saving || planPagesSaving;
+
+  // ── Plan badge style
+  const planBadge = (p: PlanKey) => (
+    <div key={p} className="text-center">
+      <span className="text-xs font-black px-2.5 py-1 rounded-full" style={PLAN_COLOR_STYLES[p]}>{p}</span>
+    </div>
+  );
+
+  // ── Groups for the unified table
+  const GROUPS: { label: string; emoji: string; color: string; rows: { id: string; name: string; type: 'feature'|'page' }[] }[] = [
+    {
+      label: 'ניווט בסיסי', emoji: '🧭', color: 'text-sky-400',
+      rows: [
+        { id: 'home',      name: 'לוח בקרה',      type: 'page' },
+        { id: 'dashboard', name: 'לידים',          type: 'page' },
+        { id: 'kanban',    name: 'פייפליין',       type: 'page' },
+        { id: 'deals',     name: 'לקוחות פעילים', type: 'page' },
+        { id: 'tasks',     name: 'משימות',         type: 'page' },
+      ],
+    },
+    {
+      label: 'דוחות ונתונים', emoji: '📊', color: 'text-emerald-400',
+      rows: [
+        { id: 'overview',  name: 'דוחות',          type: 'page' },
+        { id: 'analytics', name: 'אנליטיקס',       type: 'page' },
+      ],
+    },
+    {
+      label: 'תוכן ושיווק', emoji: '🎨', color: 'text-pink-400',
+      rows: [
+        { id: 'content',          name: 'קריאייטיב',       type: 'page' },
+        { id: 'marketing-agent',  name: 'סוכן שיווק',      type: 'page' },
+      ],
+    },
+    {
+      label: 'סוכנים ואוטומציות', emoji: '🤖', color: 'text-violet-400',
+      rows: [
+        { id: 'ai',           name: 'עוזר AI',           type: 'page' },
+        { id: 'ai-studio',    name: 'AI Studio',         type: 'page' },
+        { id: 'email-agent',  name: 'סוכן מכירות AI',   type: 'page' },
+        { id: 'agents',       name: 'סוכנים חכמים',     type: 'page' },
+        { id: 'workflows',    name: 'בונה אוטומציות',   type: 'page' },
+      ],
+    },
+    {
+      label: 'אינטגרציות ופלטפורמות', emoji: '🔌', color: 'text-amber-400',
+      rows: [
+        { id: 'integrations', name: 'אינטגרציות',       type: 'page' },
+      ],
+    },
+    {
+      label: 'ניהול צוות', emoji: '👥', color: 'text-teal-400',
+      rows: [
+        { id: 'team', name: 'ניהול צוות', type: 'page' },
+      ],
+    },
+    {
+      label: 'מנוי והגדרות', emoji: '⚙️', color: 'text-slate-400',
+      rows: [
+        { id: 'settings', name: 'הגדרות',        type: 'page' },
+        { id: 'billing',  name: 'מנוי ותשלום',  type: 'page' },
+      ],
+    },
+  ];
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-5">
 
-      {/* ── Section 1: Feature flags ─────────────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-black text-slate-800">תכונות ותוכניות</h1>
-            <p className="text-slate-500 text-sm mt-0.5">שלוט אילו תכונות פתוחות לכל תוכנית</p>
-          </div>
-          <button onClick={() => onSave(flags)} disabled={saving}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
-            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Package size={14} />}
-            שמור תכונות
-          </button>
+      {/* ── Header + tab switcher ─────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-black text-white/90 flex items-center gap-2">
+            <Layers size={20} className="text-indigo-400" /> תכונות, דפים ותוכניות
+          </h1>
+          <p className="text-white/45 text-sm mt-0.5">טבלה מאוחדת — שלוט בגישה לכל תכונה ודף לפי תוכנית</p>
         </div>
+        <div className="flex gap-2 items-center">
+          {/* view switcher */}
+          <div className="flex bg-white/5 rounded-xl p-1 border border-white/10">
+            {(['unified','tokens'] as const).map(v => (
+              <button key={v} onClick={() => setActiveView(v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeView===v ? 'bg-white/15 text-white' : 'text-white/40 hover:text-white/60'}`}>
+                {v === 'unified' ? '🗂️ תכונות ודפים' : '💰 טוקנים'}
+              </button>
+            ))}
+          </div>
+          {activeView === 'unified' && (
+            <button onClick={async () => { await onSave(flags); await onSavePlanPages(planPages); }} disabled={anyUnsaved}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+              {anyUnsaved ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              שמור הכל
+            </button>
+          )}
+          {activeView === 'tokens' && (
+            <button onClick={() => onSavePlanTokenAmounts(localTokenAmounts)} disabled={tokenAmountsSaving}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+              {tokenAmountsSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              שמור הקצאות
+            </button>
+          )}
+        </div>
+      </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="grid grid-cols-5 px-5 py-3 bg-slate-50 border-b border-slate-200">
-            <div className="col-span-1 text-xs font-bold text-slate-500 uppercase tracking-wider">תכונה</div>
-            {PLANS.map(p => (
-              <div key={p} className="text-center">
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[p]}`}>{p}</span>
+      {/* ══════════════════════════════════════════════════════════════
+          VIEW: Unified features + pages table
+      ══════════════════════════════════════════════════════════════ */}
+      {activeView === 'unified' && (
+        <div className="overflow-x-auto rounded-2xl border border-white/10">
+          <table className="min-w-[560px] w-full border-collapse">
+            {/* Sticky header */}
+            <thead>
+              <tr className="bg-white/8 border-b border-white/10">
+                <th className="text-right px-5 py-3 text-xs font-black text-white/50 uppercase tracking-wider w-48">דף / תכונה</th>
+                {PLANS.map(p => (
+                  <th key={p} className="text-center px-3 py-3 text-xs font-black uppercase tracking-wider">
+                    <span className="px-2.5 py-1 rounded-full text-[11px]" style={PLAN_COLOR_STYLES[p]}>{p}</span>
+                  </th>
+                ))}
+                <th className="text-center px-3 py-3 text-xs font-black text-violet-400/80 uppercase tracking-wider w-24">גישה</th>
+              </tr>
+            </thead>
+            <tbody>
+              {GROUPS.map(({ label, emoji, color, rows }) => (
+                <>
+                  {/* Group header row */}
+                  <tr key={`grp-${label}`} className="bg-white/3">
+                    <td colSpan={6} className="px-5 py-2">
+                      <span className={`text-[11px] font-black uppercase tracking-wider ${color}`}>{emoji} {label}</span>
+                    </td>
+                  </tr>
+                  {rows.map(({ id, name }) => {
+                    const pageOn  = (p: PlanKey) => (planPages[p] ?? []).includes(id as Page);
+                    const featOn  = (p: PlanKey) => flags[id]?.[p] ?? false;
+                    const hasFlag = id in flags;
+                    return (
+                      <tr key={id} className="border-b border-white/5 hover:bg-white/4 transition-colors group">
+                        {/* Name */}
+                        <td className="px-5 py-3">
+                          <p className="text-sm font-semibold text-white/80 group-hover:text-white transition-colors">{name}</p>
+                          <p className="text-[10px] text-white/30 font-mono">{id}</p>
+                        </td>
+                        {/* Page toggle per plan */}
+                        {PLANS.map(plan => (
+                          <td key={plan} className="text-center px-3 py-3">
+                            <div className="flex flex-col items-center gap-1">
+                              {/* Page access */}
+                              <button onClick={() => onTogglePage(id as Page, plan)}
+                                title="גישה לדף"
+                                className={`w-9 h-5 rounded-full transition-all relative ${pageOn(plan) ? 'bg-emerald-500' : 'bg-white/10'}`}>
+                                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${pageOn(plan) ? 'right-0.5' : 'left-0.5'}`} />
+                              </button>
+                              {/* Feature flag (only if this id exists as a feature flag) */}
+                              {hasFlag && (
+                                <button onClick={() => onToggle(id, plan)}
+                                  title="תכונה מופעלת"
+                                  className={`w-7 h-3.5 rounded-full transition-all relative ${featOn(plan) ? 'bg-indigo-500' : 'bg-white/10'}`}>
+                                  <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-all ${featOn(plan) ? 'right-0.5' : 'left-0.5'}`} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        ))}
+                        {/* Legend */}
+                        <td className="text-center px-3 py-3">
+                          {hasFlag ? (
+                            <div className="flex flex-col items-center gap-0.5 text-[9px] text-white/30">
+                              <span className="text-emerald-400">● דף</span>
+                              <span className="text-indigo-400">● תכונה</span>
+                            </div>
+                          ) : (
+                            <span className="text-[9px] text-emerald-400/60">● דף</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Info banner */}
+      {activeView === 'unified' && (
+        <div className="flex flex-col gap-2">
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-xs text-emerald-400 flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-emerald-500 flex-shrink-0" /> <strong>ירוק (דף):</strong> הדף מופיע בניווט של הסביבה
+          </div>
+          <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 text-xs text-indigo-400 flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-indigo-500 flex-shrink-0" /> <strong>סגול (תכונה):</strong> הפיצ'ר מופעל בקוד (רלוונטי לתכונות עם לוגיקה נוספת)
+          </div>
+          <div className="bg-blue-500/10 border border-blue-200 rounded-xl p-3 text-xs text-blue-400 flex items-start gap-2">
+            <Info size={13} className="flex-shrink-0 mt-0.5" />
+            <span>שמירה מעדכנת <strong>מיידית</strong> את כל הסביבות ללא הגדרה ידנית. סביבות עם "מותאם אישית" בפאנל הסביבה — לא יושפעו.</span>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════
+          VIEW: Token allocations
+      ══════════════════════════════════════════════════════════════ */}
+      {activeView === 'tokens' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-lg font-black text-white/90 flex items-center gap-2">
+              <DollarSign size={18} className="text-emerald-400" /> טוקנים לפי תוכנית
+            </h2>
+            <p className="text-white/45 text-sm mt-0.5">הגדר כמה דולרים של טוקנים AI מקבלת כל תוכנית</p>
+          </div>
+
+          <div className="bg-white/5 rounded-2xl border border-white/10 overflow-hidden">
+            <div className="grid grid-cols-4 px-5 py-3 border-b border-white/10">
+              <div className="col-span-1 text-xs font-black text-white/45 uppercase tracking-wider">תוכנית</div>
+              <div className="text-center text-xs font-black text-white/45 uppercase tracking-wider">הקצאת טוקנים ($)</div>
+              <div className="text-center text-xs font-black text-white/45 uppercase tracking-wider">מטבע</div>
+              <div className="text-center text-xs font-black text-white/45 uppercase tracking-wider">מחיר חודשי</div>
+            </div>
+            {PLANS.map(plan => (
+              <div key={plan} className="grid grid-cols-4 px-5 py-4 border-b border-white/5 hover:bg-white/5 transition-colors items-center">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black px-2.5 py-1 rounded-full" style={PLAN_COLOR_STYLES[plan]}>{plan}</span>
+                </div>
+                <div className="flex justify-center">
+                  <input
+                    type="number" min="0" step="1" dir="ltr"
+                    value={localTokenAmounts[plan] ?? DEFAULT_PLAN_TOKEN_AMOUNTS[plan] ?? 0}
+                    onChange={e => setLocalTokenAmounts(prev => ({ ...prev, [plan]: parseFloat(e.target.value) || 0 }))}
+                    className="w-24 text-center bg-white/5 border border-white/10 rounded-xl px-2 py-1.5 text-sm font-semibold focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 text-white"
+                  />
+                </div>
+                <div className="text-center text-xs text-white/45">USD</div>
+                <div className="text-center text-xs font-bold text-white/60">
+                  {plan === 'trial' ? 'חינם' : `$${PLAN_MRR[plan]}/חודש`}
+                </div>
               </div>
             ))}
           </div>
-          {Object.entries(FEATURE_LABELS).map(([key, label]) => (
-            <div key={key} className="grid grid-cols-5 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
-              <div className="col-span-1">
-                <p className="text-sm font-medium text-slate-700">{label}</p>
-                <p className="text-xs text-slate-400">{key}</p>
-              </div>
-              {PLANS.map(p => {
-                const on = flags[key]?.[p] ?? false;
-                return (
-                  <div key={p} className="flex justify-center">
-                    <button onClick={() => onToggle(key, p)}
-                      className={`w-9 h-5 rounded-full transition-all relative ${on ? 'bg-indigo-600' : 'bg-slate-200'}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? 'right-0.5' : 'left-0.5'}`} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
 
-      {/* ── Section 2: Pages per plan ────────────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-              <Layers size={18} className="text-indigo-600" /> דפים לפי מסלול
-            </h2>
-            <p className="text-slate-500 text-sm mt-0.5">הגדר אילו דפים כל מסלול יכול לגשת אליהם כברירת מחדל</p>
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-xs text-emerald-400 flex items-start gap-2">
+            <Info size={14} className="flex-shrink-0 mt-0.5" />
+            <p>ערכים אלו קובעים כמה דולרים של טוקנים AI מוקצים לכל סביבה עבור כל תוכנית. השינויים לא חלים אוטומטית — יש ללחוץ "הענק טוקני תוכנית" בפאנל הסביבה.</p>
           </div>
-          <button onClick={() => onSavePlanPages(planPages)} disabled={planPagesSaving}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
-            {planPagesSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-            שמור דפים
-          </button>
         </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {/* Header */}
-          <div className="grid grid-cols-5 px-5 py-3 bg-slate-50 border-b border-slate-200">
-            <div className="col-span-1 text-xs font-bold text-slate-500 uppercase tracking-wider">דף</div>
-            {PLANS.map(p => (
-              <div key={p} className="text-center">
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[p]}`}>{p}</span>
-              </div>
-            ))}
-          </div>
-
-          {MANAGED_PAGES.map(page => (
-            <div key={page} className="grid grid-cols-5 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
-              <div className="col-span-1">
-                <p className="text-sm font-medium text-slate-700">{PAGE_LABELS[page] ?? page}</p>
-                <p className="text-xs text-slate-400">{page}</p>
-              </div>
-              {PLANS.map(plan => {
-                const on = (planPages[plan] ?? []).includes(page);
-                return (
-                  <div key={plan} className="flex justify-center">
-                    <button onClick={() => onTogglePage(page, plan)}
-                      className={`w-9 h-5 rounded-full transition-all relative ${on ? 'bg-emerald-500' : 'bg-slate-200'}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? 'right-0.5' : 'left-0.5'}`} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-700 flex items-start gap-2">
-          <Info size={14} className="flex-shrink-0 mt-0.5" />
-          <p>ברירות המחדל חלות על סביבות עבודה חדשות. סביבות עם הגדרה ידנית (כחול "מותאם אישית" בפאנל) לא יושפעו.</p>
-        </div>
-      </div>
-
-      {/* ── Section 3: Plan Token Allocation ────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-              <DollarSign size={18} className="text-emerald-600" /> טוקנים לפי תוכנית
-            </h2>
-            <p className="text-slate-500 text-sm mt-0.5">הגדר כמה דולרים של טוקנים AI מקבלת כל תוכנית</p>
-          </div>
-          <button onClick={() => onSavePlanTokenAmounts(localTokenAmounts)} disabled={tokenAmountsSaving}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
-            {tokenAmountsSaving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-            שמור הקצאות
-          </button>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="grid grid-cols-3 px-5 py-3 bg-emerald-50 border-b border-emerald-100">
-            <div className="col-span-1 text-xs font-bold text-emerald-700 uppercase tracking-wider">תוכנית</div>
-            <div className="text-center text-xs font-bold text-emerald-700 uppercase tracking-wider">הקצאת טוקנים ($)</div>
-            <div className="text-center text-xs font-bold text-emerald-700 uppercase tracking-wider">מטבע</div>
-          </div>
-          {PLANS.map(plan => (
-            <div key={plan} className="grid grid-cols-3 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center">
-              <div className="col-span-1 flex items-center gap-2">
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_COLORS[plan]}`}>{plan}</span>
-              </div>
-              <div className="flex justify-center">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={localTokenAmounts[plan] ?? DEFAULT_PLAN_TOKEN_AMOUNTS[plan] ?? 0}
-                  onChange={e => setLocalTokenAmounts(prev => ({ ...prev, [plan]: parseFloat(e.target.value) || 0 }))}
-                  className="w-24 text-center bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-sm font-semibold focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                  dir="ltr"
-                />
-              </div>
-              <div className="text-center text-xs text-slate-500">USD</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-700 flex items-start gap-2">
-          <Info size={14} className="flex-shrink-0 mt-0.5" />
-          <p>ערכים אלו קובעים כמה דולרים של טוקנים AI מוקצים לכל סביבה עבור כל תוכנית. השינויים לא חלים אוטומטית — יש ללחוץ "הענק טוקני תוכנית" בפאנל הסביבה.</p>
-        </div>
-      </div>
-
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-700 flex items-start gap-2">
-        <Info size={14} className="flex-shrink-0 mt-0.5" />
-        <p>שינויים בתכונות ייכנסו לתוקף בכניסה הבאה של המשתמש. תכונות ודפים מושבתים לא יופיעו בניווט.</p>
-      </div>
+      )}
     </div>
   );
 }
@@ -1686,47 +2662,47 @@ function AnnouncementsTab({ announcements, onRefresh, onToast }:
   };
 
   const TYPE_STYLE = {
-    info:    'bg-blue-50 border-blue-300 text-blue-800',
-    success: 'bg-emerald-50 border-emerald-300 text-emerald-800',
-    warning: 'bg-amber-50 border-amber-300 text-amber-800',
+    info:    'bg-blue-500/10 border-blue-300 text-blue-400',
+    success: 'bg-emerald-50 border-emerald-300 text-emerald-400',
+    warning: 'bg-amber-500/10 border-amber-300 text-amber-400',
   };
   const TYPE_LABEL = { info: 'מידע', success: 'הצלחה', warning: 'אזהרה' };
 
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-black text-slate-800">הודעות למשתמשים</h1>
-        <p className="text-slate-500 text-sm mt-0.5">הודעות שיוצגו בתוך האפליקציה לפי קהל יעד</p>
+        <h1 className="text-xl font-black text-white/90">הודעות למשתמשים</h1>
+        <p className="text-white/45 text-sm mt-0.5">הודעות שיוצגו כרצועת דגש בראש האפליקציה לפי קהל יעד — ניתן לסגור ע"י המשתמש</p>
       </div>
 
       {/* Create form */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-        <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Megaphone size={15} className="text-indigo-600" /> הודעה חדשה</h2>
+      <div className="bg-white/5 rounded-2xl border border-white/10  p-5 space-y-4">
+        <h2 className="font-bold text-white/90 text-sm flex items-center gap-2"><Megaphone size={15} className="text-indigo-600" /> הודעה חדשה</h2>
 
         <div className="space-y-3">
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="כותרת ההודעה"
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500" />
           <textarea value={body} onChange={e => setBody(e.target.value)} placeholder="תוכן ההודעה..." rows={3}
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 resize-none" />
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 resize-none" />
 
           <div className="flex gap-3">
             <div className="flex-1">
-              <p className="text-xs font-semibold text-slate-500 mb-1.5">סוג</p>
+              <p className="text-xs font-semibold text-white/45 mb-1.5">סוג</p>
               <div className="flex gap-2">
                 {(['info','success','warning'] as const).map(t => (
                   <button key={t} onClick={() => setType(t)}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${type===t ? TYPE_STYLE[t] : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${type===t ? TYPE_STYLE[t] : 'bg-white/5 text-white/45 border-white/10'}`}>
                     {TYPE_LABEL[t]}
                   </button>
                 ))}
               </div>
             </div>
             <div className="flex-1">
-              <p className="text-xs font-semibold text-slate-500 mb-1.5">קהל יעד</p>
+              <p className="text-xs font-semibold text-white/45 mb-1.5">קהל יעד</p>
               <div className="flex gap-2">
                 {([['all','כולם'],['trial','ניסיון'],['active','פעילים']] as const).map(([v,l]) => (
                   <button key={v} onClick={() => setTarget(v)}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${target===v ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${target===v ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white/5 text-white/45 border-white/10'}`}>
                     {l}
                   </button>
                 ))}
@@ -1745,12 +2721,12 @@ function AnnouncementsTab({ announcements, onRefresh, onToast }:
       {/* Existing announcements */}
       <div className="space-y-3">
         {announcements.length === 0 ? (
-          <div className="text-center py-10 text-slate-400 text-sm bg-white rounded-2xl border border-slate-200">
+          <div className="text-center py-10 text-white/35 text-sm bg-white/5 rounded-2xl border border-white/10">
             <Megaphone size={28} className="mx-auto mb-2 opacity-30" />
             אין הודעות פורסמו עדיין
           </div>
         ) : announcements.map(ann => (
-          <div key={ann.id} className={`border rounded-2xl p-4 ${ann.active ? TYPE_STYLE[ann.type] : 'bg-slate-50 border-slate-200 opacity-60'}`}>
+          <div key={ann.id} className={`border rounded-2xl p-4 ${ann.active ? TYPE_STYLE[ann.type] : 'bg-white/5 border-white/10 opacity-60'}`}>
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <p className="font-bold text-sm">{ann.title}</p>
@@ -1759,7 +2735,7 @@ function AnnouncementsTab({ announcements, onRefresh, onToast }:
                   <span>{fmtDate(ann.createdAt)}</span>
                   <span>·</span>
                   <span>קהל: {ann.target === 'all' ? 'כולם' : ann.target}</span>
-                  <span className={`font-bold ${ann.active ? 'text-emerald-700' : 'text-slate-500'}`}>
+                  <span className={`font-bold ${ann.active ? 'text-emerald-400' : 'text-white/45'}`}>
                     {ann.active ? '● פעיל' : '○ כבוי'}
                   </span>
                 </div>
@@ -1879,14 +2855,14 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
     <div className="p-6 space-y-5">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-black text-slate-800">פרסום גרסאות</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
+          <h1 className="text-xl font-black text-white/90">פרסום גרסאות</h1>
+          <p className="text-white/45 text-sm mt-0.5">
             פרסום עדכן את <strong>{clientCount}</strong> סביבות עבודה בבת-אחת — כולם על {' '}
             <span className="font-mono text-indigo-600">ray-crm.com</span>
           </p>
         </div>
         <button onClick={() => setShowGhSetup(s => !s)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${hasGithub ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-amber-50 border-amber-300 text-amber-700'}`}>
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${hasGithub ? 'bg-emerald-50 border-emerald-300 text-emerald-400' : 'bg-amber-500/10 border-amber-300 text-amber-400'}`}>
           <GitBranch size={12} />
           {hasGithub ? 'GitHub מחובר ✓' : 'חבר GitHub'}
         </button>
@@ -1894,36 +2870,36 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
 
       {/* Deploy status banner */}
       {deployStatus === 'running' && (
-        <div className="bg-indigo-900 rounded-2xl p-4 border border-indigo-700 flex items-center gap-3">
-          <RefreshCw size={16} className="animate-spin text-indigo-300 flex-shrink-0" />
+        <div className="bg-violet-50 rounded-2xl p-4 border border-violet-200 flex items-center gap-3">
+          <RefreshCw size={16} className="animate-spin text-violet-600 flex-shrink-0" />
           <div>
-            <p className="text-white font-bold text-sm">פריסה בתהליך...</p>
-            <p className="text-indigo-300 text-xs mt-0.5">GitHub Actions בונה ומפרסם לכל הלקוחות</p>
+            <p className="text-white/90 font-bold text-sm">פריסה בתהליך...</p>
+            <p className="text-violet-600 text-xs mt-0.5">GitHub Actions בונה ומפרסם לכל הלקוחות</p>
           </div>
         </div>
       )}
       {deployStatus === 'done' && (
-        <div className="bg-emerald-900 rounded-2xl p-4 border border-emerald-700 flex items-center gap-3">
-          <CheckCircle2 size={16} className="text-emerald-300 flex-shrink-0" />
+        <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-200 flex items-center gap-3">
+          <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
           <div>
-            <p className="text-white font-bold text-sm">🎉 פריסה הופעלה בהצלחה!</p>
-            <p className="text-emerald-300 text-xs mt-0.5">כל הלקוחות יקבלו את הגרסה החדשה תוך ~2 דקות</p>
+            <p className="text-white/90 font-bold text-sm">🎉 פריסה הופעלה בהצלחה!</p>
+            <p className="text-emerald-600 text-xs mt-0.5">כל הלקוחות יקבלו את הגרסה החדשה תוך ~2 דקות</p>
           </div>
-          <button onClick={() => setDeployStatus('idle')} className="mr-auto text-emerald-500 hover:text-white"><X size={14}/></button>
+          <button onClick={() => setDeployStatus('idle')} className="mr-auto text-emerald-500 hover:text-emerald-400"><X size={14}/></button>
         </div>
       )}
 
       {/* GitHub Setup panel */}
       {showGhSetup && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+        <div className="bg-white/5 rounded-2xl border border-white/10  p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-              <GitBranch size={15} className="text-slate-600" /> הגדרות GitHub Actions
+            <h2 className="font-bold text-white/90 text-sm flex items-center gap-2">
+              <GitBranch size={15} className="text-white/60" /> הגדרות GitHub Actions
             </h2>
-            <button onClick={() => setShowGhSetup(false)} className="text-slate-400 hover:text-slate-600"><X size={14}/></button>
+            <button onClick={() => setShowGhSetup(false)} className="text-white/35 hover:text-white/60"><X size={14}/></button>
           </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 space-y-1">
+          <div className="bg-blue-500/10 border border-blue-200 rounded-xl p-3 text-xs text-blue-400 space-y-1">
             <p className="font-bold">איך להגדיר (חד-פעמי):</p>
             <p>1. צור Personal Access Token ב-GitHub → Settings → Developer settings → Fine-grained tokens</p>
             <p>2. הרשאות: <code className="bg-blue-100 px-1 rounded">Actions: Read & Write</code></p>
@@ -1936,23 +2912,23 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">GitHub Owner (שם משתמש / ארגון)</label>
+              <label className="text-xs font-semibold text-white/45 block mb-1.5">GitHub Owner (שם משתמש / ארגון)</label>
               <input value={ghOwner} onChange={e => setGhOwner(e.target.value)} placeholder="username"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Repository Name</label>
+              <label className="text-xs font-semibold text-white/45 block mb-1.5">Repository Name</label>
               <input value={ghRepo} onChange={e => setGhRepo(e.target.value)} placeholder="crm-app"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
             </div>
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Personal Access Token</label>
+            <label className="text-xs font-semibold text-white/45 block mb-1.5">Personal Access Token</label>
             <input value={ghToken} onChange={e => setGhToken(e.target.value)} type="password" placeholder="github_pat_..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
           </div>
           <button onClick={saveGithubConfig} disabled={ghSaving}
-            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors">
+            className="flex items-center gap-2 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors" style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
             {ghSaving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
             שמור הגדרות
           </button>
@@ -1960,28 +2936,28 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
       )}
 
       {/* Create release */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-        <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Plus size={15} className="text-indigo-600" /> גרסה חדשה</h2>
+      <div className="bg-white/5 rounded-2xl border border-white/10  p-5 space-y-4">
+        <h2 className="font-bold text-white/90 text-sm flex items-center gap-2"><Plus size={15} className="text-indigo-600" /> גרסה חדשה</h2>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">מספר גרסה</label>
+            <label className="text-xs font-semibold text-white/45 block mb-1.5">מספר גרסה</label>
             <input value={version} onChange={e => setVersion(e.target.value)} placeholder="1.2.0"
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 font-mono" dir="ltr" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">כותרת</label>
+            <label className="text-xs font-semibold text-white/45 block mb-1.5">כותרת</label>
             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="שם הגרסה"
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
           </div>
         </div>
         <div>
-          <label className="text-xs font-semibold text-slate-500 block mb-1.5">מה חדש</label>
+          <label className="text-xs font-semibold text-white/45 block mb-1.5">מה חדש</label>
           <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
             placeholder="• תיאור השינוי הראשון&#10;• תיאור השינוי השני"
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 resize-none" />
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 resize-none" />
         </div>
         <button onClick={handleSaveDraft} disabled={saving}
-          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors">
+          className="flex items-center gap-2 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors" style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
           {saving ? <RefreshCw size={14} className="animate-spin" /> : <Archive size={14} />}
           שמור טיוטה
         </button>
@@ -1990,32 +2966,33 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
       {/* Releases list */}
       <div className="space-y-3">
         {releases.length === 0 ? (
-          <div className="text-center py-10 text-slate-400 text-sm bg-white rounded-2xl border border-slate-200">
+          <div className="text-center py-10 text-white/35 text-sm bg-white/5 rounded-2xl border border-white/10">
             <Package size={28} className="mx-auto mb-2 opacity-30" />
             אין גרסאות עדיין
           </div>
         ) : releases.map(rel => (
-          <div key={rel.id} className={`bg-white rounded-2xl border shadow-sm p-5 ${rel.status === 'published' ? 'border-emerald-200' : 'border-slate-200'}`}>
+          <div key={rel.id} className={`bg-white/5 rounded-2xl border  p-5 ${rel.status === 'published' ? 'border-emerald-200' : 'border-white/10'}`}>
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="font-mono text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-lg">v{rel.version}</span>
-                  <span className="font-bold text-slate-800 text-sm">{rel.title}</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${rel.status === 'published' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                  <span className="font-bold text-white/90 text-sm">{rel.title}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${rel.status === 'published' ? 'bg-emerald-100 text-emerald-400' : 'bg-amber-100 text-amber-400'}`}>
                     {rel.status === 'published' ? '✓ פורסם' : '⏸ טיוטה'}
                   </span>
                 </div>
                 {rel.notes && (
-                  <pre className="text-xs text-slate-600 font-sans whitespace-pre-wrap mt-2 leading-relaxed">{rel.notes}</pre>
+                  <pre className="text-xs text-white/60 font-sans whitespace-pre-wrap mt-2 leading-relaxed">{rel.notes}</pre>
                 )}
-                <p className="text-xs text-slate-400 mt-2">
+                <p className="text-xs text-white/35 mt-2">
                   נוצר: {fmtDate(rel.createdAt)}
                   {rel.publishedAt && ` · פורסם: ${fmtDate(rel.publishedAt)}`}
                 </p>
               </div>
               {rel.status === 'draft' && (
                 <button onClick={() => handlePublish(rel)} disabled={deploying}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors mr-4 flex-shrink-0 ${hasGithub ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-800 hover:bg-slate-700 text-white'} disabled:opacity-60`}>
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors mr-4 flex-shrink-0 disabled:opacity-60 text-white"
+                  style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
                   {deploying ? <RefreshCw size={12} className="animate-spin" /> : <Rocket size={12} />}
                   {hasGithub ? 'פרסם אוטומטית 🚀' : 'פרסם'}
                 </button>
@@ -2026,18 +3003,18 @@ function ReleasesTab({ releases, workspaces, onRefresh, onToast }:
       </div>
 
       {/* Info box — how it works */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-600 space-y-1">
-        <p className="font-bold text-slate-700 flex items-center gap-1"><Info size={12}/> איך עובד הפרסום?</p>
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-4 text-xs text-white/60 space-y-1">
+        <p className="font-bold text-white/75 flex items-center gap-1"><Info size={12}/> איך עובד הפרסום?</p>
         {hasGithub ? (
           <>
             <p>✅ GitHub Actions מחובר — לחיצה על "פרסם אוטומטית" תפעיל build ו-deploy ב-GitHub Actions</p>
-            <p>• הגרסה תועלה לאתר <code className="bg-slate-200 px-1 rounded">ray-crm.com</code> תוך ~2 דקות</p>
+            <p>• הגרסה תועלה לאתר <code className="bg-white/10 px-1 rounded">ray-crm.com</code> תוך ~2 דקות</p>
             <p>• <strong>כל {clientCount} הלקוחות</strong> יקבלו את העדכון אוטומטית בטעינה הבאה</p>
           </>
         ) : (
           <>
             <p>⚠️ GitHub Actions לא מוגדר — הפרסום שומר בFirestore אך לא מפרס קוד</p>
-            <p>• לפריסה ידנית: <code className="bg-slate-200 px-1 rounded">npm run build && firebase deploy --only hosting:client</code></p>
+            <p>• לפריסה ידנית: <code className="bg-white/10 px-1 rounded">npm run build && firebase deploy --only hosting:client</code></p>
             <p>• לפריסה אוטומטית עם לחיצה אחת: לחץ "חבר GitHub" ↗</p>
           </>
         )}
@@ -2095,42 +3072,42 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
   const atRisk    = workspaces.filter(w => healthScore(w) < 50).length;
 
   const PLAN_COLORS_CHART: Record<string, string> = {
-    trial: 'bg-slate-400', basic: 'bg-sky-500', pro: 'bg-violet-500', enterprise: 'bg-amber-500',
+    trial: 'bg-white/25', basic: 'bg-sky-500', pro: 'bg-violet-500', enterprise: 'bg-amber-500',
   };
 
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-black text-slate-800">אנליטיקס</h1>
-        <p className="text-slate-500 text-sm mt-0.5">ניתוח מעמיק של כל נתוני המערכת</p>
+        <h1 className="text-xl font-black text-white/90">אנליטיקס</h1>
+        <p className="text-white/45 text-sm mt-0.5">ניתוח מעמיק של כל נתוני המערכת</p>
       </div>
 
       {/* Top KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-4  text-center">
           <p className="text-2xl font-black text-indigo-600">₪{mrrNow.toLocaleString()}</p>
-          <p className="text-xs text-slate-500 mt-1">MRR חודשי</p>
+          <p className="text-xs text-white/45 mt-1">MRR חודשי</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-4  text-center">
           <p className="text-2xl font-black text-emerald-600">{convRate}%</p>
-          <p className="text-xs text-slate-500 mt-1">שיעור המרה (trial→active)</p>
+          <p className="text-xs text-white/45 mt-1">שיעור המרה (trial→active)</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
-          <p className="text-2xl font-black text-slate-800">{workspaces.length > 0 ? Math.round(mrrNow / Math.max(workspaces.filter(w=>w.status==='active').length,1)) : 0}</p>
-          <p className="text-xs text-slate-500 mt-1">₪ ARPU (ממוצע לחשבון)</p>
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-4  text-center">
+          <p className="text-2xl font-black text-white/90">{workspaces.length > 0 ? Math.round(mrrNow / Math.max(workspaces.filter(w=>w.status==='active').length,1)) : 0}</p>
+          <p className="text-xs text-white/45 mt-1">₪ ARPU (ממוצע לחשבון)</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-center">
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-4  text-center">
           <p className="text-2xl font-black text-amber-600">{atRisk}</p>
-          <p className="text-xs text-slate-500 mt-1">חשבונות בסיכון</p>
+          <p className="text-xs text-white/45 mt-1">חשבונות בסיכון</p>
         </div>
       </div>
 
       {/* 12-month chart */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="font-bold text-slate-800 text-sm">צמיחה — 12 חודשים אחרונים</h2>
-            <p className="text-slate-500 text-xs mt-0.5">סביבות עבודה חדשות לחודש</p>
+            <h2 className="font-bold text-white/90 text-sm">צמיחה — 12 חודשים אחרונים</h2>
+            <p className="text-white/45 text-xs mt-0.5">סביבות עבודה חדשות לחודש</p>
           </div>
           <span className="text-xs text-indigo-600 bg-indigo-50 font-bold px-3 py-1 rounded-full">
             סה״כ {workspaces.length} סביבות
@@ -2149,7 +3126,7 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
                   title={`${label}: ${count} סביבות`}
                 />
               </div>
-              <span className="text-[10px] text-slate-400">{label}</span>
+              <span className="text-[10px] text-white/35">{label}</span>
             </div>
           ))}
         </div>
@@ -2158,22 +3135,22 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
       {/* Plan distribution + Industry breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Plan distribution */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח תוכניות</h2>
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+          <h2 className="font-bold text-white/90 text-sm mb-4">פילוח תוכניות</h2>
           <div className="space-y-3">
             {planDist.map(({ plan, count, pct }) => (
               <div key={plan}>
                 <div className="flex justify-between text-xs mb-1.5">
                   <div className="flex items-center gap-2">
                     <div className={`w-2.5 h-2.5 rounded-full ${PLAN_COLORS_CHART[plan]}`} />
-                    <span className="font-semibold capitalize text-slate-700">{plan}</span>
+                    <span className="font-semibold capitalize text-white/75">{plan}</span>
                   </div>
-                  <div className="flex items-center gap-2 text-slate-500">
+                  <div className="flex items-center gap-2 text-white/45">
                     <span>{count} סביבות</span>
-                    <span className="font-bold text-slate-800">{pct}%</span>
+                    <span className="font-bold text-white/90">{pct}%</span>
                   </div>
                 </div>
-                <div className="h-2 bg-slate-100 rounded-full">
+                <div className="h-2 bg-white/[0.06] rounded-full">
                   <div className={`h-full rounded-full ${PLAN_COLORS_CHART[plan]}`} style={{ width: `${pct}%` }} />
                 </div>
               </div>
@@ -2182,13 +3159,13 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
 
           {/* Donut-style visual (CSS approximation) */}
           <div className="mt-4 pt-4 border-t border-slate-100">
-            <p className="text-xs text-slate-500 mb-2">הכנסה לפי תוכנית (MRR)</p>
+            <p className="text-xs text-white/45 mb-2">הכנסה לפי תוכנית (MRR)</p>
             <div className="flex gap-2 flex-wrap">
               {planDist.map(({ plan, count }) => {
                 const rev = count * (PLAN_MRR[plan] ?? 0);
                 if (rev === 0) return null;
                 return (
-                  <div key={plan} className={`flex-1 min-w-[70px] rounded-xl p-2 text-center ${PLAN_COLORS[plan] ?? 'bg-slate-100 text-slate-600'}`}>
+                  <div key={plan} className={`flex-1 min-w-[70px] rounded-xl p-2 text-center ${PLAN_COLORS[plan] ?? 'bg-white/[0.06] text-white/60'}`}>
                     <p className="text-xs font-black">₪{rev.toLocaleString()}</p>
                     <p className="text-[10px] capitalize">{plan}</p>
                   </div>
@@ -2199,10 +3176,10 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
         </div>
 
         {/* Industry breakdown */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח לפי תחום עיסוק</h2>
+        <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+          <h2 className="font-bold text-white/90 text-sm mb-4">פילוח לפי תחום עיסוק</h2>
           {industries.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-6">אין נתוני תחום</p>
+            <p className="text-white/35 text-sm text-center py-6">אין נתוני תחום</p>
           ) : (
             <div className="space-y-3">
               {industries.map(([ind, count]) => {
@@ -2210,10 +3187,10 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
                 return (
                   <div key={ind}>
                     <div className="flex justify-between text-xs mb-1">
-                      <span className="text-slate-700 font-medium truncate">{ind}</span>
-                      <span className="text-slate-500 flex-shrink-0 mr-2">{count} ({pct}%)</span>
+                      <span className="text-white/75 font-medium truncate">{ind}</span>
+                      <span className="text-white/45 flex-shrink-0 mr-2">{count} ({pct}%)</span>
                     </div>
-                    <div className="h-1.5 bg-slate-100 rounded-full">
+                    <div className="h-1.5 bg-white/[0.06] rounded-full">
                       <div className="h-full bg-violet-400 rounded-full" style={{ width: `${(count/maxInd)*100}%` }} />
                     </div>
                   </div>
@@ -2225,13 +3202,13 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
       </div>
 
       {/* Conversion funnel */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-4">משפך המרה</h2>
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-4">משפך המרה</h2>
         <div className="flex items-stretch gap-3">
           {[
             { label: 'נרשמו', count: workspaces.length,                  color: 'bg-indigo-100 border-indigo-300 text-indigo-800' },
-            { label: 'ניסיון', count: totalTrials,                        color: 'bg-blue-100 border-blue-300 text-blue-800'    },
-            { label: 'המירו',  count: converted,                          color: 'bg-emerald-100 border-emerald-300 text-emerald-800' },
+            { label: 'ניסיון', count: totalTrials,                        color: 'bg-blue-100 border-blue-300 text-blue-400'    },
+            { label: 'המירו',  count: converted,                          color: 'bg-emerald-100 border-emerald-300 text-emerald-400' },
             { label: 'Pro+',   count: workspaces.filter(w=>w.status==='active'&&(w.plan==='pro'||w.plan==='enterprise')).length, color: 'bg-violet-100 border-violet-300 text-violet-800' },
           ].map(({ label, count, color }, i, arr) => (
             <div key={label} className="flex-1 flex flex-col items-center gap-2">
@@ -2240,7 +3217,7 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
                 <p className="text-xs font-semibold mt-0.5">{label}</p>
               </div>
               {i < arr.length - 1 && (
-                <div className="flex items-center text-slate-400 text-xs">
+                <div className="flex items-center text-white/35 text-xs">
                   <ChevronRight size={16} />
                   <span className="text-[10px]">
                     {arr[i].count > 0 ? Math.round(arr[i+1].count/arr[i].count*100) : 0}%
@@ -2253,28 +3230,28 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
       </div>
 
       {/* Health score distribution */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-4">פילוח בריאות חשבונות</h2>
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-4">פילוח בריאות חשבונות</h2>
         <div className="grid grid-cols-3 gap-3">
-          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center">
-            <p className="text-2xl font-black text-emerald-700">{excellent}</p>
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-emerald-400">{excellent}</p>
             <p className="text-xs font-semibold text-emerald-600 mt-0.5">בריאים (75+)</p>
           </div>
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
-            <p className="text-2xl font-black text-amber-700">{moderate}</p>
+          <div className="bg-amber-500/10 border border-amber-200 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-amber-400">{moderate}</p>
             <p className="text-xs font-semibold text-amber-600 mt-0.5">בינוניים (50-74)</p>
           </div>
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-center">
-            <p className="text-2xl font-black text-red-700">{atRisk}</p>
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 text-center">
+            <p className="text-2xl font-black text-red-400">{atRisk}</p>
             <p className="text-xs font-semibold text-red-600 mt-0.5">בסיכון (&lt;50)</p>
           </div>
         </div>
         {atRisk > 0 && (
           <div className="mt-4 space-y-2">
-            <p className="text-xs font-semibold text-slate-500">חשבונות בסיכון:</p>
+            <p className="text-xs font-semibold text-white/45">חשבונות בסיכון:</p>
             {workspaces.filter(w => healthScore(w) < 50).map(w => (
               <div key={w.id} className="flex items-center justify-between bg-red-50 rounded-xl px-3 py-2">
-                <span className="text-xs font-medium text-slate-700">{w.name}</span>
+                <span className="text-xs font-medium text-white/75">{w.name}</span>
                 <div className="flex items-center gap-2">
                   <StatusBadge status={w.status} />
                   <span className="text-xs font-bold text-red-600">{healthScore(w)}</span>
@@ -2291,9 +3268,107 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: System
 ══════════════════════════════════════════════════════════════════════════ */
+/* ─── IntegrationsTab — global API keys, admin-only ─────────────────────────
+ * Stored in the GLOBAL `system/apiKeys` doc: only super-admin can write
+ * (per firestore.rules), while any signed-in user can read them so the
+ * Marketing Agent can use them for generation. Workspace users never see
+ * this editor — it lives in the admin console only.
+ * ──────────────────────────────────────────────────────────────────────── */
+type ApiKeyMap = { openai: string; google: string; heygen: string; canva: string };
+
+function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|'info')=>void }) {
+  const [keys, setKeys] = useState<ApiKeyMap>({ openai: '', google: '', heygen: '', canva: '' });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getDoc(doc(db, 'system', 'apiKeys'))
+      .then(snap => { if (snap.exists()) { const d = snap.data(); setKeys({ openai: d.openai ?? '', google: d.google ?? '', heygen: d.heygen ?? '', canva: d.canva ?? '' }); } })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await setDoc(doc(db, 'system', 'apiKeys'), keys);
+      onToast('מפתחות API נשמרו ✅', 'success');
+    } catch { onToast('שגיאה בשמירת המפתחות', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const FIELDS = [
+    { key: 'openai' as const, label: 'OpenAI API Key',      desc: 'עבור DALL-E 3 — יצירת תמונות',          placeholder: 'sk-...',   color: '#10b981', link: 'https://platform.openai.com/api-keys' },
+    { key: 'google' as const, label: 'Google AI Studio Key', desc: 'עבור Imagen 4 + Veo 3',                  placeholder: 'AIza...',  color: '#4285f4', link: 'https://aistudio.google.com/apikey' },
+    { key: 'heygen' as const, label: 'HeyGen API Key',       desc: 'עבור HyperFrames — יצירת וידאו AI',     placeholder: 'MjQ...',   color: '#8b5cf6', link: 'https://app.heygen.com/settings?nav=API' },
+    { key: 'canva'  as const, label: 'Canva Client ID',      desc: 'עבור ייצוא מצגות לקאנבה (Connect API)',  placeholder: 'OC-...',   color: '#00c4b4', link: 'https://www.canva.com/developers/' },
+  ];
+
+  return (
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-xl font-black text-white/90">אינטגרציות — מפתחות API</h1>
+        <p className="text-white/45 text-sm mt-0.5">מפתחות גלובליים לכלי ה-AI. נראים ונערכים על ידי האדמין בלבד, ומשמשים את כל הסביבות.</p>
+      </div>
+
+      <div className="rounded-2xl p-5 space-y-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)' }}>
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center"><span className="text-base">⚡</span></div>
+          <div>
+            <h2 className="font-bold text-white/90 text-sm">כלי AI מתקדמים</h2>
+            <p className="text-[11px] text-white/45">DALL-E 3 · Google Imagen · HeyGen HyperFrames · Canva</p>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-white/50 text-sm py-4"><div className="w-4 h-4 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"/> טוען...</div>
+        ) : (
+          <div className="space-y-3">
+            {FIELDS.map(f => (
+              <div key={f.key} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold" style={{ color: f.color }}>{f.label}</label>
+                  <a href={f.link} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-300 hover:underline">קבל מפתח ↗</a>
+                </div>
+                <p className="text-[10px] text-white/40">{f.desc}</p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={keys[f.key]}
+                    onChange={e => setKeys(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    className="flex-1 rounded-xl px-3 py-2 text-sm outline-none font-mono"
+                    style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${keys[f.key] ? `${f.color}60` : 'rgba(255,255,255,0.1)'}`, color: 'white' }}
+                    dir="ltr"
+                  />
+                  {keys[f.key] && <span className="flex items-center px-2 text-emerald-400 text-sm">✓</span>}
+                </div>
+              </div>
+            ))}
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full py-2.5 rounded-xl text-sm font-black text-white disabled:opacity-50 flex items-center justify-center gap-2 mt-1"
+              style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)' }}>
+              {saving ? <><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"/><span>שומר...</span></> : '💾 שמור מפתחות API'}
+            </button>
+            <p className="text-[10px] text-center text-white/40">המפתחות נשמרים גלובלית ומשמשים את כל סביבות העבודה</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; onToast: (m:string,t?:'success'|'error'|'info')=>void }) {
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [cfgLoading, setCfgLoading] = useState(true);
+
+  // Broadcast system message state
+  const [broadcastMsg,     setBroadcastMsg]     = useState('');
+  const [broadcastTarget,  setBroadcastTarget]  = useState<'all'|'trial'|'active'>('all');
+  const [broadcastSaving,  setBroadcastSaving]  = useState(false);
+  const [clearingMsg,      setClearingMsg]      = useState(false);
 
   useEffect(() => {
     getDoc(doc(db, 'system', 'config'))
@@ -2301,6 +3376,47 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
       .catch(() => {})
       .finally(() => setCfgLoading(false));
   }, []);
+
+  // Broadcast a system message to matching workspaces
+  const handleBroadcast = async () => {
+    if (!broadcastMsg.trim()) { onToast('הכנס טקסט הודעה', 'error'); return; }
+    setBroadcastSaving(true);
+    try {
+      const targets = workspaces.filter(w => {
+        if (broadcastTarget === 'all') return true;
+        return w.status === broadcastTarget;
+      });
+      const CHUNK = 400;
+      for (let i = 0; i < targets.length; i += CHUNK) {
+        const b = writeBatch(db);
+        targets.slice(i, i + CHUNK).forEach(ws => {
+          b.update(doc(db, 'workspaces', ws.id), { systemMessage: broadcastMsg.trim() });
+        });
+        await b.commit();
+      }
+      setBroadcastMsg('');
+      onToast(`הודעה נשלחה ל-${targets.length} סביבות ✓`, 'success');
+    } catch { onToast('שגיאה בשליחת הודעה', 'error'); }
+    finally { setBroadcastSaving(false); }
+  };
+
+  // Clear system message from all workspaces
+  const handleClearAll = async () => {
+    if (!window.confirm('לנקות את הודעת המערכת מכל הסביבות?')) return;
+    setClearingMsg(true);
+    try {
+      const CHUNK = 400;
+      for (let i = 0; i < workspaces.length; i += CHUNK) {
+        const b = writeBatch(db);
+        workspaces.slice(i, i + CHUNK).forEach(ws => {
+          b.update(doc(db, 'workspaces', ws.id), { systemMessage: '' });
+        });
+        await b.commit();
+      }
+      onToast('הודעת מערכת נוקתה מכל הסביבות ✓', 'success');
+    } catch { onToast('שגיאה בניקוי הודעה', 'error'); }
+    finally { setClearingMsg(false); }
+  };
 
   const FIREBASE_PROJECT = 'chex-crm';
   const CLIENT_PROJECT   = 'ray-crm-app';
@@ -2328,42 +3444,130 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
   const lastPublished = config.lastPublished as string | undefined;
   const hasGithub     = !!(config.github as Record<string, unknown> | undefined)?.owner;
 
+  // Derived stats for quick overview
+  const totalWs    = workspaces.length;
+  const activeWs   = workspaces.filter(w => w.status === 'active').length;
+  const trialWs    = workspaces.filter(w => w.status === 'trial').length;
+  const withMsg    = workspaces.filter(w => !!w.systemMessage).length;
+
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-black text-slate-800">מערכת</h1>
-        <p className="text-slate-500 text-sm mt-0.5">מידע טכני, קישורים, וסטטוס סביבה</p>
+        <h1 className="text-xl font-black text-white/90">מערכת</h1>
+        <p className="text-white/45 text-sm mt-0.5">ניהול, שידורים, מידע טכני וקישורים</p>
+      </div>
+
+      {/* Quick stats strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'סביבות סה״כ',   value: totalWs,  color: 'from-indigo-500 to-indigo-600',  icon: '🏢' },
+          { label: 'פעילות',         value: activeWs, color: 'from-emerald-500 to-emerald-600', icon: '✅' },
+          { label: 'בניסיון',        value: trialWs,  color: 'from-sky-500 to-sky-600',         icon: '⏱' },
+          { label: 'עם הודעת מערכת', value: withMsg,  color: 'from-amber-500 to-amber-600',     icon: '📢' },
+        ].map(({ label, value, color, icon }) => (
+          <div key={label} className="rounded-2xl p-4 text-center" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-lg mx-auto mb-2`}>{icon}</div>
+            <p className="text-2xl font-black text-white">{value}</p>
+            <p className="text-xs text-white/45 mt-0.5">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Broadcast system message ─────────────────────────────────────── */}
+      <div className="rounded-2xl p-5 space-y-4" style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.25)' }}>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h2 className="font-bold text-white/90 text-sm flex items-center gap-2">
+              <Megaphone size={15} className="text-indigo-400" /> שידור הודעת מערכת
+            </h2>
+            <p className="text-xs text-white/45 mt-0.5">ההודעה תוצג כרצועת דגש בראש האפליקציה לכל הסביבות שנבחרו</p>
+          </div>
+          {withMsg > 0 && (
+            <button onClick={handleClearAll} disabled={clearingMsg}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl disabled:opacity-60 transition-colors"
+              style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}>
+              {clearingMsg ? <RefreshCw size={11} className="animate-spin" /> : <X size={11} />}
+              נקה הודעה מכל {withMsg} הסביבות
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <textarea
+            value={broadcastMsg}
+            onChange={e => setBroadcastMsg(e.target.value)}
+            rows={2}
+            placeholder="הכנס הודעת מערכת לשידור (למשל: תחזוקה מתוכננת ב-...) ..."
+            className="w-full rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(99,102,241,0.3)', color: 'white' }}
+          />
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex gap-1.5">
+              {([['all','כל הסביבות'],['trial','ניסיון בלבד'],['active','פעילות בלבד']] as const).map(([v,l]) => (
+                <button key={v} onClick={() => setBroadcastTarget(v)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
+                  style={broadcastTarget === v
+                    ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white' }
+                    : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <button onClick={handleBroadcast} disabled={broadcastSaving || !broadcastMsg.trim()}
+              className="flex items-center gap-2 disabled:opacity-50 text-white px-4 py-1.5 rounded-xl text-xs font-bold transition-colors mr-auto"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+              {broadcastSaving ? <RefreshCw size={12} className="animate-spin" /> : <Send size={12} />}
+              שדר הודעה
+            </button>
+          </div>
+        </div>
+
+        {/* Active messages preview */}
+        {withMsg > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-white/40">הודעות פעילות עכשיו:</p>
+            {workspaces.filter(w => !!w.systemMessage).slice(0, 4).map(w => (
+              <div key={w.id} className="flex items-center gap-2 text-xs rounded-lg px-3 py-2"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <span className="font-semibold text-white/70 truncate max-w-[100px]">{w.name}</span>
+                <span className="text-white/35">·</span>
+                <span className="text-white/50 truncate flex-1">{w.systemMessage}</span>
+              </div>
+            ))}
+            {withMsg > 4 && <p className="text-[10px] text-white/30">ועוד {withMsg - 4} סביבות...</p>}
+          </div>
+        )}
       </div>
 
       {/* Deployment architecture — key banner */}
-      <div className="bg-gradient-to-br from-indigo-950 to-slate-900 rounded-2xl p-5 border border-indigo-700 text-white">
+      <div className="rounded-2xl p-5 border border-violet-200" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
         <div className="flex items-center gap-2 mb-3">
-          <Rocket size={18} className="text-indigo-300" />
-          <p className="font-black text-sm">ארכיטקטורת הפריסה</p>
+          <Rocket size={18} className="text-violet-600" />
+          <p className="font-black text-sm text-white/90">ארכיטקטורת הפריסה</p>
         </div>
-        <p className="text-indigo-200 text-sm leading-relaxed">
-          כל הלקוחות משתמשים ב-<span className="font-mono bg-indigo-800 px-1.5 py-0.5 rounded text-white">*.ray-crm.com</span> — כל סביבת עבודה על תת-דומיין ייחודי משלה, מתוך <strong className="text-white">{workspaces.length}</strong> סביבות פעילות.
-          פרסום גרסה חדשה (<code className="bg-indigo-800 px-1 rounded">firebase deploy --only hosting</code>) מעדכן את <strong className="text-white">כולם בבת-אחת</strong> בטעינה הבאה.
+        <p className="text-white/60 text-sm leading-relaxed">
+          כל הלקוחות משתמשים ב-<span className="font-mono bg-violet-100 border border-violet-200 px-1.5 py-0.5 rounded text-violet-700">*.ray-crm.com</span> — כל סביבת עבודה על תת-דומיין ייחודי משלה, מתוך <strong className="text-white/90">{workspaces.length}</strong> סביבות פעילות.
+          פרסום גרסה חדשה (<code className="bg-violet-100 border border-violet-200 px-1 rounded text-violet-700">firebase deploy --only hosting</code>) מעדכן את <strong className="text-white/90">כולם בבת-אחת</strong> בטעינה הבאה.
         </p>
         <div className="mt-3 flex items-center gap-3 flex-wrap">
-          <div className="bg-indigo-800/50 rounded-xl px-3 py-2 text-xs">
-            <p className="text-indigo-300">גרסה נוכחית</p>
-            <p className="font-mono font-bold text-white">{cfgLoading ? '...' : (latestVersion ?? 'לא הוגדר')}</p>
+          <div className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs ">
+            <p className="text-white/45">גרסה נוכחית</p>
+            <p className="font-mono font-bold text-white/90">{cfgLoading ? '...' : (latestVersion ?? 'לא הוגדר')}</p>
           </div>
-          <div className="bg-indigo-800/50 rounded-xl px-3 py-2 text-xs">
-            <p className="text-indigo-300">פורסם לאחרונה</p>
-            <p className="font-bold text-white">{cfgLoading ? '...' : (lastPublished ? fmtDate(lastPublished) : 'לא')}</p>
+          <div className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs ">
+            <p className="text-white/45">פורסם לאחרונה</p>
+            <p className="font-bold text-white/90">{cfgLoading ? '...' : (lastPublished ? fmtDate(lastPublished) : 'לא')}</p>
           </div>
-          <div className={`rounded-xl px-3 py-2 text-xs ${hasGithub ? 'bg-emerald-800/50' : 'bg-amber-800/50'}`}>
-            <p className={hasGithub ? 'text-emerald-300' : 'text-amber-300'}>GitHub Actions</p>
-            <p className="font-bold text-white">{hasGithub ? '✅ מחובר' : '⚠️ לא מוגדר'}</p>
+          <div className={`rounded-xl px-3 py-2 text-xs border ${hasGithub ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-500/10 border-amber-200'}`}>
+            <p className={hasGithub ? 'text-emerald-600' : 'text-amber-600'}>GitHub Actions</p>
+            <p className={`font-bold ${hasGithub ? 'text-emerald-400' : 'text-amber-400'}`}>{hasGithub ? '✅ מחובר' : '⚠️ לא מוגדר'}</p>
           </div>
         </div>
       </div>
 
       {/* Deploy command quick-copy */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
           <Package size={14} className="text-indigo-600" /> פקודות פריסה מהירה
         </h2>
         <div className="space-y-2">
@@ -2372,23 +3576,23 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
             { label: 'פרסם Cloud Functions (Blaze נדרש)',        cmd: 'firebase deploy --only functions'                          },
             { label: 'פרסם הכל',                                  cmd: 'npm run build && firebase deploy'                           },
           ].map(({ label, cmd }) => (
-            <div key={cmd} className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
-              <code className="flex-1 text-xs text-slate-800 font-mono" dir="ltr">{cmd}</code>
+            <div key={cmd} className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
+              <code className="flex-1 text-xs text-white/90 font-mono" dir="ltr">{cmd}</code>
               <button
                 onClick={() => { copyText(cmd); onToast('פקודה הועתקה ✓', 'success'); }}
-                className="text-slate-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
+                className="text-white/35 hover:text-indigo-600 flex-shrink-0 transition-colors"
               >
                 <Copy size={13} />
               </button>
             </div>
           ))}
-          <p className="text-[11px] text-slate-400 mt-1">💡 הרץ מתיקיית הפרויקט <code className="bg-slate-100 px-1 rounded">crm-app/</code></p>
+          <p className="text-[11px] text-white/35 mt-1">💡 הרץ מתיקיית הפרויקט <code className="bg-white/[0.06] px-1 rounded">crm-app/</code></p>
         </div>
       </div>
 
       {/* Live links */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
           <Globe size={14} className="text-emerald-600" /> קישורים לאתרים
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -2397,27 +3601,27 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
               className="flex items-center gap-2.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl px-3 py-2.5 transition-colors">
               <span className="text-lg">{icon}</span>
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-slate-800 truncate">{label}</p>
-                <p className="text-[10px] text-slate-500 truncate" dir="ltr">{url}</p>
+                <p className="text-xs font-semibold text-white/90 truncate">{label}</p>
+                <p className="text-[10px] text-white/45 truncate" dir="ltr">{url}</p>
               </div>
-              <ExternalLink size={11} className="text-slate-400 flex-shrink-0" />
+              <ExternalLink size={11} className="text-white/35 flex-shrink-0" />
             </a>
           ))}
         </div>
       </div>
 
       {/* Firebase Console links */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
           <Zap size={14} className="text-amber-500" /> Firebase Console
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {FIREBASE_LINKS.map(({ label, url, icon }) => (
             <a key={url} href={url} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2.5 bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-200 rounded-xl px-3 py-2.5 transition-colors">
+              className="flex items-center gap-2.5 bg-white/5 hover:bg-amber-500/10 border border-white/10 hover:border-amber-200 rounded-xl px-3 py-2.5 transition-colors">
               <span>{icon}</span>
-              <p className="text-xs font-medium text-slate-700 flex-1 truncate">{label}</p>
-              <ExternalLink size={11} className="text-slate-400 flex-shrink-0" />
+              <p className="text-xs font-medium text-white/75 flex-1 truncate">{label}</p>
+              <ExternalLink size={11} className="text-white/35 flex-shrink-0" />
             </a>
           ))}
         </div>
@@ -2427,9 +3631,9 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
       <StuckEmailTool onToast={onToast} workspaces={workspaces} />
 
       {/* Environment info */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
-          <Info size={14} className="text-slate-500" /> מידע סביבה
+      <div className="bg-white/5 rounded-2xl border border-white/10 p-5 ">
+        <h2 className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
+          <Info size={14} className="text-white/45" /> מידע סביבה
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {[
@@ -2440,9 +3644,9 @@ function SystemTab({ workspaces, onToast }: { workspaces: WorkspaceProfile[]; on
             { label: 'סה״כ סביבות',              value: String(workspaces.length), mono: false },
             { label: 'Super Admin',             value: 'almogavraham30@gmail.com', mono: false },
           ].map(({ label, value, mono }) => (
-            <div key={label} className="bg-slate-50 rounded-xl px-3 py-2.5">
-              <p className="text-[10px] text-slate-400 font-medium">{label}</p>
-              <p className={`text-xs text-slate-800 font-bold mt-0.5 ${mono ? 'font-mono' : ''}`} dir="ltr">{value}</p>
+            <div key={label} className="bg-white/5 rounded-xl px-3 py-2.5">
+              <p className="text-[10px] text-white/35 font-medium">{label}</p>
+              <p className={`text-xs text-white/90 font-bold mt-0.5 ${mono ? 'font-mono' : ''}`} dir="ltr">{value}</p>
             </div>
           ))}
         </div>
@@ -2502,20 +3706,20 @@ function StuckEmailTool({ onToast, workspaces }:
   const consoleUrl = `https://console.firebase.google.com/project/chex-crm/authentication/users`;
 
   return (
-    <div className="bg-white rounded-2xl border-2 border-orange-200 p-5 shadow-sm">
+    <div className="bg-white/5 rounded-2xl border-2 border-orange-200 p-5 ">
       {/* Header */}
       <div className="flex items-center gap-2 mb-4">
-        <div className="w-8 h-8 rounded-xl bg-orange-100 flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-xl bg-orange-500/15 flex items-center justify-center flex-shrink-0">
           <Unlink size={15} className="text-orange-600" />
         </div>
         <div>
-          <h2 className="font-bold text-slate-800 text-sm">שחרור אימייל תקוע</h2>
-          <p className="text-xs text-slate-500">מחק משתמש Auth שאין לו סביבת עבודה במערכת</p>
+          <h2 className="font-bold text-white/90 text-sm">שחרור אימייל תקוע</h2>
+          <p className="text-xs text-white/45">מחק משתמש Auth שאין לו סביבת עבודה במערכת</p>
         </div>
       </div>
 
       {/* Explanation */}
-      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-4 text-xs text-orange-800 space-y-1">
+      <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl p-3 mb-4 text-xs text-orange-400 space-y-1">
         <p className="font-bold">מתי זה קורה?</p>
         <p>כאשר מוחקים סביבת עבודה, הרשומות ב-Firestore נמחקות אך חשבון Firebase Auth נשאר.
         כתוצאה מכך, הרישום מחדש עם אותו אימייל נכשל עם "אימייל כבר קיים".</p>
@@ -2524,7 +3728,7 @@ function StuckEmailTool({ onToast, workspaces }:
       {/* Email input row */}
       <div className="flex gap-2 mb-3">
         <div className="relative flex-1">
-          <AtSign size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <AtSign size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/35" />
           <input
             type="email"
             value={email}
@@ -2532,13 +3736,13 @@ function StuckEmailTool({ onToast, workspaces }:
             onKeyDown={e => e.key === 'Enter' && checkEmail()}
             placeholder="הכנס אימייל לבדיקה..."
             dir="ltr"
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-300"
+            className="w-full bg-white/5 border border-white/10 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-300"
           />
         </div>
         <button
           onClick={checkEmail}
           disabled={checking || !email.trim()}
-          className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-colors flex-shrink-0"
+          className="flex items-center gap-1.5 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-colors flex-shrink-0" style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}
         >
           {checking ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
           בדוק
@@ -2547,14 +3751,14 @@ function StuckEmailTool({ onToast, workspaces }:
 
       {/* Result */}
       {status === 'not-found' && (
-        <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-xs text-emerald-700 font-semibold">
+        <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3 text-xs text-emerald-400 font-semibold">
           <CheckCircle2 size={14} />
           האימייל אינו רשום ב-Firebase Auth — ניתן להשתמש בו לרישום חדש
         </div>
       )}
 
       {status === 'unknown' && (
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-600">
+        <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs text-white/60">
           <AlertTriangle size={14} className="text-amber-500" />
           לא ניתן לבדוק — בדוק ידנית ב-Firebase Console
         </div>
@@ -2562,7 +3766,7 @@ function StuckEmailTool({ onToast, workspaces }:
 
       {status === 'exists' && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700 font-semibold">
+          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-xs text-red-400 font-semibold">
             <XCircle size={14} />
             האימייל <span dir="ltr" className="font-mono mx-1">{email.trim()}</span> רשום ב-Firebase Auth אך אינו מופיע במערכת
             {matchingWorkspace && (
@@ -2586,7 +3790,7 @@ function StuckEmailTool({ onToast, workspaces }:
             {/* Copy email for easy search in console */}
             <button
               onClick={() => { copyText(email.trim()); onToast('אימייל הועתק — הדבק בשדה החיפוש בקונסול ✓', 'success'); }}
-              className="w-full flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors"
+              className="w-full flex items-center justify-center gap-2 bg-white/[0.06] hover:bg-white/[0.1] text-white/75 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors"
             >
               <Copy size={13} />
               העתק אימייל (לחיפוש בקונסול)
@@ -2615,7 +3819,7 @@ function StuckEmailTool({ onToast, workspaces }:
                   }
                 }}
                 disabled={deleting}
-                className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
+                className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border border-red-200 text-red-400 py-2.5 px-4 rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
               >
                 {deleting ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
                 מחק Auth אוטומטית (דורש Firebase Blaze)
@@ -2624,8 +3828,8 @@ function StuckEmailTool({ onToast, workspaces }:
           </div>
 
           {/* Step-by-step guide */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 space-y-1.5">
-            <p className="font-bold text-slate-700">מחיקה ידנית — שלב אחר שלב:</p>
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-white/60 space-y-1.5">
+            <p className="font-bold text-white/75">מחיקה ידנית — שלב אחר שלב:</p>
             <p>1. לחץ "פתח Firebase Console Authentication" ↗</p>
             <p>2. לחץ "העתק אימייל" ← הדבק בשדה החיפוש בקונסול</p>
             <p>3. סמן את המשתמש → לחץ תפריט ⋮ → Delete account</p>
@@ -2641,7 +3845,7 @@ function StuckEmailTool({ onToast, workspaces }:
 function StatusBadge({ status }: { status: WorkspaceStatus }) {
   const cfg = STATUS_CFG[status];
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.color}`}>
+    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full" style={cfg.style ?? {}}>
       <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
       {cfg.label}
     </span>
@@ -2655,18 +3859,18 @@ function KPI({ label, value, sub, trend, icon, color }:
     blue: 'from-blue-500 to-blue-600', violet: 'from-violet-500 to-violet-600',
   };
   const TrendIcon = trend === 'up' ? ArrowUpRight : trend === 'down' ? ArrowDownRight : Minus;
-  const trendColor = trend === 'up' ? 'text-emerald-600' : trend === 'down' ? 'text-red-500' : 'text-slate-400';
+  const trendColor = trend === 'up' ? 'text-emerald-600' : trend === 'down' ? 'text-red-500' : 'text-white/35';
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+    <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
       <div className="flex items-start justify-between mb-3">
         <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${colors[color]} flex items-center justify-center text-white`}>
           {icon}
         </div>
         <TrendIcon size={16} className={trendColor} />
       </div>
-      <p className="text-2xl font-black text-slate-800">{value}</p>
-      <p className="text-xs font-medium text-slate-500 mt-0.5">{label}</p>
-      <p className="text-[10px] text-slate-400 mt-1">{sub}</p>
+      <p className="text-2xl font-black" style={{ color: 'white' }}>{value}</p>
+      <p className="text-xs font-medium mt-0.5" style={{ color: 'rgba(255,255,255,0.5)' }}>{label}</p>
+      <p className="text-[10px] mt-1" style={{ color: 'rgba(255,255,255,0.3)' }}>{sub}</p>
     </div>
   );
 }
@@ -2674,10 +3878,10 @@ function KPI({ label, value, sub, trend, icon, color }:
 function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-slate-400 mt-0.5 flex-shrink-0">{icon}</span>
+      <span className="mt-0.5 flex-shrink-0" style={{ color: 'rgba(255,255,255,0.3)' }}>{icon}</span>
       <div className="flex-1 min-w-0">
-        <p className="text-[10px] text-slate-400 font-medium">{label}</p>
-        <p className="text-xs text-slate-700 font-medium truncate">{value}</p>
+        <p className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.35)' }}>{label}</p>
+        <p className="text-xs font-medium truncate" style={{ color: 'rgba(255,255,255,0.75)' }}>{value}</p>
       </div>
     </div>
   );
@@ -2715,7 +3919,7 @@ function SignupLinkButton({ onToast }: { onToast?: (m: string, t?: 'success'|'er
       {/* Open in new tab */}
       <button
         onClick={handleOpen}
-        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-[11px] font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all"
+        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-[11px] font-medium text-white/45 hover:text-white/75 hover:bg-white/[0.06] transition-all"
       >
         <ExternalLink size={11} />
         פתח בטאב חדש

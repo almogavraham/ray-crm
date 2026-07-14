@@ -1,18 +1,26 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import {
   X, MessageCircle, Mail, Phone, Save, Plus, Trash2, Brain,
   Clock, Building2, CheckCircle2, Activity, Star, Zap,
   FileText, ListChecks, Loader2, Globe, ChevronDown, AlertCircle,
-  Mic, MicOff, Sparkles,
+  Mic, MicOff, Sparkles, Calendar, CalendarPlus, PhoneCall,
+  Users2, RotateCcw, Pencil, Check,
 } from 'lucide-react';
 import { AgentsTab } from './LeadAgents';
-import Anthropic from '@anthropic-ai/sdk';
-import type { Lead, LeadStatus, TaskPriority, WorkspaceProfile } from '../types';
+import ProposalEditorModal from './ProposalEditorModal';
+import type { Lead, LeadStatus, LeadSource, TaskPriority, WorkspaceProfile, LeadActivity, LeadMeeting, ContactMethod, LeadActivityType, CardLayoutSettings } from '../types';
+import { DEFAULT_CARD_LAYOUT, DEFAULT_CARD_SECTIONS } from '../types';
+import type { StatusConfig } from '../lib/statusConfig';
+import CardCustomizePanel from './CardCustomizePanel';
+import { DEFAULT_STATUS_CONFIGS, getStatusConfig } from '../lib/statusConfig';
+
+const LEAD_SOURCES: LeadSource[] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 import { SOLUTIONS } from '../data/mockData';
 import StatusBadge from './StatusBadge';
 import EmailModal from './EmailModal';
-import { getApiKey } from '../lib/apiKey';
+import WhatsAppModal from './WhatsAppModal';
 import { useLang } from '../contexts/LangContext';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 const PRIORITY_OPTS: { value: 'high' | 'medium' | 'low'; label: string; active: string; idle: string }[] = [
@@ -32,6 +40,24 @@ function formatPhoneForWhatsApp(phone: string): string {
 const ALL_STATUSES: LeadStatus[] = [
   'חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'
 ];
+
+const DEFAULT_OBJECTIONS = ['💰 מחיר גבוה', '⏰ לא הזמן הנכון', '🔄 כבר יש פתרון', '❌ לא מתאים'];
+
+const ACTIVITY_ICONS: Record<LeadActivityType, string> = {
+  call: '📞', email: '✉️', whatsapp: '💬', meeting: '📅',
+  task: '✓', note: '📝', status_change: '🔄', objection: '❌', in_person: '🤝',
+};
+const ACTIVITY_COLORS: Record<LeadActivityType, string> = {
+  call: 'bg-blue-500/20 text-blue-400',
+  email: 'bg-indigo-500/20 text-indigo-400',
+  whatsapp: 'bg-green-500/20 text-green-400',
+  meeting: 'bg-purple-500/20 text-purple-400',
+  task: 'bg-orange-500/20 text-orange-400',
+  note: 'bg-slate-600/40 text-slate-400',
+  status_change: 'bg-amber-500/20 text-amber-400',
+  objection: 'bg-red-500/20 text-red-400',
+  in_person: 'bg-teal-500/20 text-teal-400',
+};
 
 const STATUS_COLORS: Record<LeadStatus, string> = {
   'חדש':        'bg-blue-500/20 text-blue-300 border-blue-500/30',
@@ -59,11 +85,16 @@ interface LeadModalProps {
   onDelete?: (id: string) => void;
   workspace?: WorkspaceProfile;
   currentUser?: string;
+  team?: import('../types').TeamMember[];
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
+  onWorkspaceUpdate?: (updates: Partial<WorkspaceProfile>) => Promise<void>;
+  statusConfigs?: StatusConfig[];
 }
 
-export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, onToast }: LeadModalProps) {
+export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, team = [], onToast, onWorkspaceUpdate, statusConfigs = DEFAULT_STATUS_CONFIGS }: LeadModalProps) {
   const { t, dir } = useLang();
+  // Dynamic status list from config
+  const configStatuses = useMemo(() => statusConfigs.map(c => c.label), [statusConfigs]);
   // Solutions list: workspace-specific (from wizard) or fallback to hardcoded
   const solutionsList = (workspace?.businessSolutions?.length ?? 0) > 0
     ? (workspace!.businessSolutions!)
@@ -82,9 +113,87 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
   const [showInsight, setShowInsight] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showEmail, setShowEmail] = useState(false);
+  const [showWhatsApp, setShowWhatsApp] = useState(false);
+  const [showProposalEditor, setShowProposalEditor] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [noteRecording, setNoteRecording] = useState(false);
   const noteRecogRef = useRef<unknown>(null);
+
+  // Contact logging
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactType, setContactType] = useState<ContactMethod>('phone');
+  const [contactNote, setContactNote] = useState('');
+  const [customContactLabel, setCustomContactLabel] = useState('');
+  const [followUpDays, setFollowUpDays] = useState('');
+  // Post-contact automatic action
+  const [postContactAction, setPostContactAction] = useState<'none' | 'task' | 'email' | 'whatsapp'>('none');
+  const [postContactTaskDesc, setPostContactTaskDesc] = useState('');
+  const [postContactTaskPriority, setPostContactTaskPriority] = useState<TaskPriority>('medium');
+  // Meeting scheduling
+  const [showMeetingModal, setShowMeetingModal] = useState(false);
+  const [meetingTitle, setMeetingTitle] = useState('');
+  const [meetingDate, setMeetingDate] = useState('');
+  const [meetingTime, setMeetingTime] = useState('10:00');
+  const [meetingDuration, setMeetingDuration] = useState(60);
+  const [meetingLocation, setMeetingLocation] = useState('');
+  const [meetingNotes, setMeetingNotes] = useState('');
+  // Objections
+  const [showObjectionModal, setShowObjectionModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<LeadStatus | null>(null);
+  const [selectedObjection, setSelectedObjection] = useState('');
+
+  // ── Card layout customization ──────────────────────────────────────────────
+  const [showCustomize, setShowCustomize] = useState(false);
+  const cardLayout: CardLayoutSettings = {
+    ...DEFAULT_CARD_LAYOUT,
+    ...(workspace?.cardLayout ?? {}),
+    sections: (workspace?.cardLayout?.sections && workspace.cardLayout.sections.length > 0)
+      ? workspace.cardLayout.sections
+      : DEFAULT_CARD_SECTIONS,
+  };
+
+  const handleSaveLayout = async (newLayout: CardLayoutSettings) => {
+    setShowCustomize(false);
+    if (onWorkspaceUpdate) {
+      await onWorkspaceUpdate({ cardLayout: newLayout });
+      onToast?.('עיצוב הכרטיס עודכן ✓', 'success');
+    }
+  };
+
+  // ── Label / field editing ────────────────────────────────────────────────────
+  const [editingRightLabel, setEditingRightLabel] = useState(false);
+  const [editingLeftLabel,  setEditingLeftLabel]  = useState(false);
+  const [tempRightLabel,    setTempRightLabel]    = useState('');
+  const [tempLeftLabel,     setTempLeftLabel]     = useState('');
+  const [aiLabelSugg,       setAiLabelSugg]       = useState<{ right: string[]; left: string[] }>({ right: [], left: [] });
+  const [loadingLabelAi,    setLoadingLabelAi]    = useState(false);
+  const [savingLabel,       setSavingLabel]        = useState(false);
+  // Solutions list editing
+  const [editingSolutions,  setEditingSolutions]  = useState(false);
+  const [newSolItem,        setNewSolItem]         = useState('');
+  // Quick options editing
+  const [editingQuickOpts,  setEditingQuickOpts]  = useState(false);
+  const [tempQuickOpts,     setTempQuickOpts]      = useState(['', '', '']);
+  // Status section label editing
+  const [editingStatusLabel, setEditingStatusLabel] = useState(false);
+  const [tempStatusLabel,    setTempStatusLabel]    = useState('');
+  const [savingStatusLabel,  setSavingStatusLabel]  = useState(false);
+  // Source section label + list editing
+  const [editingSourceLabel, setEditingSourceLabel] = useState(false);
+  const [tempSourceLabel,    setTempSourceLabel]    = useState('');
+  const [savingSourceLabel,  setSavingSourceLabel]  = useState(false);
+  const [editingSources,     setEditingSources]     = useState(false);
+  const [newSourceItem,      setNewSourceItem]      = useState('');
+  // Add new custom row inline
+  const [addingCustomRow,    setAddingCustomRow]    = useState(false);
+  const [newRowLabel,        setNewRowLabel]        = useState('');
+  const [newRowOptions,      setNewRowOptions]      = useState<string[]>([]);
+  const [newRowOptionInput,  setNewRowOptionInput]  = useState('');
+  // Edit existing custom field
+  const [editingFieldId,     setEditingFieldId]     = useState<string | null>(null);
+  const [editFieldLabel,     setEditFieldLabel]     = useState('');
+  const [editFieldOptions,   setEditFieldOptions]   = useState<string[]>([]);
+  const [editFieldOptionInput, setEditFieldOptionInput] = useState('');
 
   const toggleNoteVoice = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -120,17 +229,356 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
     });
   };
 
+  // ── Label / field editing helpers ──────────────────────────────────────────
+  const currentRightLabel    = workspace?.solutionsLabel    || t('leadModal.solutions');
+  const currentLeftLabel     = workspace?.cardLeftField?.label || t('leadModal.budgetFallback');
+  const currentStatusLabel   = workspace?.statusSectionLabel || t('common.status');
+  const currentSourceLabel   = workspace?.sourceLabel        || t('newLead.source');
+  const sourceList: string[] = workspace?.leadSources?.length
+    ? workspace.leadSources
+    : LEAD_SOURCES as unknown as string[];
+
+  const fetchAiLabelSuggestions = async () => {
+    if (loadingLabelAi) return;
+    setLoadingLabelAi(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const client = getAnthropicProxy() as any;
+      const industry  = workspace?.industry ?? 'כללי';
+      const solutions = (workspace?.businessSolutions ?? []).join(', ') || 'שירותים כלליים';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resp: any = await client.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: `אתה עוזר לעסק בתחום "${industry}" לבחור כותרות לשני שדות בכרטיס ליד.
+שירותים/מוצרים: ${solutions}
+כותרת נוכחית לשירותים: "${currentRightLabel}"
+כותרת נוכחית לשדה הכמות: "${currentLeftLabel}"
+
+הצע 2 כותרות קצרות (עד 4 מילים, עברית מקצועית) לכל שדה.
+JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2"]}`,
+        }],
+      });
+      const text: string = resp?.content?.[0]?.text ?? '{}';
+      const match = text.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        setAiLabelSugg({ right: parsed.right ?? [], left: parsed.left ?? [] });
+      }
+    } catch (e) { console.error('AI label suggestions failed', e); }
+    finally { setLoadingLabelAi(false); }
+  };
+
+  const openEditRight = () => {
+    setTempRightLabel(currentRightLabel);
+    setEditingRightLabel(true);
+    if (aiLabelSugg.right.length === 0) fetchAiLabelSuggestions();
+  };
+  const openEditLeft = () => {
+    setTempLeftLabel(currentLeftLabel);
+    setEditingLeftLabel(true);
+    if (aiLabelSugg.left.length === 0) fetchAiLabelSuggestions();
+  };
+
+  const saveRightLabel = async () => {
+    if (!tempRightLabel.trim() || !onWorkspaceUpdate) return;
+    setSavingLabel(true);
+    await onWorkspaceUpdate({ solutionsLabel: tempRightLabel.trim() });
+    setSavingLabel(false);
+    setEditingRightLabel(false);
+    onToast?.('הכותרת עודכנה ✓', 'success');
+  };
+
+  const saveLeftLabel = async () => {
+    if (!tempLeftLabel.trim() || !onWorkspaceUpdate || !workspace?.cardLeftField) return;
+    setSavingLabel(true);
+    await onWorkspaceUpdate({ cardLeftField: { ...workspace.cardLeftField, label: tempLeftLabel.trim() } });
+    setSavingLabel(false);
+    setEditingLeftLabel(false);
+    onToast?.('הכותרת עודכנה ✓', 'success');
+  };
+
+  const addSolutionItem = async () => {
+    if (!newSolItem.trim() || !onWorkspaceUpdate) return;
+    const updated = [...(workspace?.businessSolutions ?? []), newSolItem.trim()];
+    await onWorkspaceUpdate({ businessSolutions: updated });
+    setNewSolItem('');
+    onToast?.('שירות נוסף ✓', 'success');
+  };
+
+  const removeSolutionItem = async (name: string) => {
+    if (!onWorkspaceUpdate) return;
+    const updated = (workspace?.businessSolutions ?? []).filter(s => s !== name);
+    await onWorkspaceUpdate({ businessSolutions: updated });
+    onToast?.('שירות הוסר', 'info');
+  };
+
+  const saveQuickOpts = async () => {
+    if (!onWorkspaceUpdate || !workspace?.cardLeftField) return;
+    const nums = tempQuickOpts.map(v => parseInt(v)).filter(n => !isNaN(n) && n > 0);
+    if (nums.length === 0) return;
+    await onWorkspaceUpdate({ cardLeftField: { ...workspace.cardLeftField, quickOptions: nums } });
+    setEditingQuickOpts(false);
+    onToast?.('אפשרויות מהירות עודכנו ✓', 'success');
+  };
+
+  // ── Status label ───────────────────────────────────────────────────────────
+  const saveStatusLabel = async () => {
+    if (!tempStatusLabel.trim() || !onWorkspaceUpdate) return;
+    setSavingStatusLabel(true);
+    await onWorkspaceUpdate({ statusSectionLabel: tempStatusLabel.trim() });
+    setSavingStatusLabel(false);
+    setEditingStatusLabel(false);
+    onToast?.('הכותרת עודכנה ✓', 'success');
+  };
+
+  // ── Source label + list ────────────────────────────────────────────────────
+  const saveSourceLabel = async () => {
+    if (!tempSourceLabel.trim() || !onWorkspaceUpdate) return;
+    setSavingSourceLabel(true);
+    await onWorkspaceUpdate({ sourceLabel: tempSourceLabel.trim() });
+    setSavingSourceLabel(false);
+    setEditingSourceLabel(false);
+    onToast?.('הכותרת עודכנה ✓', 'success');
+  };
+
+  const addSourceItem = async () => {
+    if (!newSourceItem.trim() || !onWorkspaceUpdate) return;
+    const updated = [...sourceList, newSourceItem.trim()];
+    await onWorkspaceUpdate({ leadSources: updated });
+    setNewSourceItem('');
+    onToast?.('מקור נוסף ✓', 'success');
+  };
+
+  const removeSourceItem = async (s: string) => {
+    if (!onWorkspaceUpdate) return;
+    const updated = sourceList.filter(x => x !== s);
+    await onWorkspaceUpdate({ leadSources: updated });
+    onToast?.('מקור הוסר', 'info');
+  };
+
+  // ── Custom row helpers ──────────────────────────────────────────────────────
+  const addCustomRow = async () => {
+    if (!newRowLabel.trim() || !onWorkspaceUpdate) return;
+    const existing: import('../types').CustomFieldDef[] = (workspace as any)?.customFieldDefs ?? [];
+    const newDef: import('../types').CustomFieldDef = {
+      id: `cf_${Date.now()}`,
+      label: newRowLabel.trim(),
+      options: newRowOptions,
+      multiSelect: false,
+    };
+    await onWorkspaceUpdate({ customFieldDefs: [...existing, newDef] });
+    setNewRowLabel('');
+    setNewRowOptions([]);
+    setNewRowOptionInput('');
+    setAddingCustomRow(false);
+    onToast?.('שורה נוספת ✓', 'success');
+  };
+
+  const deleteCustomRow = async (fieldId: string) => {
+    if (!onWorkspaceUpdate) return;
+    const existing: import('../types').CustomFieldDef[] = (workspace as any)?.customFieldDefs ?? [];
+    await onWorkspaceUpdate({ customFieldDefs: existing.filter(f => f.id !== fieldId) });
+    onToast?.('השורה נמחקה', 'info');
+  };
+
+  const startEditField = (fieldDef: import('../types').CustomFieldDef) => {
+    setEditingFieldId(fieldDef.id);
+    setEditFieldLabel(fieldDef.label);
+    setEditFieldOptions([...fieldDef.options]);
+    setEditFieldOptionInput('');
+  };
+
+  const saveEditField = async () => {
+    if (!editingFieldId || !onWorkspaceUpdate) return;
+    const existing: import('../types').CustomFieldDef[] = (workspace as any)?.customFieldDefs ?? [];
+    const updated = existing.map(f =>
+      f.id === editingFieldId ? { ...f, label: editFieldLabel.trim() || f.label, options: editFieldOptions } : f
+    );
+    await onWorkspaceUpdate({ customFieldDefs: updated });
+    setEditingFieldId(null);
+    onToast?.('השורה עודכנה ✓', 'success');
+  };
+
+  const cancelEditField = () => {
+    setEditingFieldId(null);
+    setEditFieldLabel('');
+    setEditFieldOptions([]);
+    setEditFieldOptionInput('');
+  };
+
+  // ── Activity log helper ────────────────────────────────────────────────────
+  const appendActivity = (type: LeadActivityType, content: string, metadata?: Record<string, string>): LeadActivity[] => {
+    const entry: LeadActivity = {
+      id: Date.now().toString(),
+      type,
+      content,
+      author: currentUser || 'מנהל',
+      timestamp: new Date().toISOString(),
+      metadata,
+    };
+    return [...(data.activityLog || []), entry];
+  };
+
+  // ── Contact log submit ─────────────────────────────────────────────────────
+  const handleLogContact = () => {
+    if (!contactNote.trim()) return;
+    const contactLabels: Record<ContactMethod, string> = {
+      phone: 'שיחת טלפון', email: 'מייל', whatsapp: 'וואטסאפ', in_person: 'פגישה פנים-אל-פנים',
+      meeting: 'פגישה נקבעה', quote: 'הצעת מחיר נשלחה', custom: customContactLabel || 'תיעוד מותאם',
+    };
+    const followUpDate = followUpDays
+      ? new Date(Date.now() + parseInt(followUpDays) * 86400000).toISOString()
+      : undefined;
+    let newLog = appendActivity(
+      contactType,
+      `${contactLabels[contactType]}: ${contactNote.trim()}`,
+      followUpDate ? { followUpDate, followUpDays } : undefined,
+    );
+
+    // If creating a follow-up task, add it to the lead's task list
+    let extraTasks = data.tasks;
+    if (postContactAction === 'task' && postContactTaskDesc.trim() && followUpDate) {
+      const taskDateStr = new Date(followUpDate).toISOString().split('T')[0];
+      extraTasks = [...data.tasks, {
+        id: Date.now().toString(),
+        description: postContactTaskDesc.trim(),
+        date: taskDateStr,
+        time: '09:00',
+        completed: false,
+        priority: postContactTaskPriority,
+      }];
+      // Also log the task creation in activity
+      newLog = [
+        ...newLog,
+        {
+          id: (Date.now() + 1).toString(),
+          type: 'task' as LeadActivityType,
+          text: `משימה נוצרה: ${postContactTaskDesc.trim()} — ${taskDateStr}`,
+          timestamp: new Date().toISOString(),
+        },
+      ];
+    }
+
+    const updated: Lead = {
+      ...data,
+      activityLog: newLog,
+      tasks: extraTasks,
+      lastContactDate: new Date().toISOString(),
+      contactMethod: contactType,
+      ...(followUpDate ? { nextFollowUpDate: followUpDate } : {}),
+    };
+    setData(updated);
+    onUpdate(updated);
+    setShowContactModal(false);
+    setContactNote('');
+    setFollowUpDays('');
+
+    // Trigger post-contact automatic actions
+    if (postContactAction === 'email') {
+      setTimeout(() => setShowEmail(true), 150);
+    } else if (postContactAction === 'whatsapp') {
+      setTimeout(() => setShowWhatsApp(true), 150);
+    }
+
+    setPostContactAction('none');
+    setPostContactTaskDesc('');
+    onToast?.('הפנייה תועדה בהצלחה ✓', 'success');
+  };
+
+  // ── Meeting scheduling ─────────────────────────────────────────────────────
+  function buildGCalUrl(m: { title: string; date: string; time: string; duration: number; location?: string; notes?: string; attendeeEmail?: string }) {
+    const start = new Date(`${m.date}T${m.time}:00`);
+    const end = new Date(start.getTime() + m.duration * 60000);
+    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const p = new URLSearchParams({
+      action: 'TEMPLATE', text: m.title,
+      dates: `${fmt(start)}/${fmt(end)}`,
+      ...(m.location ? { location: m.location } : {}),
+      ...(m.notes ? { details: m.notes } : {}),
+      ...(m.attendeeEmail ? { add: m.attendeeEmail } : {}),
+    });
+    return `https://calendar.google.com/calendar/render?${p}`;
+  }
+
+  const handleScheduleMeeting = () => {
+    if (!meetingTitle.trim() || !meetingDate) return;
+    const calUrl = buildGCalUrl({
+      title: meetingTitle, date: meetingDate, time: meetingTime,
+      duration: meetingDuration, location: meetingLocation || undefined,
+      notes: meetingNotes || undefined, attendeeEmail: data.email || undefined,
+    });
+    const meeting: LeadMeeting = {
+      id: Date.now().toString(),
+      title: meetingTitle.trim(),
+      date: meetingDate, time: meetingTime,
+      duration: meetingDuration,
+      location: meetingLocation || undefined,
+      notes: meetingNotes || undefined,
+      attendeeEmail: data.email || undefined,
+      calendarLink: calUrl,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser || 'מנהל',
+    };
+    const newLog = appendActivity('meeting', `פגישה נקבעה: ${meetingTitle} — ${meetingDate} ${meetingTime}`, { meetingId: meeting.id, calendarLink: calUrl });
+    const updated: Lead = {
+      ...data,
+      meetings: [...(data.meetings || []), meeting],
+      activityLog: newLog,
+    };
+    setData(updated);
+    onUpdate(updated);
+    window.open(calUrl, '_blank');
+    setShowMeetingModal(false);
+    setMeetingTitle(''); setMeetingDate(''); setMeetingTime('10:00');
+    setMeetingDuration(60); setMeetingLocation(''); setMeetingNotes('');
+    onToast?.('הפגישה נקבעה ונפתחה ב-Google Calendar ✓', 'success');
+  };
+
+  // ── Status change with objection intercept ─────────────────────────────────
+  const handleStatusChange = (newStatus: LeadStatus) => {
+    if (newStatus === 'לא רלוונטי' && data.status !== 'לא רלוונטי') {
+      setPendingStatus(newStatus);
+      setShowObjectionModal(true);
+      return;
+    }
+    const newLog = appendActivity('status_change', `סטטוס שונה מ"${data.status}" ל"${newStatus}"`);
+    const updated = { ...data, status: newStatus, activityLog: newLog };
+    setData(updated);
+    onUpdate(updated);
+  };
+
+  const handleObjectionConfirm = () => {
+    if (!pendingStatus) return;
+    const objText = selectedObjection || 'לא צוינה סיבה';
+    const newLog = appendActivity('objection', `סומן כ"לא רלוונטי" — ${objText}`, { objection: objText });
+    const updated: Lead = {
+      ...data,
+      status: pendingStatus,
+      objection: objText,
+      activityLog: newLog,
+    };
+    setData(updated);
+    onUpdate(updated);
+    setShowObjectionModal(false);
+    setPendingStatus(null);
+    setSelectedObjection('');
+  };
 
   const addNote = () => {
     if (!newNote.trim()) return;
+    const newLog = appendActivity('note', newNote.trim());
     const updated = {
       ...data,
       notes: [...data.notes, {
         id: Date.now().toString(),
         text: newNote.trim(),
-        author: 'Almog Avraham',
+        author: currentUser || 'מנהל',
         timestamp: new Date().toLocaleString('he-IL'),
-      }]
+      }],
+      activityLog: newLog,
     };
     setData(updated);
     onUpdate(updated);
@@ -139,6 +587,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
 
   const addTask = () => {
     if (!newTaskDesc.trim() || !newTaskDate) return;
+    const newLog = appendActivity('task', `משימה נוצרה: ${newTaskDesc.trim()} — ${newTaskDate} ${newTaskTime}`);
     const updated = {
       ...data,
       tasks: [...data.tasks, {
@@ -148,7 +597,8 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
         time: newTaskTime,
         completed: false,
         priority: newTaskPriority,
-      }]
+      }],
+      activityLog: newLog,
     };
     setData(updated);
     onUpdate(updated);
@@ -170,13 +620,6 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
 
   /* ── AI Company Research ─────────────────────────────────────────────────── */
   const runAiResearch = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      setAiInsightError(t('leadModal.aiApiKeyMissing'));
-      setShowInsight(true);
-      return;
-    }
-
     // Check token balance before making the API call
     if (workspace?.id) {
       const hasBal = await hasBalance(workspace.id);
@@ -194,7 +637,7 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
     setAiInsightError('');
 
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
 
       const bizName     = workspace?.name      ?? 'Our Business';
       const bizIndustry = workspace?.industry   ?? '';
@@ -338,8 +781,22 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
 
   return (
     <>
+      {/* Card Customize Panel */}
+      {showCustomize && (
+        <CardCustomizePanel
+          layout={cardLayout}
+          statuses={(statusConfigs ?? DEFAULT_STATUS_CONFIGS).map(c => c.label)}
+          onSave={handleSaveLayout}
+          onClose={() => setShowCustomize(false)}
+        />
+      )}
+
       <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm md:p-4 overflow-y-auto">
-        <div className="bg-slate-900 text-white md:rounded-2xl w-full md:max-w-2xl md:my-4 shadow-2xl border-0 md:border border-slate-700/50 overflow-hidden min-h-screen md:min-h-0">
+        {/* Status color accent — left border of the modal */}
+        <div
+          className="bg-slate-900 text-white md:rounded-2xl w-full md:max-w-2xl md:my-4 shadow-2xl border-0 md:border border-slate-700/50 overflow-hidden min-h-screen md:min-h-0"
+          style={cardLayout.statusColors[data.status] ? { borderRight: `4px solid ${cardLayout.statusColors[data.status]}` } : {}}
+        >
 
           {/* ── Header ─────────────────────────────────────────────────────── */}
           <div className="relative bg-gradient-to-l from-slate-800 to-slate-900 border-b border-slate-700/60">
@@ -373,6 +830,12 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     </a>
                   )}
                 </div>
+                {data.source && (
+                  <div className="flex items-center gap-1 text-xs text-slate-500 justify-end mt-1">
+                    <span className="bg-slate-700/50 px-2 py-0.5 rounded-full">{data.source}</span>
+                    <span className="text-slate-600">מקור</span>
+                  </div>
+                )}
               </div>
 
               {/* AI Score */}
@@ -397,10 +860,10 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
             <div className="flex gap-2 px-4 md:px-5 pb-4 flex-wrap">
               {data.phone && (
                 <button
-                  onClick={() => window.open(`https://wa.me/${formatPhoneForWhatsApp(data.phone)}`, '_blank')}
+                  onClick={() => setShowWhatsApp(true)}
                   className="flex items-center gap-1.5 bg-green-600 hover:bg-green-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-green-500/20"
                 >
-                  <MessageCircle size={13} />WhatsApp
+                  <MessageCircle size={13} />WhatsApp ✨
                 </button>
               )}
 
@@ -420,6 +883,36 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
                 >
                   <Phone size={13} />{t('leadModal.call')}
+                </button>
+              )}
+
+              {/* CONTACT LOG BUTTON */}
+              <button
+                onClick={() => setShowContactModal(true)}
+                className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-amber-500/20"
+              >
+                <PhoneCall size={13} />תיעוד פנייה
+              </button>
+
+              {/* MEETING BUTTON */}
+              <button
+                onClick={() => setShowMeetingModal(true)}
+                className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-purple-500/20"
+              >
+                <Calendar size={13} />קבע פגישה
+              </button>
+
+              {/* CUSTOMIZE BUTTON */}
+              {onWorkspaceUpdate && (
+                <button
+                  onClick={() => setShowCustomize(v => !v)}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                    showCustomize
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
+                      : 'bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  🎨 עיצוב
                 </button>
               )}
 
@@ -510,36 +1003,194 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           </div>
 
           {/* ── Tab Content ────────────────────────────────────────────────── */}
-          <div className="p-4 md:p-5 space-y-4 max-h-[calc(100vh-280px)] md:max-h-[55vh] overflow-y-auto">
+          <div className={`p-4 md:p-5 max-h-[calc(100vh-280px)] md:max-h-[55vh] overflow-y-auto ${cardLayout.viewMode === 'compact' ? 'space-y-2' : 'space-y-4'}`}>
 
             {/* DETAILS TAB */}
             {activeTab === 'details' && (
               <>
-                <div className="grid grid-cols-2 gap-4">
+                {/* ── Highlight Fields Banner ── */}
+                {cardLayout.highlightFields.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {cardLayout.highlightFields.map(field => {
+                      let value: string | number | undefined;
+                      let label = field;
+                      if (field === 'budget') { value = data.budget ? `${workspace?.cardLeftField?.prefix ?? '₪'}${(data.budget).toLocaleString()}` : undefined; label = workspace?.cardLeftField?.label ?? 'תקציב'; }
+                      else if (field === 'status') { value = data.status; label = workspace?.statusSectionLabel ?? 'סטטוס'; }
+                      else if (field === 'source') { value = data.source; label = workspace?.sourceLabel ?? 'מקור'; }
+                      else if (field === 'aiScore') { value = `${data.aiScore}%`; label = 'AI'; }
+                      else if (field === 'solutions') { value = data.solutions.length > 0 ? `${data.solutions.length} שירותים` : undefined; label = workspace?.solutionsLabel ?? 'שירותים'; }
+                      else if (field === 'assignedTo') { value = data.assignedTo; label = 'אחראי'; }
+                      if (!value) return null;
+                      return (
+                        <div key={field} className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-900/30 border border-indigo-500/30 text-xs">
+                          <span className="text-indigo-300 font-bold">{value}</span>
+                          <span className="text-slate-500">{label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Render sections in user-defined order with visibility control */}
+                {(() => {
+                  const sectionJSX: Record<string, React.ReactNode> = {
+                    prices: (
+                      <div className={`grid gap-4 ${cardLayout.columnLayout === '1col' ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   {/* Solutions */}
                   <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-                    <h3 className="text-xs font-bold text-slate-400 mb-3 text-right uppercase tracking-wider flex items-center gap-1.5 justify-end">
-                      {t('leadModal.solutions')} <Zap size={11} className="text-orange-400" />
-                    </h3>
+                    {/* Header */}
+                    {editingRightLabel ? (
+                      <div className="mb-3 space-y-2">
+                        <input
+                          autoFocus
+                          value={tempRightLabel}
+                          onChange={e => setTempRightLabel(e.target.value)}
+                          className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-indigo-500 focus:outline-none text-right"
+                          placeholder="כותרת הסעיף..."
+                        />
+                        {loadingLabelAi && (
+                          <div className="flex justify-center py-1"><Loader2 size={12} className="animate-spin text-indigo-400" /></div>
+                        )}
+                        {aiLabelSugg.right.length > 0 && (
+                          <div className="flex flex-wrap gap-1 justify-end">
+                            {aiLabelSugg.right.map((s, i) => (
+                              <button key={i} onClick={() => setTempRightLabel(s)}
+                                className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 border border-indigo-700/50 hover:bg-indigo-800/60 transition-colors">
+                                ✨ {s}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex gap-1.5">
+                          <button onClick={() => setEditingRightLabel(false)}
+                            className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">
+                            ביטול
+                          </button>
+                          <button onClick={saveRightLabel} disabled={savingLabel}
+                            className="flex-1 py-1 rounded-lg text-[10px] bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1">
+                            {savingLabel ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} שמור
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between mb-3">
+                        <button onClick={openEditRight}
+                          className="p-1 rounded hover:bg-slate-700 transition-all text-slate-600 hover:text-slate-300"
+                          title="ערוך כותרת">
+                          <Pencil size={11} />
+                        </button>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                          {currentRightLabel} <Zap size={11} className="text-orange-400" />
+                        </h3>
+                      </div>
+                    )}
+
+                    {/* Solutions list */}
                     <div className="space-y-2">
                       {solutionsList.map(sol => {
                         const active = data.solutions.find(s => s.name === sol);
                         return (
-                          <div key={sol} className="space-y-1">
-                            <button
-                              onClick={() => toggleSolution(sol)}
-                              className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                                active
-                                  ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/20'
-                                  : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
-                              }`}
-                            >
-                              {sol}
-                            </button>
+                          <div key={sol} className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1">
+                              {editingSolutions && (
+                                <button onClick={() => removeSolutionItem(sol)}
+                                  className="text-red-400 hover:text-red-300 flex-shrink-0 p-0.5 hover:bg-red-900/30 rounded transition-colors">
+                                  <X size={10} />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => !editingSolutions && toggleSolution(sol)}
+                                className={`flex-1 text-right px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                                  active && !editingSolutions
+                                    ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/20'
+                                    : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
+                                }`}
+                              >
+                                {sol}
+                              </button>
+                            </div>
+                            {/* Price input shown when solution is active */}
+                            {active && !editingSolutions && (
+                              <div className="flex items-center gap-1.5 mr-1 pr-1">
+                                <select
+                                  value={active.priceType ?? 'monthly'}
+                                  onChange={e => {
+                                    const val = e.target.value as 'monthly' | 'one_time';
+                                    setData(d => ({
+                                      ...d,
+                                      solutions: d.solutions.map(s =>
+                                        s.name === sol ? { ...s, priceType: val } : s
+                                      ),
+                                    }));
+                                  }}
+                                  className="bg-slate-700 text-slate-300 text-[10px] rounded-md px-1 py-1 border border-slate-600 focus:outline-none focus:border-orange-500"
+                                  style={{ direction: 'rtl' }}
+                                >
+                                  <option value="monthly">חודשי</option>
+                                  <option value="one_time">חד-פעמי</option>
+                                </select>
+                                <div className="flex items-center gap-1 flex-1 bg-slate-700/60 rounded-md border border-slate-600 px-2 py-1 focus-within:border-orange-500 transition-colors">
+                                  <span className="text-[10px] text-slate-400">₪</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={active.price ?? ''}
+                                    onChange={e => {
+                                      const val = e.target.value ? Number(e.target.value) : undefined;
+                                      setData(d => ({
+                                        ...d,
+                                        solutions: d.solutions.map(s =>
+                                          s.name === sol ? { ...s, price: val } : s
+                                        ),
+                                      }));
+                                    }}
+                                    placeholder="מחיר..."
+                                    className="flex-1 bg-transparent text-white text-xs text-right focus:outline-none w-full"
+                                    style={{ direction: 'rtl' }}
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
+
+                      {/* Add solution input */}
+                      {editingSolutions && (
+                        <div className="flex gap-1 mt-2">
+                          <button onClick={addSolutionItem} disabled={!newSolItem.trim()}
+                            className="px-2 py-1 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-colors">
+                            הוסף
+                          </button>
+                          <input
+                            value={newSolItem}
+                            onChange={e => setNewSolItem(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && addSolutionItem()}
+                            placeholder="שירות חדש..."
+                            className="flex-1 bg-slate-700 text-white text-xs px-2 py-1 rounded-lg border border-slate-600 focus:outline-none focus:border-orange-500 text-right"
+                          />
+                        </div>
+                      )}
                     </div>
+
+                    {/* Send Proposal button */}
+                    {workspace && data.solutions.length > 0 && !editingSolutions && (
+                      <button
+                        onClick={() => setShowProposalEditor(true)}
+                        className="mt-3 w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-bold text-white transition-all"
+                        style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+                        <FileText size={12} />
+                        הפק הצעת מחיר לחתימה
+                      </button>
+                    )}
+
+                    {/* Edit solutions toggle */}
+                    {onWorkspaceUpdate && (
+                      <button onClick={() => setEditingSolutions(v => !v)}
+                        className="mt-2 w-full text-center text-[10px] text-slate-500 hover:text-slate-300 transition-colors py-0.5">
+                        {editingSolutions ? '✓ סיים עריכה' : '✏️ ערוך רשימה'}
+                      </button>
+                    )}
                   </div>
 
                   {/* Budget / custom left field */}
@@ -552,9 +1203,53 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                       : [5000, 10000, 20000];
                     return (
                       <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-                        <h3 className="text-xs font-bold text-slate-400 mb-3 text-right uppercase tracking-wider flex items-center gap-1.5 justify-end">
-                          {label} <Star size={11} className="text-amber-400" />
-                        </h3>
+                        {/* Header */}
+                        {editingLeftLabel ? (
+                          <div className="mb-3 space-y-2">
+                            <input
+                              autoFocus
+                              value={tempLeftLabel}
+                              onChange={e => setTempLeftLabel(e.target.value)}
+                              className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-amber-500 focus:outline-none text-right"
+                              placeholder="כותרת הסעיף..."
+                            />
+                            {loadingLabelAi && (
+                              <div className="flex justify-center py-1"><Loader2 size={12} className="animate-spin text-amber-400" /></div>
+                            )}
+                            {aiLabelSugg.left.length > 0 && (
+                              <div className="flex flex-wrap gap-1 justify-end">
+                                {aiLabelSugg.left.map((s, i) => (
+                                  <button key={i} onClick={() => setTempLeftLabel(s)}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700/50 hover:bg-amber-800/60 transition-colors">
+                                    ✨ {s}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            <div className="flex gap-1.5">
+                              <button onClick={() => setEditingLeftLabel(false)}
+                                className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">
+                                ביטול
+                              </button>
+                              <button onClick={saveLeftLabel} disabled={savingLabel}
+                                className="flex-1 py-1 rounded-lg text-[10px] bg-amber-600 text-white hover:bg-amber-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1">
+                                {savingLabel ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} שמור
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between mb-3">
+                            <button onClick={openEditLeft}
+                              className="p-1 rounded hover:bg-slate-700 transition-all text-slate-600 hover:text-slate-300"
+                              title="ערוך כותרת">
+                              <Pencil size={11} />
+                            </button>
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                              {currentLeftLabel} <Star size={11} className="text-amber-400" />
+                            </h3>
+                          </div>
+                        )}
+
                         <div className="space-y-2">
                           <input
                             type="number"
@@ -573,86 +1268,326 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                               {(data.budget ?? 0) >= 15000 && ' 🌟 VIP'}
                             </div>
                           )}
-                          <div className="grid grid-cols-3 gap-1 mt-1">
-                            {quickOpts.slice(0, 3).map(val => (
-                              <button
-                                key={val}
-                                onClick={() => setData(d => ({ ...d, budget: val }))}
-                                className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                                  data.budget === val
-                                    ? 'bg-orange-500 text-white'
-                                    : 'bg-slate-700/80 text-slate-400 hover:bg-slate-700'
-                                }`}
-                              >
-                                {prefix}{val >= 1000 ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}K` : val}
-                              </button>
-                            ))}
-                          </div>
+
+                          {/* Quick option buttons */}
+                          {editingQuickOpts ? (
+                            <div className="space-y-2 mt-1">
+                              <div className="grid grid-cols-3 gap-1">
+                                {tempQuickOpts.map((v, i) => (
+                                  <input
+                                    key={i}
+                                    type="number"
+                                    value={v}
+                                    onChange={e => setTempQuickOpts(prev => {
+                                      const next = [...prev];
+                                      next[i] = e.target.value;
+                                      return next;
+                                    })}
+                                    placeholder={`אפשרות ${i + 1}`}
+                                    className="bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-amber-500/50 focus:outline-none focus:border-amber-400 text-center"
+                                  />
+                                ))}
+                              </div>
+                              <div className="flex gap-1.5">
+                                <button onClick={() => setEditingQuickOpts(false)}
+                                  className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">
+                                  ביטול
+                                </button>
+                                <button onClick={saveQuickOpts} disabled={savingLabel}
+                                  className="flex-1 py-1 rounded-lg text-[10px] bg-amber-600 text-white hover:bg-amber-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1">
+                                  {savingLabel ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} שמור
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-3 gap-1 mt-1 group/opts relative">
+                              {quickOpts.slice(0, 3).map(val => (
+                                <button
+                                  key={val}
+                                  onClick={() => setData(d => ({ ...d, budget: val }))}
+                                  className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                    data.budget === val
+                                      ? 'bg-orange-500 text-white'
+                                      : 'bg-slate-700/80 text-slate-400 hover:bg-slate-700'
+                                  }`}
+                                >
+                                  {prefix}{val >= 1000 ? `${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}K` : val}
+                                </button>
+                              ))}
+                              {onWorkspaceUpdate && (
+                                <button
+                                  onClick={() => {
+                                    setTempQuickOpts(quickOpts.slice(0, 3).map(String));
+                                    setEditingQuickOpts(true);
+                                  }}
+                                  className="absolute -top-1 -left-1 opacity-0 group-hover/opts:opacity-100 p-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-all"
+                                  title="ערוך אפשרויות מהירות"
+                                >
+                                  <Pencil size={9} />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
                   })()}
                 </div>
-
-                {/* Status selector */}
-                <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <StatusBadge status={data.status} />
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('common.status')}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 justify-end">
-                    {ALL_STATUSES.map(s => (
-                      <button
-                        key={s}
-                        onClick={() => setData(d => ({ ...d, status: s }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          data.status === s
-                            ? 'bg-white text-black ring-2 ring-white/30 shadow-sm'
-                            : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700 border border-slate-600/30'
-                        }`}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Waiting Content toggle */}
-                <div
-                  onClick={() => setData(d => ({ ...d, waitingContent: !d.waitingContent }))}
-                  className={`flex items-center justify-between px-4 py-3 rounded-xl border cursor-pointer transition-all ${
-                    data.waitingContent
-                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                      : 'bg-slate-800/80 border-slate-700/50 text-slate-400 hover:border-slate-600'
-                  }`}
-                >
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    data.waitingContent ? 'border-amber-400 bg-amber-400' : 'border-slate-600'
-                  }`}>
-                    {data.waitingContent && <div className="w-2 h-2 bg-white rounded-full" />}
-                  </div>
-                  <span className="text-xs font-semibold">{t('leadModal.waitingContent')}</span>
-                </div>
-
-                {/* Stats row */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
-                    <div className="text-lg font-bold text-white">
-                      {data.budget > 0
-                        ? `${workspace?.cardLeftField?.prefix ?? '₪'}${(data.budget / 1000).toFixed(0)}K`
-                        : '—'}
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">{workspace?.cardLeftField?.label ?? t('leadModal.budgetShortFallback')}</div>
-                  </div>
-                  <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
-                    <div className="text-xl font-bold text-white">{data.solutions.length}</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">{t('leadModal.solutions')}</div>
-                  </div>
-                  <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
-                    <div className="text-xl font-bold text-white">{data.tasks.filter(t => !t.completed).length}</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">{t('deals.openTasks')}</div>
-                  </div>
-                </div>
+                    ),
+                    status: (
+                      <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                        {editingStatusLabel ? (
+                          <div className="mb-3 space-y-2">
+                            <input autoFocus value={tempStatusLabel} onChange={e => setTempStatusLabel(e.target.value)}
+                              className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-indigo-500 focus:outline-none text-right"
+                              placeholder="כותרת הסעיף..." onKeyDown={e => e.key === 'Enter' && saveStatusLabel()} />
+                            <div className="flex gap-1.5">
+                              <button onClick={() => setEditingStatusLabel(false)} className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">ביטול</button>
+                              <button onClick={saveStatusLabel} disabled={savingStatusLabel} className="flex-1 py-1 rounded-lg text-[10px] bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1">
+                                {savingStatusLabel ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} שמור
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{currentStatusLabel}</span>
+                              {onWorkspaceUpdate && (
+                                <button onClick={() => { setTempStatusLabel(currentStatusLabel); setEditingStatusLabel(true); }}
+                                  className="p-1 rounded hover:bg-slate-700 transition-all text-slate-600 hover:text-slate-300" title="ערוך כותרת">
+                                  <Pencil size={11} />
+                                </button>
+                              )}
+                            </div>
+                            <StatusBadge status={data.status} />
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-1.5 justify-end">
+                          {configStatuses.map(s => {
+                            const cfg = getStatusConfig(s, statusConfigs);
+                            const isActive = data.status === s;
+                            return (
+                              <button key={s} onClick={() => handleStatusChange(s)}
+                                className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1"
+                                style={isActive ? { background: cfg.color, color: 'white', boxShadow: `0 0 8px ${cfg.color}66` }
+                                  : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.65)', border: `1px solid ${cfg.color}33` }}>
+                                <span>{cfg.emoji}</span><span>{s}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ),
+                    source: (
+                      <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                        {editingSourceLabel ? (
+                          <div className="mb-3 space-y-2">
+                            <input autoFocus value={tempSourceLabel} onChange={e => setTempSourceLabel(e.target.value)}
+                              className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-amber-500 focus:outline-none text-right"
+                              placeholder="כותרת הסעיף..." onKeyDown={e => e.key === 'Enter' && saveSourceLabel()} />
+                            <div className="flex gap-1.5">
+                              <button onClick={() => setEditingSourceLabel(false)} className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">ביטול</button>
+                              <button onClick={saveSourceLabel} disabled={savingSourceLabel} className="flex-1 py-1 rounded-lg text-[10px] bg-amber-600 text-white hover:bg-amber-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1">
+                                {savingSourceLabel ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} שמור
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{currentSourceLabel}</span>
+                              {onWorkspaceUpdate && (
+                                <button onClick={() => { setTempSourceLabel(currentSourceLabel); setEditingSourceLabel(true); }}
+                                  className="p-1 rounded hover:bg-slate-700 transition-all text-slate-600 hover:text-slate-300" title="ערוך כותרת">
+                                  <Pencil size={11} />
+                                </button>
+                              )}
+                            </div>
+                            <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                              <Star size={10} className="text-amber-400" />{data.source || '—'}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-1.5 justify-end">
+                          {sourceList.map(s => (
+                            <div key={s} className="flex items-center gap-0.5">
+                              {editingSources && (
+                                <button onClick={() => removeSourceItem(s)} className="text-red-400 hover:text-red-300 p-0.5 hover:bg-red-900/30 rounded transition-colors"><X size={10} /></button>
+                              )}
+                              <button onClick={() => !editingSources && setData(d => ({ ...d, source: s as import('../types').LeadSource }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${data.source === s ? 'bg-white text-black ring-2 ring-white/30 shadow-sm' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700 border border-slate-600/30'}`}>
+                                {s}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {editingSources && (
+                          <div className="flex gap-1 mt-2">
+                            <button onClick={addSourceItem} disabled={!newSourceItem.trim()} className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-colors">הוסף</button>
+                            <input value={newSourceItem} onChange={e => setNewSourceItem(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSourceItem()} placeholder="מקור חדש..." className="flex-1 bg-slate-700 text-white text-xs px-2 py-1 rounded-lg border border-slate-600 focus:outline-none focus:border-amber-500 text-right" />
+                          </div>
+                        )}
+                        {onWorkspaceUpdate && (
+                          <button onClick={() => setEditingSources(v => !v)} className="mt-2 w-full text-center text-[10px] text-slate-500 hover:text-slate-300 transition-colors py-0.5">
+                            {editingSources ? '✓ סיים עריכה' : '✏️ ערוך רשימה'}
+                          </button>
+                        )}
+                      </div>
+                    ),
+                    assignee: team.length > 0 ? (
+                      <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">אחראי</span>
+                          {data.assignedTo ? (
+                            <span className="text-xs font-bold text-indigo-400 flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full bg-indigo-500/30 border border-indigo-400/40 text-[10px] flex items-center justify-center text-indigo-300 font-bold">{data.assignedTo[0]?.toUpperCase()}</span>
+                              {data.assignedTo}
+                            </span>
+                          ) : <span className="text-xs text-slate-500">לא שויך</span>}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 justify-end">
+                          <button onClick={() => setData(d => ({ ...d, assignedTo: '' }))}
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${!data.assignedTo ? 'bg-white text-black ring-2 ring-white/30 shadow-sm' : 'bg-slate-700/80 text-slate-400 hover:bg-slate-700 border border-slate-600/30'}`}>ללא</button>
+                          {team.map(member => (
+                            <button key={member.id} onClick={() => setData(d => ({ ...d, assignedTo: member.name }))}
+                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${data.assignedTo === member.name ? 'bg-white text-black ring-2 ring-white/30 shadow-sm' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700 border border-slate-600/30'}`}>
+                              <span className={`w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-bold ${data.assignedTo === member.name ? 'bg-black/20 text-black' : 'bg-indigo-500/30 text-indigo-300'}`}>{member.name[0]?.toUpperCase()}</span>
+                              {member.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null,
+                    customFields: (
+                      <>
+                        {(workspace?.customFieldDefs ?? []).length > 0 && (workspace!.customFieldDefs!).map(fieldDef => {
+                          if (editingFieldId === fieldDef.id) {
+                            return (
+                              <div key={fieldDef.id} className="bg-slate-800/80 rounded-xl p-4 border border-indigo-500/50 space-y-3">
+                                <div className="space-y-1">
+                                  <p className="text-[10px] text-slate-500 text-right">שם השורה</p>
+                                  <input autoFocus value={editFieldLabel} onChange={e => setEditFieldLabel(e.target.value)} className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-indigo-500 focus:outline-none text-right" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <p className="text-[10px] text-slate-500 text-right">אפשרויות ברשימה</p>
+                                  <div className="flex flex-wrap gap-1.5 justify-end">
+                                    {editFieldOptions.map((opt, i) => (
+                                      <span key={i} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] border border-indigo-500/30">
+                                        {opt}<button onClick={() => setEditFieldOptions(prev => prev.filter((_, j) => j !== i))} className="hover:text-red-400 transition-colors ml-0.5">×</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <button onClick={() => { if (!editFieldOptionInput.trim()) return; setEditFieldOptions(prev => [...prev, editFieldOptionInput.trim()]); setEditFieldOptionInput(''); }} className="px-2 py-1 rounded-lg text-[10px] bg-indigo-600/80 text-white hover:bg-indigo-500 transition-colors">+ הוסף</button>
+                                    <input value={editFieldOptionInput} onChange={e => setEditFieldOptionInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && editFieldOptionInput.trim()) { setEditFieldOptions(prev => [...prev, editFieldOptionInput.trim()]); setEditFieldOptionInput(''); } }} placeholder="אפשרות חדשה..." className="flex-1 bg-slate-700 text-white text-xs px-2 py-1 rounded-lg border border-slate-600 focus:border-indigo-500 focus:outline-none text-right" />
+                                  </div>
+                                </div>
+                                <div className="flex gap-1.5">
+                                  <button onClick={cancelEditField} className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">ביטול</button>
+                                  <button onClick={saveEditField} className="flex-1 py-1 rounded-lg text-[10px] bg-indigo-600 text-white hover:bg-indigo-500 transition-colors flex items-center justify-center gap-1"><Check size={10} /> שמור שינויים</button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          const currentVal = data.customFields?.[fieldDef.id];
+                          const selectedArr: string[] = fieldDef.multiSelect ? (Array.isArray(currentVal) ? currentVal as string[] : (currentVal ? [currentVal as string] : [])) : [];
+                          const selectedStr: string = !fieldDef.multiSelect ? (typeof currentVal === 'string' ? currentVal : '') : '';
+                          const toggleOption = (opt: string) => {
+                            if (fieldDef.multiSelect) {
+                              const next = selectedArr.includes(opt) ? selectedArr.filter(v => v !== opt) : [...selectedArr, opt];
+                              setData(d => ({ ...d, customFields: { ...(d.customFields ?? {}), [fieldDef.id]: next } }));
+                            } else {
+                              const next = selectedStr === opt ? '' : opt;
+                              setData(d => ({ ...d, customFields: { ...(d.customFields ?? {}), [fieldDef.id]: next } }));
+                            }
+                          };
+                          return (
+                            <div key={fieldDef.id} className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{fieldDef.label}</span>
+                                  {onWorkspaceUpdate && (
+                                    <>
+                                      <button onClick={() => startEditField(fieldDef)} title="ערוך שורה" className="text-slate-600 hover:text-indigo-400 transition-colors p-0.5 rounded"><Pencil size={12} /></button>
+                                      <button onClick={() => deleteCustomRow(fieldDef.id)} title="מחק שורה" className="text-slate-600 hover:text-red-400 transition-colors p-0.5 rounded"><Trash2 size={12} /></button>
+                                    </>
+                                  )}
+                                </div>
+                                <span className="text-xs text-slate-500">{fieldDef.multiSelect ? (selectedArr.length > 0 ? selectedArr.join(', ') : 'לא נבחר') : (selectedStr || 'לא נבחר')}</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 justify-end">
+                                {fieldDef.options.map(opt => {
+                                  const isActive = fieldDef.multiSelect ? selectedArr.includes(opt) : selectedStr === opt;
+                                  return (
+                                    <button key={opt} onClick={() => toggleOption(opt)}
+                                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${isActive ? 'bg-indigo-500 text-white ring-2 ring-indigo-300/40 shadow-sm' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700 border border-slate-600/30'}`}>
+                                      {opt}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {onWorkspaceUpdate && (
+                          <div>
+                            {addingCustomRow ? (
+                              <div className="bg-slate-800/80 rounded-xl p-3 border border-indigo-500/40 space-y-3">
+                                <div className="space-y-1">
+                                  <p className="text-[10px] font-bold text-slate-400 text-right">שם השורה החדשה</p>
+                                  <input autoFocus value={newRowLabel} onChange={e => setNewRowLabel(e.target.value)} placeholder='לדוגמה: "תוכנת הנהלת חשבונות"' className="w-full bg-slate-700 text-white text-xs px-2 py-1.5 rounded-lg border border-indigo-500 focus:outline-none text-right" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <p className="text-[10px] text-slate-500 text-right">אפשרויות ברשימה (אופציונלי)</p>
+                                  {newRowOptions.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 justify-end">
+                                      {newRowOptions.map((opt, i) => (
+                                        <span key={i} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] border border-indigo-500/30">
+                                          {opt}<button onClick={() => setNewRowOptions(prev => prev.filter((_, j) => j !== i))} className="hover:text-red-400 transition-colors ml-0.5">×</button>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="flex gap-1">
+                                    <button onClick={() => { if (!newRowOptionInput.trim()) return; setNewRowOptions(prev => [...prev, newRowOptionInput.trim()]); setNewRowOptionInput(''); }} className="px-2 py-1 rounded-lg text-[10px] bg-slate-600 text-slate-300 hover:bg-slate-500 transition-colors whitespace-nowrap">+ הוסף</button>
+                                    <input value={newRowOptionInput} onChange={e => setNewRowOptionInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newRowOptionInput.trim()) { setNewRowOptions(prev => [...prev, newRowOptionInput.trim()]); setNewRowOptionInput(''); } }} placeholder="לדוגמה: חשבשבת, פריוריטי..." className="flex-1 bg-slate-700 text-white text-xs px-2 py-1 rounded-lg border border-slate-600 focus:border-indigo-500 focus:outline-none text-right" />
+                                  </div>
+                                </div>
+                                <div className="flex gap-1.5">
+                                  <button onClick={() => { setAddingCustomRow(false); setNewRowLabel(''); setNewRowOptions([]); setNewRowOptionInput(''); }} className="flex-1 py-1 rounded-lg text-[10px] bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors">ביטול</button>
+                                  <button onClick={addCustomRow} disabled={!newRowLabel.trim()} className="flex-1 py-1 rounded-lg text-[10px] bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-1"><Check size={10} /> הוסף שורה</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button onClick={() => setAddingCustomRow(true)} className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs transition-all hover:bg-indigo-500/10" style={{ border: '1px dashed rgba(99,102,241,0.3)', color: 'rgba(165,180,252,0.5)' }}>
+                                <Plus size={12} />הוסף שורה חדשה לכרטיס
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ),
+                    stats: (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
+                          <div className="text-lg font-bold text-white">{data.budget > 0 ? `${workspace?.cardLeftField?.prefix ?? '₪'}${(data.budget / 1000).toFixed(0)}K` : '—'}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{workspace?.cardLeftField?.label ?? t('leadModal.budgetShortFallback')}</div>
+                        </div>
+                        <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
+                          <div className="text-xl font-bold text-white">{data.solutions.length}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{t('leadModal.solutions')}</div>
+                        </div>
+                        <div className="bg-slate-800/80 rounded-xl p-3 border border-slate-700/50 text-center">
+                          <div className="text-xl font-bold text-white">{data.tasks.filter(t => !t.completed).length}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{t('deals.openTasks')}</div>
+                        </div>
+                      </div>
+                    ),
+                  };
+                  return cardLayout.sections
+                    .filter(s => s.visible)
+                    .map(s => sectionJSX[s.id] ? <div key={s.id}>{sectionJSX[s.id]}</div> : null);
+                })()}
 
                 {/* Save button */}
                 <button
@@ -853,37 +1788,90 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
             {/* ACTIVITY TAB */}
             {activeTab === 'activity' && (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 justify-end">
-                  <span className="text-sm font-bold text-slate-200">{t('leadModal.tab.activity')}</span>
-                  <Activity size={15} className="text-indigo-400" />
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setShowContactModal(true)}
+                    className="flex items-center gap-1.5 bg-amber-600/80 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all"
+                  >
+                    <PhoneCall size={12} />+ תעד פנייה
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-slate-200">יומן פעילות</span>
+                    <Activity size={15} className="text-indigo-400" />
+                  </div>
                 </div>
-                {data.notes.length === 0 && data.tasks.length === 0 ? (
+
+                {/* Follow-up info */}
+                {(data.lastContactDate || data.nextFollowUpDate) && (
+                  <div className="bg-indigo-900/30 border border-indigo-500/20 rounded-xl px-4 py-3 text-right space-y-1">
+                    {data.lastContactDate && (
+                      <div className="text-xs text-slate-400 flex items-center justify-end gap-1.5">
+                        <span>פנייה אחרונה: <span className="text-slate-200 font-medium">{new Date(data.lastContactDate).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></span>
+                        <PhoneCall size={10} className="text-indigo-400" />
+                      </div>
+                    )}
+                    {data.nextFollowUpDate && (
+                      <div className="text-xs flex items-center justify-end gap-1.5">
+                        <span className={`font-medium ${new Date(data.nextFollowUpDate) < new Date() ? 'text-red-400' : 'text-amber-300'}`}>
+                          {new Date(data.nextFollowUpDate) < new Date()
+                            ? `⚠️ פנייה באיחור — הייתה ב-${new Date(data.nextFollowUpDate).toLocaleDateString('he-IL')}`
+                            : `📅 פנייה הבאה: ${new Date(data.nextFollowUpDate).toLocaleDateString('he-IL')}`}
+                        </span>
+                        <RotateCcw size={10} className="text-amber-400" />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Meetings list */}
+                {(data.meetings?.length ?? 0) > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-slate-400 text-right">📅 פגישות מתוכננות</div>
+                    {data.meetings!.map(m => (
+                      <div key={m.id} className="flex items-center justify-between bg-purple-900/20 border border-purple-500/20 rounded-xl px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          {m.calendarLink && (
+                            <a href={m.calendarLink} target="_blank" rel="noreferrer"
+                              className="text-[10px] text-purple-400 hover:text-purple-300 underline">Google Cal</a>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold text-slate-200">{m.title}</div>
+                          <div className="text-xs text-slate-400">{m.date} {m.time} · {m.duration} דקות {m.location ? `· ${m.location}` : ''}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Activity log entries */}
+                {(data.activityLog?.length ?? 0) === 0 && data.notes.length === 0 && data.tasks.length === 0 ? (
                   <div className="text-center text-slate-500 text-sm py-10 bg-slate-800/40 rounded-xl border border-slate-700/30">
                     <div className="text-3xl mb-2">📊</div>
-                    {t('deals.noActivity')}
+                    <div>אין פעילות עדיין</div>
+                    <div className="text-xs mt-1 text-slate-600">לחץ על "תעד פנייה" כדי להתחיל</div>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {[
-                      ...data.notes.map(n => ({ type: 'note', text: n.text, time: n.timestamp, author: n.author, completed: undefined })),
-                      ...data.tasks.map(t => ({ type: 'task', text: t.description, time: `${t.date} ${t.time}`, author: 'Almog Avraham', completed: t.completed })),
-                      { type: 'update', text: `${t('leadModal.lastUpdateActivity')}: ${data.lastUpdate}`, time: data.lastUpdate, author: t('leadModal.systemAuthor'), completed: undefined },
+                      ...(data.activityLog || []).map(a => ({
+                        type: a.type as string, text: a.content, time: a.timestamp, author: a.author, isActivity: true,
+                      })),
+                      ...data.notes.filter(() => !(data.activityLog || []).some(a => a.type === 'note' && a.content === data.notes[0]?.text)).map(n => ({
+                        type: 'note', text: n.text, time: n.timestamp, author: n.author, isActivity: false,
+                      })),
                     ]
                       .sort((a, b) => b.time.localeCompare(a.time))
                       .map((item, i) => (
                         <div key={i} className="flex items-start gap-3 bg-slate-800/60 rounded-xl px-4 py-3 border border-slate-700/30">
-                          <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm mt-0.5 ${
-                            item.type === 'note' ? 'bg-blue-500/20 text-blue-400' :
-                            item.type === 'task' ? 'bg-orange-500/20 text-orange-400' :
-                            'bg-slate-700 text-slate-400'
-                          }`}>
-                            {item.type === 'note' ? '💬' : item.type === 'task' ? '✓' : '📋'}
+                          <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm mt-0.5 ${ACTIVITY_COLORS[item.type as LeadActivityType] || 'bg-slate-700 text-slate-400'}`}>
+                            {ACTIVITY_ICONS[item.type as LeadActivityType] || '📋'}
                           </div>
                           <div className="flex-1 text-right">
-                            <div className={`text-sm ${item.completed ? 'line-through text-slate-500' : 'text-slate-300'}`}>
-                              {item.text}
+                            <div className="text-sm text-slate-300">{item.text}</div>
+                            <div className="text-xs text-slate-500 mt-0.5">
+                              {new Date(item.time).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {item.author}
                             </div>
-                            <div className="text-xs text-slate-500 mt-0.5">{item.time} · {item.author}</div>
                           </div>
                         </div>
                       ))}
@@ -912,6 +1900,276 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
       {/* Smart Email Modal */}
       {showEmail && (
         <EmailModal lead={data} workspace={workspace} onClose={() => setShowEmail(false)} />
+      )}
+
+      {/* Smart WhatsApp Modal */}
+      {showWhatsApp && (
+        <WhatsAppModal lead={data} workspace={workspace} onClose={() => setShowWhatsApp(false)} />
+      )}
+
+      {/* ── CONTACT LOG MODAL ──────────────────────────────────────────── */}
+      {showContactModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <button onClick={() => setShowContactModal(false)} className="text-slate-400 hover:text-white"><X size={16} /></button>
+              <div className="flex items-center gap-2 text-sm font-bold text-white"><PhoneCall size={14} className="text-amber-400" />תיעוד פנייה</div>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* Contact type */}
+              <div>
+                <label className="text-xs text-slate-400 mb-2 block text-right">אמצעי התקשורת</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { key: 'phone',     label: '📞 טלפון' },
+                    { key: 'email',     label: '✉️ מייל' },
+                    { key: 'whatsapp',  label: '💬 וואטסאפ' },
+                    { key: 'in_person', label: '🤝 פנים-אל-פנים' },
+                    { key: 'meeting',   label: '📅 פגישה נקבעה' },
+                    { key: 'quote',     label: '📄 הצעת מחיר' },
+                  ] as { key: ContactMethod; label: string }[]).map(opt => (
+                    <button key={opt.key} onClick={() => { setContactType(opt.key); if (opt.key !== 'custom') setCustomContactLabel(''); }}
+                      className={`py-2 px-1 rounded-xl text-xs font-semibold text-center transition-all border ${contactType === opt.key ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {/* Custom type row */}
+                <div className="mt-2">
+                  <button
+                    onClick={() => setContactType('custom')}
+                    className={`w-full py-2 px-3 rounded-xl text-xs font-semibold text-right transition-all border flex items-center gap-2 ${contactType === 'custom' ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                    <span>✏️</span>
+                    {contactType === 'custom' ? (
+                      <input
+                        type="text"
+                        value={customContactLabel}
+                        onChange={e => setCustomContactLabel(e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        placeholder="הקלד סוג תיעוד מותאם..."
+                        autoFocus
+                        className="flex-1 bg-transparent focus:outline-none text-white placeholder-amber-200/50 text-right"
+                      />
+                    ) : (
+                      <span className="flex-1 text-right">סוג תיעוד מותאם אישית</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+              {/* Note */}
+              <div>
+                <label className="text-xs text-slate-400 mb-2 block text-right">פרטי הפנייה</label>
+                <textarea
+                  value={contactNote} onChange={e => setContactNote(e.target.value)}
+                  rows={3} placeholder="תאר את הפנייה..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right resize-none focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              {/* Follow-up */}
+              <div>
+                <label className="text-xs text-slate-400 mb-2 block text-right">פנייה הבאה (ימים)</label>
+                <div className="flex gap-2">
+                  {['3', '7', '14', '30'].map(d => (
+                    <button key={d} onClick={() => setFollowUpDays(d)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all border ${followUpDays === d ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                      {d}י
+                    </button>
+                  ))}
+                  <input type="number" value={followUpDays} onChange={e => setFollowUpDays(e.target.value)}
+                    placeholder="אחר" className="w-16 bg-slate-800 border border-slate-700 rounded-xl px-2 text-xs text-center text-white focus:outline-none focus:border-indigo-500" />
+                </div>
+              </div>
+              {/* Post-contact action */}
+              <div>
+                <label className="text-xs text-slate-400 mb-2 block text-right">פעולה אוטומטית לאחר שמירה</label>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  {([
+                    { key: 'task',      label: '✅ צור משימה',    active: 'bg-indigo-600 border-indigo-500 text-white' },
+                    { key: 'email',     label: '✉️ שלח מייל',    active: 'bg-blue-600 border-blue-500 text-white' },
+                    { key: 'whatsapp',  label: '💬 וואטסאפ',      active: 'bg-green-600 border-green-500 text-white' },
+                  ] as { key: typeof postContactAction; label: string; active: string }[]).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => {
+                        const next = postContactAction === opt.key ? 'none' : opt.key;
+                        setPostContactAction(next);
+                        if (next === 'task' && !postContactTaskDesc) {
+                          const labels: Record<ContactMethod, string> = {
+                            phone: `התקשר ל-${data.company}`,
+                            email: `שלח מייל ל-${data.company}`,
+                            whatsapp: `שלח וואטסאפ ל-${data.company}`,
+                            in_person: `פגישה עם ${data.company}`,
+                            meeting: `פגישה נקבעה עם ${data.company}`,
+                            quote: `מעקב על הצעת מחיר — ${data.company}`,
+                            custom: customContactLabel ? `${customContactLabel} — ${data.company}` : `מעקב עם ${data.company}`,
+                          };
+                          setPostContactTaskDesc(labels[contactType]);
+                        }
+                      }}
+                      className={`py-2 px-1 rounded-xl text-xs font-semibold text-center transition-all border ${postContactAction === opt.key ? opt.active : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Task details — shown when task action selected */}
+                {postContactAction === 'task' && (
+                  <div className="space-y-2 p-3 bg-slate-800/60 rounded-xl border border-indigo-500/20">
+                    <input
+                      value={postContactTaskDesc}
+                      onChange={e => setPostContactTaskDesc(e.target.value)}
+                      placeholder={`התקשר ל-${data.company}`}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-xs text-white text-right focus:outline-none focus:border-indigo-500"
+                    />
+                    <div className="flex gap-2 justify-end">
+                      {(['high', 'medium', 'low'] as TaskPriority[]).map(p => (
+                        <button key={p} onClick={() => setPostContactTaskPriority(p)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border ${
+                            postContactTaskPriority === p
+                              ? p === 'high' ? 'bg-red-600 border-red-500 text-white' : p === 'medium' ? 'bg-amber-600 border-amber-500 text-white' : 'bg-blue-600 border-blue-500 text-white'
+                              : 'bg-slate-700 border-slate-600 text-slate-400'
+                          }`}>
+                          {p === 'high' ? '🔴 דחוף' : p === 'medium' ? '🟠 בינוני' : '🔵 נמוך'}
+                        </button>
+                      ))}
+                    </div>
+                    {!followUpDays && (
+                      <p className="text-[10px] text-amber-400 text-right">⚠️ בחר מספר ימים לפנייה הבאה כדי לתזמן את המשימה</p>
+                    )}
+                    {followUpDays && (
+                      <p className="text-[10px] text-slate-400 text-right">
+                        📅 המשימה תיקבע ל-{new Date(Date.now() + parseInt(followUpDays) * 86400000).toLocaleDateString('he-IL')}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {postContactAction === 'email' && (
+                  <p className="text-[11px] text-blue-400 text-right px-1">✉️ לאחר השמירה תיפתח חלונית כתיבת מייל ל-{data.email || data.company}</p>
+                )}
+                {postContactAction === 'whatsapp' && (
+                  <p className="text-[11px] text-green-400 text-right px-1">💬 לאחר השמירה תיפתח חלונית וואטסאפ ל-{data.phone || data.company}</p>
+                )}
+              </div>
+
+              <button onClick={handleLogContact}
+                disabled={!contactNote.trim() || (postContactAction === 'task' && !postContactTaskDesc.trim())}
+                className="w-full py-3 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold transition-all">
+                {postContactAction === 'task' ? '💾 שמור ויצור משימה' : postContactAction === 'email' ? '💾 שמור ופתח מייל' : postContactAction === 'whatsapp' ? '💾 שמור ופתח וואטסאפ' : 'שמור פנייה'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MEETING MODAL ──────────────────────────────────────────────── */}
+      {showMeetingModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <button onClick={() => setShowMeetingModal(false)} className="text-slate-400 hover:text-white"><X size={16} /></button>
+              <div className="flex items-center gap-2 text-sm font-bold text-white"><Calendar size={14} className="text-purple-400" />קביעת פגישה</div>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-slate-400 mb-1.5 block text-right">כותרת הפגישה</label>
+                <input value={meetingTitle} onChange={e => setMeetingTitle(e.target.value)}
+                  placeholder={`פגישה עם ${data.company}`}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right focus:outline-none focus:border-purple-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1.5 block text-right">שעה</label>
+                  <input type="time" value={meetingTime} onChange={e => setMeetingTime(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right focus:outline-none focus:border-purple-500" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1.5 block text-right">תאריך</label>
+                  <input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right focus:outline-none focus:border-purple-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 mb-2 block text-right">משך</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[30, 60, 90, 120].map(d => (
+                    <button key={d} onClick={() => setMeetingDuration(d)}
+                      className={`py-2 rounded-xl text-xs font-bold transition-all border ${meetingDuration === d ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                      {d}′
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 mb-1.5 block text-right">מיקום (אופציונלי)</label>
+                <input value={meetingLocation} onChange={e => setMeetingLocation(e.target.value)}
+                  placeholder="כתובת / Zoom / Teams"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right focus:outline-none focus:border-purple-500" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 mb-1.5 block text-right">הערות</label>
+                <textarea value={meetingNotes} onChange={e => setMeetingNotes(e.target.value)}
+                  rows={2} placeholder="נושאי הפגישה..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right resize-none focus:outline-none focus:border-purple-500" />
+              </div>
+              {data.email && (
+                <div className="flex items-center gap-2 text-xs text-slate-400 justify-end bg-slate-800/50 rounded-xl px-3 py-2">
+                  <span>{data.email}</span>
+                  <span>הזמנה תשלח ל:</span>
+                  <Users2 size={12} className="text-purple-400" />
+                </div>
+              )}
+              <button onClick={handleScheduleMeeting}
+                disabled={!meetingTitle.trim() || !meetingDate}
+                className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2">
+                <CalendarPlus size={15} />קבע ופתח ב-Google Calendar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OBJECTION MODAL ────────────────────────────────────────────── */}
+      {showObjectionModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <button onClick={() => { setShowObjectionModal(false); setPendingStatus(null); }} className="text-slate-400 hover:text-white"><X size={16} /></button>
+              <div className="text-sm font-bold text-white">מה הסיבה?</div>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-slate-400 text-right">בחר את סיבת ה"לא רלוונטי":</p>
+              <div className="space-y-2">
+                {DEFAULT_OBJECTIONS.map(obj => (
+                  <button key={obj} onClick={() => setSelectedObjection(obj)}
+                    className={`w-full text-right px-4 py-3 rounded-xl text-sm font-medium transition-all border ${selectedObjection === obj ? 'bg-red-600/20 border-red-500/40 text-red-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-red-500/30'}`}>
+                    {obj}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button onClick={() => { setShowObjectionModal(false); setPendingStatus(null); }}
+                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium border border-slate-700 transition-all">
+                  ביטול
+                </button>
+                <button onClick={handleObjectionConfirm}
+                  className="py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-sm font-bold transition-all">
+                  אשר
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Proposal Editor ─────────────────────────────────────────── */}
+      {showProposalEditor && workspace && (
+        <ProposalEditorModal
+          lead={data}
+          workspace={workspace}
+          onClose={() => setShowProposalEditor(false)}
+          onToast={onToast}
+        />
       )}
     </>
   );

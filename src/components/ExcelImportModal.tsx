@@ -9,11 +9,14 @@ import {
   X, Upload, FileSpreadsheet, CheckCircle2, AlertCircle,
   ChevronLeft, RefreshCw, Download, Info, Sparkles,
 } from 'lucide-react';
-import type { Lead, LeadStatus, LeadSource } from '../types';
+import type { Lead, LeadStatus, LeadSource, CustomFieldDef } from '../types';
+import type { StatusConfig } from '../lib/statusConfig';
 import { useLang } from '../contexts/LangContext';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 type MappableField = 'company' | 'contactName' | 'phone' | 'email' | 'budget' | 'status' | 'source' | 'notes' | 'skip';
+// Custom-field columns are mapped as "cf:<fieldId>" strings
+type ColumnMapping = MappableField | string;
 
 /* ── Much wider pattern lists ────────────────────────────────────────────── */
 const FIELD_PATTERNS: Record<Exclude<MappableField, 'skip'>, string[]> = {
@@ -84,10 +87,17 @@ const VALID_STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעי
 const VALID_SOURCES:  LeadSource[]  = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
-function autoDetect(header: string): MappableField {
+function autoDetect(header: string, customFieldDefs?: CustomFieldDef[]): ColumnMapping {
   const h = header.trim().toLowerCase().replace(/['"״]/g, '');
+  // Check built-in fields first
   for (const [field, patterns] of Object.entries(FIELD_PATTERNS) as [Exclude<MappableField,'skip'>, string[]][]) {
     if (patterns.some(p => h === p.toLowerCase() || h.includes(p.toLowerCase()))) return field;
+  }
+  // Check custom field labels
+  if (customFieldDefs) {
+    for (const cf of customFieldDefs) {
+      if (h === cf.label.trim().toLowerCase()) return `cf:${cf.id}`;
+    }
   }
   return 'skip';
 }
@@ -133,10 +143,12 @@ interface Props {
   onImport: (leads: Lead[]) => void;
   onClose:  () => void;
   currentUser?: string;
+  statusConfigs?: StatusConfig[];
+  customFieldDefs?: CustomFieldDef[];
 }
 
 /* ── Component ───────────────────────────────────────────────────────────── */
-export default function ExcelImportModal({ onImport, onClose, currentUser }: Props) {
+export default function ExcelImportModal({ onImport, onClose, currentUser, statusConfigs, customFieldDefs }: Props) {
   const { t, dir } = useLang();
 
   const FIELD_LABELS: Record<MappableField, string> = {
@@ -151,16 +163,23 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
     skip:        t('excelImport.fieldSkip'),
   };
 
-  const [step,      setStep]      = useState<'upload' | 'map' | 'importing' | 'done'>('upload');
-  const [headers,   setHeaders]   = useState<string[]>([]);
-  const [rows,      setRows]      = useState<string[][]>([]);
-  const [mapping,   setMapping]   = useState<Record<string, MappableField>>({});
-  const [imported,  setImported]  = useState(0);
-  const [skipped,   setSkipped]   = useState(0);
-  const [error,     setError]     = useState('');
-  const [dragging,  setDragging]  = useState(false);
-  const [fileName,  setFileName]  = useState('');
+  const [step,           setStep]           = useState<'upload' | 'map' | 'importing' | 'done'>('upload');
+  const [headers,        setHeaders]        = useState<string[]>([]);
+  const [rows,           setRows]           = useState<string[][]>([]);
+  const [mapping,        setMapping]        = useState<Record<string, ColumnMapping>>({});
+  const [imported,       setImported]       = useState(0);
+  const [skipped,        setSkipped]        = useState(0);
+  const [error,          setError]          = useState('');
+  const [dragging,       setDragging]       = useState(false);
+  const [fileName,       setFileName]       = useState('');
+  // '' = use file value / default; any status label = force that status on every row
+  const [statusOverride, setStatusOverride] = useState<string>('');
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Build the list of available statuses for the override picker
+  const availableStatuses: { label: string; color: string; emoji: string }[] = statusConfigs
+    ? [...statusConfigs].sort((a, b) => a.order - b.order).map(s => ({ label: s.label, color: s.color, emoji: s.emoji ?? '' }))
+    : VALID_STATUSES.map(s => ({ label: s, color: '#6366f1', emoji: '' }));
 
   /* ── File parsing ───────────────────────────────────────────────────────── */
   const parseFile = useCallback((file: File) => {
@@ -192,8 +211,8 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
         }
 
         // Auto-detect column mapping
-        const initMap: Record<string, MappableField> = {};
-        hdrs.forEach(h => { initMap[h] = autoDetect(h); });
+        const initMap: Record<string, ColumnMapping> = {};
+        hdrs.forEach(h => { initMap[h] = autoDetect(h, customFieldDefs); });
 
         // Smart fallback: if nothing maps to 'company', map first non-empty column
         const hasCompany = Object.values(initMap).includes('company');
@@ -240,11 +259,25 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
       Object.entries(mapping).find(([, v]) => v === 'company')?.[0] ??
       headers[0]; // always fallback to first column
 
-    const get = (field: MappableField, row: string[]) => {
+    const get = (field: ColumnMapping, row: string[]) => {
       const hdr = Object.entries(mapping).find(([, v]) => v === field)?.[0];
       if (!hdr) return '';
       const idx = headers.indexOf(hdr);
       return idx >= 0 ? (row[idx] ?? '').trim() : '';
+    };
+
+    // Build customFields object for each row
+    const getCustomFields = (row: string[]): Record<string, string> => {
+      const result: Record<string, string> = {};
+      for (const [hdr, colMap] of Object.entries(mapping)) {
+        if (typeof colMap === 'string' && colMap.startsWith('cf:')) {
+          const fieldId = colMap.slice(3);
+          const idx = headers.indexOf(hdr);
+          const val = idx >= 0 ? (row[idx] ?? '').trim() : '';
+          if (val) result[fieldId] = val;
+        }
+      }
+      return result;
     };
 
     for (const row of rows) {
@@ -256,7 +289,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
       const rawBudget = get('budget', row).replace(/[^\d.]/g, '');
       const budget    = rawBudget ? parseFloat(rawBudget) || 0 : 0;
 
-      const statusRaw = get('status', row);
+      const statusRaw = statusOverride || get('status', row);
       const sourceRaw = get('source', row);
       const notesRaw  = get('notes', row);
 
@@ -270,6 +303,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
           }]
         : [];
 
+      const cfValues = getCustomFields(row);
       leads.push({
         id:            `imp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         company,
@@ -277,7 +311,12 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
         phone:         get('phone', row),
         email:         get('email', row),
         budget,
-        status:        statusRaw ? normalizeStatus(statusRaw) : 'חדש',
+        status:        statusRaw
+          ? (statusOverride
+              // if it came from our override picker it's already an exact label
+              ? statusOverride as LeadStatus
+              : normalizeStatus(statusRaw))
+          : 'חדש',
         source:        sourceRaw ? normalizeSource(sourceRaw) : 'אורגני',
         aiScore:       0,
         assignedTo:    currentUser ?? 'לא מוקצה',
@@ -287,6 +326,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
         solutions:     [],
         futureNotes:   [],
         waitingContent: false,
+        ...(Object.keys(cfValues).length > 0 ? { customFields: cfValues } : {}),
       });
     }
 
@@ -314,7 +354,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
 
   /* ── Derived ─────────────────────────────────────────────────────────────── */
   const hasCompanyCol  = Object.values(mapping).includes('company');
-  const mappedCount    = Object.values(mapping).filter(v => v !== 'skip').length;
+  const mappedCount    = Object.values(mapping).filter(v => v !== 'skip' && v !== '').length;
   const previewRows    = rows.slice(0, 4);
 
   /* ── Render ─────────────────────────────────────────────────────────────── */
@@ -438,6 +478,47 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                 </div>
               )}
 
+              {/* ── Status override picker ─────────────────────────────── */}
+              <div className="rounded-2xl p-4 space-y-3" style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">
+                    {statusOverride ? `כל הלידים יקבלו סטטוס: ` : 'ייבא לפי עמודת סטטוס בקובץ (ברירת מחדל)'}
+                    {statusOverride && (
+                      <span className="font-bold" style={{ color: availableStatuses.find(s => s.label === statusOverride)?.color ?? '#a5b4fc' }}>
+                        {statusOverride}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs font-bold text-indigo-300">📥 ייבא לסטטוס</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 justify-end">
+                  {/* "Auto" chip — clear override */}
+                  <button
+                    onClick={() => setStatusOverride('')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      statusOverride === ''
+                        ? 'bg-slate-500 text-white ring-2 ring-slate-300/30'
+                        : 'bg-slate-700/60 text-slate-400 hover:bg-slate-700 border border-slate-600/40'
+                    }`}
+                  >
+                    אוטומטי מהקובץ
+                  </button>
+                  {availableStatuses.map(s => (
+                    <button
+                      key={s.label}
+                      onClick={() => setStatusOverride(s.label)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                      style={statusOverride === s.label
+                        ? { background: s.color + '30', color: s.color, border: `1.5px solid ${s.color}`, boxShadow: `0 0 8px ${s.color}30` }
+                        : { background: s.color + '10', color: s.color + 'aa', border: `1px solid ${s.color}25` }
+                      }
+                    >
+                      {s.emoji && <span className="mr-1">{s.emoji}</span>}{s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Column mapping */}
               <div className="space-y-1.5">
                 <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">{t('excelImport.columnMapping')}</p>
@@ -470,7 +551,7 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                         {/* Mapping select */}
                         <select
                           value={fieldVal}
-                          onChange={e => setMapping(m => ({ ...m, [hdr]: e.target.value as MappableField }))}
+                          onChange={e => setMapping(m => ({ ...m, [hdr]: e.target.value as ColumnMapping }))}
                           className={`flex-shrink-0 w-44 bg-slate-700 border text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all ${
                             isMapped
                               ? 'border-indigo-500/50 text-white'
@@ -480,6 +561,13 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                           {(Object.keys(FIELD_LABELS) as MappableField[]).map(f => (
                             <option key={f} value={f}>{FIELD_LABELS[f]}</option>
                           ))}
+                          {(customFieldDefs ?? []).length > 0 && (
+                            <optgroup label="── שדות מותאמים ──">
+                              {(customFieldDefs ?? []).map(cf => (
+                                <option key={cf.id} value={`cf:${cf.id}`}>📋 {cf.label}</option>
+                              ))}
+                            </optgroup>
+                          )}
                         </select>
                       </div>
                     );
@@ -502,7 +590,10 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
                               {h || `${t('excelImport.colPrefix')} ${i + 1}`}
                               {mapping[h] !== 'skip' && mapping[h] && (
                                 <span className="mr-1 text-emerald-400 text-[10px]">
-                                  → {FIELD_LABELS[mapping[h]].replace(/[🏢👤📞✉️💰📊🔗]/g, '').replace(' *','').trim()}
+                                  → {mapping[h].startsWith('cf:')
+                                    ? (customFieldDefs?.find(cf => `cf:${cf.id}` === mapping[h])?.label ?? mapping[h])
+                                    : (FIELD_LABELS[mapping[h] as MappableField] ?? mapping[h]).replace(/[🏢👤📞✉️💰📊🔗]/g, '').replace(' *','').trim()
+                                  }
                                 </span>
                               )}
                             </th>
@@ -570,6 +661,11 @@ export default function ExcelImportModal({ onImport, onClose, currentUser }: Pro
               <div>
                 <p className="text-white font-black text-2xl">{t('excelImport.done')}</p>
                 <p className="text-slate-400 text-sm mt-1">{t('excelImport.doneDesc')}</p>
+                {statusOverride && (
+                  <p className="text-xs mt-2" style={{ color: availableStatuses.find(s => s.label === statusOverride)?.color ?? '#a5b4fc' }}>
+                    ✓ כל הלידים יובאו לסטטוס: <strong>{statusOverride}</strong>
+                  </p>
+                )}
               </div>
               <div className="flex gap-3 justify-center">
                 <div className="bg-emerald-500/15 border border-emerald-500/30 rounded-2xl px-8 py-4 text-center">

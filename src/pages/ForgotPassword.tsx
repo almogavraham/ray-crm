@@ -45,7 +45,7 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dir}>
+    <div className="min-h-screen flex items-center justify-center p-4" dir={dir} style={{ background: 'linear-gradient(135deg,#f5f3ff 0%,#eef2ff 50%,#f0fdf4 100%)' }}>
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-10">
@@ -58,33 +58,33 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-2xl">
           {sent ? (
             /* ── Success state ── */
             <div className="text-center py-4">
               <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-5">
                 <CheckCircle2 size={36} className="text-emerald-400" />
               </div>
-              <h2 className="text-white font-bold text-xl mb-2">{t('forgotPassword.sentTitle')}</h2>
+              <h2 className="text-slate-800 font-bold text-xl mb-2">{t('forgotPassword.sentTitle')}</h2>
               <p className="text-slate-400 text-sm mb-2">
                 {t('forgotPassword.sentDesc')}
               </p>
               <p className="text-indigo-400 font-semibold text-sm mb-5">{email}</p>
-              <div className="bg-slate-800 rounded-xl p-4 text-right mb-6 space-y-2">
-                <p className="text-white text-xs font-bold">📧 {t('forgotPassword.sentInstructions')}</p>
-                <p className="text-slate-400 text-xs leading-relaxed">
+              <div className="rounded-xl p-4 text-right mb-6 space-y-2" style={{ background: 'linear-gradient(135deg,#f5f3ff,#eef2ff)', border: '1px solid #ddd6fe' }}>
+                <p className="text-violet-700 text-xs font-bold">📧 {t('forgotPassword.sentInstructions')}</p>
+                <p className="text-slate-600 text-xs leading-relaxed">
                   1. {t('forgotPassword.sentStep1')}
                 </p>
-                <p className="text-slate-400 text-xs leading-relaxed">
-                  2. {t('forgotPassword.sentStep2')} <span className="text-indigo-400 font-mono">noreply@chex-crm.firebaseapp.com</span>
+                <p className="text-slate-600 text-xs leading-relaxed">
+                  2. {t('forgotPassword.sentStep2')} <span className="text-violet-600 font-mono">noreply@chex-crm.firebaseapp.com</span>
                 </p>
-                <p className="text-slate-400 text-xs leading-relaxed">
+                <p className="text-slate-600 text-xs leading-relaxed">
                   3. {t('forgotPassword.sentStep3')}
                 </p>
-                <p className="text-slate-400 text-xs leading-relaxed">
+                <p className="text-slate-600 text-xs leading-relaxed">
                   4. {t('forgotPassword.sentStep4')}
                 </p>
-                <p className="text-amber-400 text-xs leading-relaxed mt-2">
+                <p className="text-amber-600 text-xs leading-relaxed mt-2">
                   ⚠️ {t('forgotPassword.sentSpamHint')}
                 </p>
               </div>
@@ -107,8 +107,8 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                 {t('forgotPassword.back')}
               </button>
 
-              <h1 className="text-white font-bold text-xl mb-1">{t('forgotPassword.title')}</h1>
-              <p className="text-slate-400 text-sm mb-8">
+              <h1 className="text-slate-800 font-bold text-xl mb-1">{t('forgotPassword.title')}</h1>
+              <p className="text-slate-500 text-sm mb-8">
                 {t('forgotPassword.desc')}
               </p>
 
@@ -124,7 +124,7 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                       required
                       autoFocus
                       placeholder="your@email.com"
-                      className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                      className="w-full bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-xl pr-10 pl-4 py-3 text-sm focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-colors"
                       dir="ltr"
                     />
                   </div>
@@ -148,8 +148,8 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                         </p>
                       </div>
                     </div>
-                    <div className="bg-slate-800 rounded-lg p-3 text-xs text-slate-300 space-y-1.5">
-                      <p className="font-bold text-white">{t('forgotPassword.configFixTitle')}</p>
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1.5">
+                      <p className="font-bold text-slate-800">{t('forgotPassword.configFixTitle')}</p>
                       <p>1. {t('forgotPassword.configStep1')}</p>
                       <p>2. {t('forgotPassword.configStep2')}</p>
                       <p>3. {t('forgotPassword.configStep3')}</p>
@@ -177,7 +177,8 @@ export default function ForgotPassword({ onBack }: ForgotPasswordProps) {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-indigo-500/25"
+                    className="w-full disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+                    style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow: '0 4px 16px #8b5cf640' }}
                   >
                     {loading ? t('forgotPassword.sending') : t('forgotPassword.sendLink')}
                   </button>

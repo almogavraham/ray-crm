@@ -8,6 +8,7 @@ import { db } from '../lib/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import type { Campaign, CampaignPlatform, CampaignStatus, CampaignObjective } from '../types';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
 const PLATFORM_META: Record<CampaignPlatform, { labelKey: string; emoji: string; ring: string; badge: string; dot: string }> = {
@@ -57,19 +58,50 @@ function emptyForm(): Omit<Campaign, 'id' | 'createdAt'> {
   };
 }
 
+/* ─── platform badge styles ─────────────────────────────────────────────── */
+function getPlatformBadgeStyle(platform: CampaignPlatform): React.CSSProperties {
+  switch (platform) {
+    case 'meta':     return { background: 'rgba(59,130,246,0.15)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.28)' };
+    case 'google':   return { background: 'rgba(239,68,68,0.15)',  color: '#f87171', border: '1px solid rgba(239,68,68,0.28)' };
+    case 'tiktok':   return { background: 'rgba(255,255,255,0.04)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.09)' };
+    case 'linkedin': return { background: 'rgba(14,165,233,0.15)', color: '#38bdf8', border: '1px solid rgba(14,165,233,0.28)' };
+    default:         return { background: 'rgba(255,255,255,0.04)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.09)' };
+  }
+}
+
+function getStatusBadgeStyle(status: CampaignStatus): React.CSSProperties {
+  switch (status) {
+    case 'active': return { background: 'rgba(16,185,129,0.15)', color: '#34d399', border: '1px solid rgba(16,185,129,0.28)' };
+    case 'paused': return { background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.28)' };
+    case 'ended':  return { background: 'rgba(255,255,255,0.04)', color: '#64748b', border: '1px solid rgba(255,255,255,0.09)' };
+    case 'draft':  return { background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.28)' };
+  }
+}
+
 /* ─── KPI Card ───────────────────────────────────────────────────────────── */
-function KpiCard({ icon: Icon, label, value, sub, color }: {
-  icon: React.ElementType; label: string; value: string; sub?: string; color: string;
+function KpiCard({ icon: Icon, label, value, sub, neonColor }: {
+  icon: React.ElementType; label: string; value: string; sub?: string; neonColor: string;
 }) {
+  const { c } = useTheme();
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center gap-4 shadow-sm">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${color}`}>
-        <Icon size={22} className="text-white" />
+    <div
+      className="rounded-2xl p-5 flex items-center gap-4"
+      style={{
+        background: 'linear-gradient(135deg,rgba(99,102,241,0.12),rgba(99,102,241,0.06))',
+        border: '1px solid rgba(99,102,241,0.25)',
+        backdropFilter: 'blur(8px)',
+      }}
+    >
+      <div
+        className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+        style={{ background: neonColor, boxShadow: `0 0 16px ${neonColor}66` }}
+      >
+        <Icon size={22} color="white" />
       </div>
       <div className="min-w-0">
-        <p className="text-xs text-slate-500 font-medium mb-0.5">{label}</p>
-        <p className="text-xl font-black text-slate-800 leading-tight">{value}</p>
-        {sub && <p className="text-[11px] text-slate-400 mt-0.5">{sub}</p>}
+        <p className="text-xs font-medium mb-0.5" style={{ color: c.textSecondary }}>{label}</p>
+        <p className="text-xl font-black leading-tight" style={{ color: c.textPrimary }}>{value}</p>
+        {sub && <p className="text-[11px] mt-0.5" style={{ color: c.textMuted }}>{sub}</p>}
       </div>
     </div>
   );
@@ -82,6 +114,7 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
   onDelete: (id: string) => void;
   onTogglePause: (c: Campaign) => void;
 }) {
+  const { c } = useTheme();
   const { t } = useLang();
   const plat   = PLATFORM_META[campaign.platform];
   const stat   = STATUS_META[campaign.status];
@@ -91,25 +124,43 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
   const crVal   = cr(campaign);
   const StatIcon = stat.icon;
   const platLabel = plat.labelKey.startsWith('campaigns.') ? t(plat.labelKey) : plat.labelKey;
+  const platBadgeStyle = getPlatformBadgeStyle(campaign.platform);
+  const statusBadgeStyle = getStatusBadgeStyle(campaign.status);
 
   return (
-    <div className={`bg-white rounded-2xl border-2 ${plat.ring} shadow-sm hover:shadow-md transition-all flex flex-col`}>
+    <div
+      className="rounded-2xl flex flex-col"
+      style={{
+        background: c.subtleBg,
+        border: `1px solid ${c.cardBorder}`,
+        backdropFilter: 'blur(8px)',
+      }}
+    >
       {/* Header */}
-      <div className="p-4 pb-3 border-b border-slate-100">
+      <div
+        className="p-4 pb-3"
+        style={{ borderBottom: `1px solid ${c.divider}` }}
+      >
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="text-2xl leading-none">{plat.emoji}</span>
             <div className="min-w-0">
-              <p className="font-bold text-slate-800 text-sm leading-tight truncate">{campaign.name}</p>
+              <p className="font-bold text-sm leading-tight truncate" style={{ color: c.textPrimary }}>{campaign.name}</p>
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${plat.badge}`}>
+                <span
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                  style={platBadgeStyle}
+                >
                   {platLabel}
                 </span>
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${stat.badge}`}>
+                <span
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1"
+                  style={statusBadgeStyle}
+                >
                   <StatIcon size={9} />
                   {t(stat.labelKey)}
                 </span>
-                <span className="text-[10px] text-slate-400 font-medium">
+                <span className="text-[10px] font-medium" style={{ color: c.textMuted }}>
                   {t(OBJECTIVE_KEYS[campaign.objective])}
                 </span>
               </div>
@@ -119,66 +170,80 @@ function CampaignCard({ campaign, onEdit, onDelete, onTogglePause }: {
             <button
               onClick={() => onTogglePause(campaign)}
               title={campaign.status === 'active' ? t('campaigns.pause') : t('campaigns.resume')}
-              className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"
+              className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+              style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}
             >
               {campaign.status === 'active'
-                ? <Pause size={12} className="text-slate-600" />
-                : <Play size={12} className="text-slate-600" />
+                ? <Pause size={12} color="rgba(255,255,255,0.6)" />
+                : <Play  size={12} color="rgba(255,255,255,0.6)" />
               }
             </button>
-            <button onClick={() => onEdit(campaign)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-blue-100 flex items-center justify-center transition-colors">
-              <Pencil size={12} className="text-slate-600" />
+            <button
+              onClick={() => onEdit(campaign)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+              style={{ background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)' }}
+            >
+              <Pencil size={12} color="#818cf8" />
             </button>
-            <button onClick={() => onDelete(campaign.id)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-red-100 flex items-center justify-center transition-colors">
-              <Trash2 size={12} className="text-red-500" />
+            <button
+              onClick={() => onDelete(campaign.id)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}
+            >
+              <Trash2 size={12} color="#f87171" />
             </button>
           </div>
         </div>
 
         {/* Budget bar */}
         <div className="mt-3">
-          <div className="flex justify-between text-[11px] text-slate-500 mb-1">
-            <span>{t('campaigns.expense')}: <span className="font-semibold text-slate-700">₪{fmt(campaign.spent)}</span></span>
-            <span>{t('campaigns.budget')}: <span className="font-semibold text-slate-700">₪{fmt(campaign.budget)}</span></span>
+          <div className="flex justify-between text-[11px] mb-1" style={{ color: c.textMuted }}>
+            <span>{t('campaigns.expense')}: <span className="font-semibold" style={{ color: c.textSecondary }}>₪{fmt(campaign.spent)}</span></span>
+            <span>{t('campaigns.budget')}: <span className="font-semibold" style={{ color: c.textSecondary }}>₪{fmt(campaign.budget)}</span></span>
           </div>
-          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="h-2 rounded-full overflow-hidden" style={{ background: c.subtleBg }}>
             <div
-              className={`h-full rounded-full transition-all ${
-                utilPct > 90 ? 'bg-red-500' : utilPct > 70 ? 'bg-amber-400' : 'bg-emerald-500'
-              }`}
-              style={{ width: `${utilPct}%` }}
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${utilPct}%`,
+                background: utilPct > 90 ? '#ef4444' : utilPct > 70 ? '#f59e0b' : '#10b981',
+              }}
             />
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5 text-left">{utilPct.toFixed(0)}% {t('campaigns.ofBudget')}</p>
+          <p className="text-[10px] mt-0.5 text-left" style={{ color: c.textMuted }}>{utilPct.toFixed(0)}% {t('campaigns.ofBudget')}</p>
         </div>
       </div>
 
       {/* Metrics grid */}
-      <div className="grid grid-cols-2 gap-px bg-slate-100 flex-1">
+      <div className="grid grid-cols-2 gap-px flex-1" style={{ background: c.subtleBg }}>
         {[
-          { label: t('campaigns.objLeads'), value: fmt(campaign.leads),           icon: Users,            color: 'text-indigo-600' },
-          { label: 'CPL',   value: cplVal > 0 ? `₪${fmt(Math.round(cplVal))}` : '—', icon: BadgeDollarSign, color: 'text-amber-600' },
-          { label: 'ROAS',  value: roasVal > 0 ? `×${roasVal.toFixed(1)}` : '—',     icon: TrendingUp,      color: 'text-emerald-600' },
-          { label: t('campaigns.conversion'), value: crVal > 0 ? `${crVal.toFixed(0)}%` : '—', icon: BarChart3, color: 'text-blue-600' },
+          { label: t('campaigns.objLeads'), value: fmt(campaign.leads),                                   icon: Users,            color: c.accentText },
+          { label: 'CPL',   value: cplVal > 0 ? `₪${fmt(Math.round(cplVal))}` : '—',                    icon: BadgeDollarSign,  color: '#fbbf24' },
+          { label: 'ROAS',  value: roasVal > 0 ? `×${roasVal.toFixed(1)}` : '—',                         icon: TrendingUp,       color: '#34d399' },
+          { label: t('campaigns.conversion'), value: crVal > 0 ? `${crVal.toFixed(0)}%` : '—',           icon: BarChart3,        color: '#60a5fa' },
         ].map(({ label, value, icon: MIcon, color }) => (
-          <div key={label} className="bg-white p-3 flex flex-col items-center gap-1">
-            <MIcon size={14} className={color} />
-            <p className="text-xs font-black text-slate-800">{value}</p>
-            <p className="text-[10px] text-slate-400">{label}</p>
+          <div
+            key={label}
+            className="p-3 flex flex-col items-center gap-1"
+            style={{ background: 'rgba(10,15,30,0.6)' }}
+          >
+            <MIcon size={14} color={color} />
+            <p className="text-xs font-black" style={{ color: c.textPrimary }}>{value}</p>
+            <p className="text-[10px]" style={{ color: c.textMuted }}>{label}</p>
           </div>
         ))}
       </div>
 
       {/* Footer date */}
       {(campaign.startDate || campaign.notes) && (
-        <div className="px-4 py-2 border-t border-slate-100">
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${c.divider}` }}>
           {campaign.startDate && (
-            <p className="text-[10px] text-slate-400">
+            <p className="text-[10px]" style={{ color: c.textMuted }}>
               📅 {campaign.startDate}{campaign.endDate ? ` — ${campaign.endDate}` : ''}
             </p>
           )}
           {campaign.notes && (
-            <p className="text-[10px] text-slate-500 mt-0.5 truncate">💬 {campaign.notes}</p>
+            <p className="text-[10px] mt-0.5 truncate" style={{ color: c.textMuted }}>💬 {campaign.notes}</p>
           )}
         </div>
       )}
@@ -194,6 +259,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
   saving?: boolean;
   saveError?: string | null;
 }) {
+  const { c } = useTheme();
   const { t } = useLang();
   const [form, setForm] = useState<Omit<Campaign, 'id' | 'createdAt'>>(
     initial ? {
@@ -208,25 +274,51 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
 
-  const lbl = 'block text-xs font-semibold text-slate-600 mb-1';
-  const inp = 'w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-slate-400 transition-colors';
+  const darkInpStyle: React.CSSProperties = {
+    background: c.subtleBg,
+    border: `1px solid ${c.cardBorder}`,
+    color: c.textPrimary,
+    borderRadius: '0.75rem',
+    padding: '0.625rem 0.75rem',
+    fontSize: '0.875rem',
+    width: '100%',
+    outline: 'none',
+  };
+
+  const lbl = 'block text-xs font-semibold mb-1';
+
   const numInp = (k: keyof typeof form) => (
     <input
       type="number" min={0} value={(form[k] as number) || ''}
       onChange={e => set(k, Number(e.target.value) as (typeof form)[typeof k])}
-      className={inp}
+      style={darkInpStyle}
       placeholder="0"
     />
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[95vh] sm:max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
+      style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[95vh] sm:max-h-[90vh] flex flex-col"
+        style={{ background: '#0d1526', border: '1px solid rgba(99,102,241,0.25)' }}
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <h2 className="font-black text-lg text-slate-800">{initial ? t('campaigns.editTitle') : t('campaigns.newTitle')}</h2>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
-            <X size={14} />
+        <div
+          className="flex items-center justify-between px-5 py-4"
+          style={{ borderBottom: `1px solid ${c.divider}` }}
+        >
+          <h2 className="font-black text-lg" style={{ color: c.textPrimary }}>{initial ? t('campaigns.editTitle') : t('campaigns.newTitle')}</h2>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+            style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}
+          >
+            <X size={14} color="rgba(255,255,255,0.6)" />
           </button>
         </div>
 
@@ -234,60 +326,65 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
           {/* Name */}
           <div>
-            <label className={lbl}>{t('campaigns.campaignName')}</label>
+            <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.campaignName')}</label>
             <input
-              className={inp} placeholder="למשל: Real Estate Leads - Q2"
-              value={form.name} onChange={e => set('name', e.target.value)}
+              style={darkInpStyle}
+              placeholder="למשל: Real Estate Leads - Q2"
+              value={form.name}
+              onChange={e => set('name', e.target.value)}
             />
           </div>
 
           {/* Platform + Status */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>{t('campaigns.platform')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.platform')}</label>
               <div className="relative">
                 <select
                   value={form.platform}
                   onChange={e => set('platform', e.target.value as CampaignPlatform)}
-                  className={inp + ' appearance-none pr-3'}
+                  style={{ ...darkInpStyle, appearance: 'none', paddingRight: '0.75rem' }}
                 >
                   {Object.entries(PLATFORM_META).map(([k, v]) => (
-                    <option key={k} value={k}>{v.emoji} {v.labelKey.startsWith('campaigns.') ? t(v.labelKey) : v.labelKey}</option>
+                    <option key={k} value={k} style={{ background: '#0d1526' }}>
+                      {v.emoji} {v.labelKey.startsWith('campaigns.') ? t(v.labelKey) : v.labelKey}
+                    </option>
                   ))}
                 </select>
-                <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" color="rgba(255,255,255,0.4)" />
               </div>
             </div>
             <div>
-              <label className={lbl}>{t('campaigns.status')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.status')}</label>
               <div className="relative">
                 <select
                   value={form.status}
                   onChange={e => set('status', e.target.value as CampaignStatus)}
-                  className={inp + ' appearance-none pr-3'}
+                  style={{ ...darkInpStyle, appearance: 'none', paddingRight: '0.75rem' }}
                 >
                   {Object.entries(STATUS_META).map(([k, v]) => (
-                    <option key={k} value={k}>{t(v.labelKey)}</option>
+                    <option key={k} value={k} style={{ background: '#0d1526' }}>{t(v.labelKey)}</option>
                   ))}
                 </select>
-                <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <ChevronDown size={14} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" color="rgba(255,255,255,0.4)" />
               </div>
             </div>
           </div>
 
           {/* Objective */}
           <div>
-            <label className={lbl}>{t('campaigns.objective')}</label>
-            <div className="grid grid-cols-4 gap-2">
+            <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.objective')}</label>
+            <div className="grid grid-cols-2 gap-2">
               {(Object.keys(OBJECTIVE_KEYS) as CampaignObjective[]).map(obj => (
                 <button
                   key={obj}
                   onClick={() => set('objective', obj)}
-                  className={`py-2 rounded-xl border text-xs font-semibold transition-all ${
+                  className="py-2 rounded-xl text-xs font-semibold transition-all"
+                  style={
                     form.objective === obj
-                      ? 'bg-black text-white border-black'
-                      : 'border-slate-200 text-slate-500 hover:border-slate-300'
-                  }`}
+                      ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.4)', color: c.accentText }
+                      : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }
+                  }
                 >
                   {t(OBJECTIVE_KEYS[obj])}
                 </button>
@@ -298,11 +395,11 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
           {/* Budget + Spent */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>{t('campaigns.monthlyBudget')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.monthlyBudget')}</label>
               {numInp('budget')}
             </div>
             <div>
-              <label className={lbl}>{t('campaigns.actualExpense')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.actualExpense')}</label>
               {numInp('spent')}
             </div>
           </div>
@@ -310,46 +407,47 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
           {/* Leads + Conversions */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>{t('campaigns.leadsGenerated')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.leadsGenerated')}</label>
               {numInp('leads')}
             </div>
             <div>
-              <label className={lbl}>{t('campaigns.clientsClosed')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.clientsClosed')}</label>
               {numInp('conversions')}
             </div>
           </div>
 
           {/* Revenue */}
           <div>
-            <label className={lbl}>{t('campaigns.revenueGenerated')}</label>
+            <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.revenueGenerated')}</label>
             {numInp('revenue')}
           </div>
 
           {/* Dates */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>{t('campaigns.startDate')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.startDate')}</label>
               <input
                 type="date" value={form.startDate}
                 onChange={e => set('startDate', e.target.value)}
-                className={inp}
+                style={darkInpStyle}
               />
             </div>
             <div>
-              <label className={lbl}>{t('campaigns.endDate')}</label>
+              <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.endDate')}</label>
               <input
                 type="date" value={form.endDate ?? ''}
                 onChange={e => set('endDate', e.target.value)}
-                className={inp}
+                style={darkInpStyle}
               />
             </div>
           </div>
 
           {/* Notes */}
           <div>
-            <label className={lbl}>{t('campaigns.notes')}</label>
+            <label className={lbl} style={{ color: c.textSecondary }}>{t('campaigns.notes')}</label>
             <textarea
-              className={inp + ' resize-none'} rows={2}
+              style={{ ...darkInpStyle, resize: 'none' }}
+              rows={2}
               placeholder={t('campaigns.notesPlaceholder')}
               value={form.notes ?? ''}
               onChange={e => set('notes', e.target.value)}
@@ -359,20 +457,32 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
 
         {/* Footer */}
         {saveError && (
-          <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
+          <div
+            className="mx-5 mb-2 px-3 py-2 rounded-xl text-xs"
+            style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}
+          >
             ⚠️ {saveError}
           </div>
         )}
-        <div className="px-5 py-4 border-t border-slate-100 flex gap-3">
+        <div
+          className="px-5 py-4 flex gap-3"
+          style={{ borderTop: `1px solid ${c.divider}` }}
+        >
           <button
             onClick={() => { if (form.name.trim() && !saving) onSave(form); }}
             disabled={!form.name.trim() || saving}
-            className="flex-1 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2"
+            className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.3)' }}
           >
             {saving && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
             {saving ? t('campaigns.saving') : initial ? t('campaigns.saveChanges') : t('campaigns.createCampaign')}
           </button>
-          <button onClick={onClose} disabled={saving} className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 transition-colors disabled:opacity-40">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2.5 rounded-xl text-sm transition-colors disabled:opacity-40"
+            style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary }}
+          >
             {t('common.cancel')}
           </button>
         </div>
@@ -386,6 +496,7 @@ function CampaignModal({ initial, onSave, onClose, saving, saveError }: {
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function Campaigns() {
   const { t, dir } = useLang();
+  const { isDark, c } = useTheme();
   const [campaigns, setCampaigns]     = useState<Campaign[]>([]);
   const [showModal, setShowModal]     = useState(false);
   const [editing, setEditing]         = useState<Campaign | undefined>();
@@ -475,17 +586,26 @@ export default function Campaigns() {
   const isEmpty = campaigns.length === 0;
 
   return (
-    <div className="space-y-5" dir={dir}>
-
+    <div
+      className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6 space-y-5"
+      dir={dir}
+      style={{
+        background: c.pageBg,
+        backgroundImage: c.pageBgImage,
+        backgroundSize: c.pageBgSize,
+        minHeight: 'calc(100vh - 56px)',
+      }}
+    >
       {/* ── Page header ────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl md:text-2xl font-black text-slate-800">{t('campaigns.title')}</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{t('campaigns.subtitle')}</p>
+          <h1 className="text-xl md:text-2xl font-black" style={{ color: c.textPrimary }}>{t('campaigns.title')}</h1>
+          <p className="text-sm mt-0.5" style={{ color: c.textSecondary }}>{t('campaigns.subtitle')}</p>
         </div>
         <button
           onClick={openNew}
-          className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors"
+          style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.3)' }}
         >
           <Plus size={16} /> {t('campaigns.new')}
         </button>
@@ -493,40 +613,49 @@ export default function Campaigns() {
 
       {/* ── KPI cards ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard icon={Wallet}        label={t('campaigns.totalExpenses')} value={`₪${fmt(Math.round(kpis.totalSpent))}`}   color="bg-indigo-500" />
-        <KpiCard icon={Users}         label={t('campaigns.totalLeads')}    value={fmt(kpis.totalLeads)}                      color="bg-blue-500"   sub={`${campaigns.filter(c=>c.status==='active').length} ${t('campaigns.activeCount')}`} />
-        <KpiCard icon={BadgeDollarSign} label={t('campaigns.avgCpl')} value={kpis.avgCPL > 0 ? `₪${fmt(Math.round(kpis.avgCPL))}` : '—'} color="bg-amber-500" />
-        <KpiCard icon={TrendingUp}    label={t('campaigns.totalRevenue')}  value={`₪${fmt(Math.round(kpis.totalRevenue))}`}  color="bg-emerald-500" sub={kpis.totalROAS > 0 ? `ROAS ×${kpis.totalROAS.toFixed(1)}` : undefined} />
+        <KpiCard icon={Wallet}          label={t('campaigns.totalExpenses')} value={`₪${fmt(Math.round(kpis.totalSpent))}`}                                       neonColor="#6366f1" />
+        <KpiCard icon={Users}           label={t('campaigns.totalLeads')}    value={fmt(kpis.totalLeads)}                                                           neonColor="#3b82f6" sub={`${campaigns.filter(c=>c.status==='active').length} ${t('campaigns.activeCount')}`} />
+        <KpiCard icon={BadgeDollarSign} label={t('campaigns.avgCpl')}        value={kpis.avgCPL > 0 ? `₪${fmt(Math.round(kpis.avgCPL))}` : '—'}                   neonColor="#f59e0b" />
+        <KpiCard icon={TrendingUp}      label={t('campaigns.totalRevenue')}  value={`₪${fmt(Math.round(kpis.totalRevenue))}`}                                      neonColor="#10b981" sub={kpis.totalROAS > 0 ? `ROAS ×${kpis.totalROAS.toFixed(1)}` : undefined} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm flex flex-col md:flex-row gap-3">
+      <div
+        className="rounded-2xl p-3 flex flex-col md:flex-row gap-3"
+        style={{
+          background: 'rgba(10,15,30,0.88)',
+          border: '1px solid rgba(99,102,241,0.2)',
+          backdropFilter: 'blur(16px)',
+        }}
+      >
         {/* Search */}
         <div className="relative flex-1">
-          <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2" color="rgba(255,255,255,0.35)" />
           <input
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder={t('campaigns.search')}
-            className="w-full pr-9 pl-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-slate-400 transition-colors"
+            className="w-full pr-9 pl-3 py-2 text-sm rounded-xl transition-colors focus:outline-none"
+            style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textPrimary }}
           />
           {search && (
             <button onClick={() => setSearch('')} className="absolute left-3 top-1/2 -translate-y-1/2">
-              <X size={12} className="text-slate-400" />
+              <X size={12} color="rgba(255,255,255,0.4)" />
             </button>
           )}
         </div>
 
         {/* Platform tabs */}
-        <div className="flex gap-1 overflow-x-auto">
+        <div className="flex gap-1 overflow-x-auto" dir="ltr">
           {PLATFORM_TAB_VALUES.map(({ value, labelKey }) => (
             <button
               key={value}
               onClick={() => setPlatFilter(value)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all"
+              style={
                 platFilter === value
-                  ? 'bg-black text-white'
-                  : 'text-slate-500 hover:bg-slate-100'
-              }`}
+                  ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.4)', color: c.accentText }
+                  : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }
+              }
             >
               {labelKey.startsWith('campaigns.') ? t(labelKey) : labelKey}
             </button>
@@ -534,16 +663,17 @@ export default function Campaigns() {
         </div>
 
         {/* Status filter */}
-        <div className="flex gap-1 overflow-x-auto">
+        <div className="flex gap-1 overflow-x-auto" dir="ltr">
           {(['all', 'active', 'paused', 'ended', 'draft'] as const).map(s => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all"
+              style={
                 statusFilter === s
-                  ? 'bg-black text-white'
-                  : 'text-slate-500 hover:bg-slate-100'
-              }`}
+                  ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.4)', color: c.accentText }
+                  : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }
+              }
             >
               {s === 'all' ? t('campaigns.allStatuses') : t(STATUS_META[s].labelKey)}
               <span className="mr-1 opacity-60">({statusCounts[s] ?? 0})</span>
@@ -555,18 +685,22 @@ export default function Campaigns() {
       {/* ── Empty state ─────────────────────────────────────────────────── */}
       {isEmpty && (
         <div className="flex flex-col items-center justify-center py-24 gap-6 text-center">
-          <div className="w-20 h-20 rounded-2xl bg-neutral-900 flex items-center justify-center shadow-lg">
-            <BarChart3 size={36} className="text-white" />
+          <div
+            className="w-20 h-20 rounded-2xl flex items-center justify-center"
+            style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', boxShadow: '0 0 24px rgba(99,102,241,0.2)' }}
+          >
+            <BarChart3 size={36} color="#818cf8" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-800 mb-2">{t('campaigns.noCampaigns')}</h2>
-            <p className="text-slate-400 text-sm max-w-sm">
+            <h2 className="text-2xl font-black mb-2" style={{ color: c.textPrimary }}>{t('campaigns.noCampaigns')}</h2>
+            <p className="text-sm max-w-sm" style={{ color: c.textMuted }}>
               {t('campaigns.noCampaignsDesc')}
             </p>
           </div>
           <button
             onClick={openNew}
-            className="flex items-center gap-2 bg-black text-white px-6 py-3 rounded-xl font-bold hover:bg-neutral-800 transition-colors"
+            className="flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-colors"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.3)' }}
           >
             <Plus size={18} /> {t('campaigns.createFirst')}
           </button>
@@ -575,9 +709,9 @@ export default function Campaigns() {
 
       {/* ── No results ──────────────────────────────────────────────────── */}
       {!isEmpty && filtered.length === 0 && (
-        <div className="text-center py-16 text-slate-400">
-          <p className="text-lg font-semibold">{t('campaigns.noResults')}</p>
-          <p className="text-sm mt-1">{t('campaigns.changeFilters')}</p>
+        <div className="text-center py-16">
+          <p className="text-lg font-semibold" style={{ color: c.textSecondary }}>{t('campaigns.noResults')}</p>
+          <p className="text-sm mt-1" style={{ color: c.textMuted }}>{t('campaigns.changeFilters')}</p>
         </div>
       )}
 

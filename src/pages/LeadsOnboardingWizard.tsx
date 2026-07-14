@@ -10,11 +10,10 @@ import {
   Target, Briefcase, TrendingUp, CheckCircle2,
   Zap, RefreshCw, User, DollarSign, ArrowLeft, Package,
 } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { getApiKey } from '../lib/apiKey';
 import type { WorkspaceProfile } from '../types';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 
 /* ── types ───────────────────────────────────────────────────────────────── */
 interface CardFieldOption {
@@ -112,14 +111,6 @@ export default function LeadsOnboardingWizard({ workspace, onComplete, onClose }
     setStep(4);
     setError('');
 
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      setError('מפתח API חסר — בדוק את קובץ ה-.env');
-      setStep(3);
-      generating.current = false;
-      return;
-    }
-
     // Build full context from ALL workspace data (registration + wizard answers)
     const existingProfile = workspace.aiProfile;
     const registrationInfo = [
@@ -157,9 +148,9 @@ ${registrationInfo || 'לא קיים'}
 {"idealClient":"...","painPoints":"...","salesProcess":"...","avgDealSize":"...","uniqueValue":"...","tone":"פורמלי או ידידותי או מקצועי","hotLeadSignals":"• סימן 1\n• סימן 2\n• סימן 3","prompt":"...","leftFieldOptions":[{"key":"unique_key_1","label":"שם השדה","description":"למה מתאים לעסק זה","prefix":"₪","quickOptions":[1000,5000,15000]},{"key":"unique_key_2","label":"שם השדה","description":"למה מתאים","prefix":"₪","quickOptions":[2000,8000,25000]},{"key":"unique_key_3","label":"שם השדה","description":"למה מתאים","prefix":"₪","quickOptions":[500,2000,10000]}]}`;
 
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const msg = await client.messages.create({
-        model: 'claude-opus-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         messages: [{ role: 'user', content: userPrompt }],
         system: systemPrompt,
@@ -212,7 +203,8 @@ ${registrationInfo || 'לא קיים'}
       setStep(5);
     } catch (err) {
       console.error(err);
-      setError('שגיאה ביצירת הפרופיל. נסה שוב.');
+      const msg = (err as { message?: string }).message ?? String(err);
+      setError(`שגיאה: ${msg}`);
       setStep(3);
     } finally {
       generating.current = false;

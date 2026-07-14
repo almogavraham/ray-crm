@@ -1,24 +1,37 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
-  MessageSquare, Mail, Star, ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
-  Sparkles, MessageCircle, FileSpreadsheet,
+  ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
+  Sparkles, MessageCircle, FileSpreadsheet, Snowflake, AlertCircle,
+  Zap, Clock, BarChart2, SlidersHorizontal, Mail, Send, PhoneOff, ShieldAlert,
+  UserCheck, UserMinus, Settings2,
 } from 'lucide-react';
 import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask, TeamMember } from '../types';
-import StatusBadge from '../components/StatusBadge';
+import type { StatusConfig } from '../lib/statusConfig';
+import { DEFAULT_STATUS_CONFIGS } from '../lib/statusConfig';
 import EmailModal from '../components/EmailModal';
 import ExcelImportModal from '../components/ExcelImportModal';
+import WhatsAppModal from '../components/WhatsAppModal';
 import DashboardAiPanel from '../components/DashboardAiPanel';
+import AiInsightCard from '../components/AiInsightCard';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
+import type { Insight } from '../lib/insightEngine';
 
-const ALL_STATUSES: LeadStatus[] = [
-  'חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי',
-];
-
+const ALL_STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
 const ALL_SOURCES = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 
-type SortField = 'company' | 'status' | 'budget' | 'lastUpdate' | 'aiScore';
+const NEON: Record<LeadStatus, string> = {
+  'חדש':        '#6366f1',
+  'בתהליך':     '#f97316',
+  'לקוח פעיל':  '#10b981',
+  'רימרקטינג':  '#8b5cf6',
+  'לא רלוונטי': '#64748b',
+};
+
+type SortField = 'company' | 'status' | 'budget' | 'lastUpdate' | 'aiScore' | 'createdAt';
 type SortDir   = 'asc' | 'desc';
+type TempType  = 'hot' | 'cold' | 'active' | 'normal';
 
 interface DashboardProps {
   leads: Lead[];
@@ -35,14 +48,33 @@ interface DashboardProps {
   currentUser?: string;
   onCreateTask?: (task: StandaloneTask) => void;
   onUpdateLead?: (lead: Lead) => void;
+  onUpdateStandaloneTask?: (task: StandaloneTask) => void;
   team?: TeamMember[];
   standaloneTask?: StandaloneTask[];
+  insights?: Insight[];
+  onOpenAi?: (query: string) => void;
+  statusConfigs?: StatusConfig[];
+  onOpenStatusEditor?: () => void;
 }
 
-// ─── safe helpers ──────────────────────────────────────────────────────────────
-const safeStr  = (v: unknown) => (v == null ? '' : String(v));
-const safeArr  = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-const safeNum  = (v: unknown) => (isFinite(Number(v)) ? Number(v) : 0);
+// ─── Dashboard task type for the "My Day" list ──────────────────────────────
+interface DashTask {
+  id: string;
+  description: string;
+  date: string;
+  time: string;
+  priority: import('../types').TaskPriority;
+  completed: boolean;
+  company: string;
+  lead: import('../types').Lead | null;
+  isStandalone: boolean;
+  standaloneRef?: StandaloneTask;
+}
+
+// ─── safe helpers ───────────────────────────────────────────────────────────────
+const safeStr = (v: unknown) => (v == null ? '' : String(v));
+const safeArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+const safeNum = (v: unknown) => (isFinite(Number(v)) ? Number(v) : 0);
 
 function parseDate(d: string | undefined): number {
   if (!d) return 0;
@@ -52,78 +84,337 @@ function parseDate(d: string | undefined): number {
   return isNaN(ts) ? 0 : ts;
 }
 
-// ─── Dashboard ─────────────────────────────────────────────────────────────────
+function daysSince(s: string) {
+  try {
+    const p = s.split('/');
+    const d = p.length === 3 ? new Date(`${p[2]}-${p[1]}-${p[0]}`) : new Date(s);
+    return Math.floor((Date.now() - d.getTime()) / 86400000);
+  } catch { return 0; }
+}
+
+function isTaskDueSoon(dateStr: string) {
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    const now = new Date(new Date().toDateString());
+    const diff = Math.floor((d.getTime() - now.getTime()) / 86400000);
+    return diff >= 0 && diff <= 1;
+  } catch { return false; }
+}
+
+function isTaskOverdue(dateStr: string) {
+  try {
+    return new Date(dateStr + 'T00:00:00') < new Date(new Date().toDateString());
+  } catch { return false; }
+}
+
+/** Estimate a local AI score when lead.aiScore is 0 */
+function estimateScore(lead: Lead): number {
+  let s = 30; // base
+  const budget = safeNum(lead.budget);
+  if (budget > 50000) s += 20;
+  else if (budget > 20000) s += 14;
+  else if (budget > 5000)  s += 8;
+  if (lead.phone)  s += 6;
+  if (lead.email)  s += 4;
+  const stale = daysSince(lead.lastUpdate);
+  if (stale <= 3)  s += 18;
+  else if (stale <= 7)  s += 12;
+  else if (stale <= 14) s += 4;
+  else if (stale > 30)  s -= 12;
+  const openTasks = lead.tasks.filter(t => !t.completed).length;
+  if (openTasks > 0) s += 8;
+  const overdue = lead.tasks.filter(t => !t.completed && isTaskOverdue(t.date)).length;
+  if (overdue > 0) s -= 10;
+  if (lead.status === 'לקוח פעיל')  s += 12;
+  if (lead.status === 'לא רלוונטי') s -= 20;
+  return Math.max(5, Math.min(99, Math.round(s)));
+}
+
+function getEffectiveScore(lead: Lead): number {
+  const stored = safeNum(lead.aiScore);
+  return stored > 0 ? stored : estimateScore(lead);
+}
+
+function getTemperature(lead: Lead): TempType {
+  const stale = daysSince(lead.lastUpdate);
+  const hasSoonTask = lead.tasks.some(t => !t.completed && isTaskDueSoon(t.date));
+  if (hasSoonTask) return 'active';
+  if (lead.aiScore >= 75 && stale < 7) return 'hot';
+  if (stale > 21) return 'cold';
+  return 'normal';
+}
+
+function calcConversion(lead: Lead): number {
+  let score = getEffectiveScore(lead);
+  if ((lead.budget ?? 0) > 15000) score += 10;
+  if (lead.phone) score += 5;
+  if (daysSince(lead.lastUpdate) > 14) score -= 15;
+  const overdue = lead.tasks.filter(t => !t.completed && isTaskOverdue(t.date));
+  if (overdue.length > 0) score -= 20;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+// ─── Dashboard ──────────────────────────────────────────────────────────────────
 export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
   compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser, onCreateTask, onUpdateLead,
-  team, standaloneTask,
+  onUpdateStandaloneTask, team, standaloneTask, insights = [], onOpenAi,
+  statusConfigs = DEFAULT_STATUS_CONFIGS, onOpenStatusEditor,
 }: DashboardProps) {
   const { t } = useLang();
-  const [search,       setSearch]       = useState('');
-  const [activeStatus, setActiveStatus] = useState<LeadStatus | 'הכל'>('הכל');
-  const [tasksExpanded,setTasksExpanded]= useState(true);
-  const [sourceFilter, setSourceFilter] = useState('');
-  const [showFilters,  setShowFilters]  = useState(false);
-  const [emailLead,    setEmailLead]    = useState<Lead | null>(null);
-  const [sortField,    setSortField]    = useState<SortField>('lastUpdate');
-  const [sortDir,      setSortDir]      = useState<SortDir>('desc');
-  const [selected,          setSelected]          = useState<Set<string>>(new Set());
-  const [bulkStatus,        setBulkStatus]        = useState<LeadStatus | ''>('');
-  const [deleteConfirm,     setDeleteConfirm]     = useState(false);
-  const [bannerDismissed,   setBannerDismissed]   = useState(false);
-  const [showExcelImport,   setShowExcelImport]   = useState(false);
+  const { isDark, c } = useTheme();
+  const [search,         setSearch]         = useState('');
+  const [activeStatus,   setActiveStatus]   = useState<LeadStatus | 'הכל'>('הכל');
+  const [tasksExpanded,  setTasksExpanded]  = useState(false); // "היום שלי" starts collapsed on entry
+  const [sourceFilter,   setSourceFilter]   = useState('');
+  const [showFilters,    setShowFilters]    = useState(false);
+  const [emailLead,      setEmailLead]      = useState<Lead | null>(null);
+  const [whatsAppLead,   setWhatsAppLead]   = useState<Lead | null>(null);
+  const [sortField,      setSortField]      = useState<SortField>('lastUpdate');
+  const [sortDir,        setSortDir]        = useState<SortDir>('desc');
+  const [selected,       setSelected]       = useState<Set<string>>(new Set());
+  const [bulkStatus,     setBulkStatus]     = useState<LeadStatus | ''>('');
+  const [deleteConfirm,  setDeleteConfirm]  = useState(false);
+  const [bannerDismissed,setBannerDismissed]= useState(false);
+  const [showExcelImport,setShowExcelImport]= useState(false);
+  type QuickFilter = 'hot' | 'objections' | 'new' | null;
+  const [quickFilter,    setQuickFilter]    = useState<QuickFilter>(null);
 
-  // ── KPI counts ──────────────────────────────────────────────────────────────
-  const hotLeads     = leads.filter(l => safeNum(l.budget) >= 15000).length;
-  const activeClients= leads.filter(l => l.status === 'לקוח פעיל').length;
-  const onboarding   = leads.filter(l => l.status === 'בתהליך').length;
-  const newLeads     = leads.filter(l => l.status === 'חדש').length;
+  // ── Bulk messaging modal ────────────────────────────────────────────────────
+  const [showBulkModal,   setShowBulkModal]   = useState(false);
+  const [bulkChannel,     setBulkChannel]     = useState<'email' | 'whatsapp'>('email');
+  const [bulkRecipients,  setBulkRecipients]  = useState<'all' | 'status' | 'source'>('all');
+  const [bulkFilterValue, setBulkFilterValue] = useState('');
+  const [bulkTitle,       setBulkTitle]       = useState('');
+  const [bulkContent,     setBulkContent]     = useState('');
+  const [bulkStep,        setBulkStep]        = useState<1 | 2 | 3>(1);
+
+  // ── Advanced filter panel ───────────────────────────────────────────────────
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [filterObjection,    setFilterObjection]    = useState('');
+  const [filterSource,       setFilterSource]       = useState('');
+  const [filterNoAnswer,     setFilterNoAnswer]     = useState(false);
+  const [filterUntreated,    setFilterUntreated]    = useState(false);
+
+  // ── Editing task from My Day ─────────────────────────────────────────────────
+  const [editingDashTask, setEditingDashTask] = useState<DashTask | null>(null);
+
+  // ── Recommendation panel ─────────────────────────────────────────────────────
+  type RecInsight = {
+    icon: string; color: string; bg: string; border: string; text: string;
+    action: string; guidance: string;
+    insightLeads: Lead[];
+    insightTasks: DashTask[];
+  };
+  const [recPanel, setRecPanel] = useState<RecInsight | null>(null);
+
+  // ── Inline agent assignment ──────────────────────────────────────────────────
+  const [assignOpen, setAssignOpen] = useState<string | null>(null); // lead.id
+
+  useEffect(() => {
+    if (!assignOpen) return;
+    const handler = () => setAssignOpen(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [assignOpen]);
+
+  const handleAssign = useCallback((lead: Lead, agentName: string | null) => {
+    if (!onUpdateLead) return;
+    onUpdateLead({ ...lead, assignedTo: agentName ?? '' });
+    setAssignOpen(null);
+  }, [onUpdateLead]);
+
+  // ── Hot-lead scoring by activity log ────────────────────────────────────────
+  const isHotLead = useCallback((l: Lead): boolean => {
+    const weekAgo = Date.now() - 7 * 86400000;
+    const log = safeArr<import('../types').LeadActivity>(l.activityLog as import('../types').LeadActivity[]);
+    const lastActTime  = log.length ? new Date(log[log.length - 1].timestamp).getTime() : 0;
+    const lastContTime = (l as any).lastContactDate ? new Date((l as any).lastContactDate).getTime() : 0;
+    const recentActivity = Math.max(lastActTime, lastContTime) >= weekAgo;
+    return recentActivity || (safeNum(l.aiScore) >= 70 && ['חדש','בתהליך'].includes(l.status));
+  }, []);
+
+  // ── KPI counts ───────────────────────────────────────────────────────────────
+  const hotLeads      = leads.filter(isHotLead).length;
+  const activeClients = leads.filter(l => l.status === 'לקוח פעיל').length;
+  const onboarding    = leads.filter(l => l.status === 'בתהליך').length;
+  const newLeads      = leads.filter(l => l.status === 'חדש').length;
   const conversionRate = leads.length > 0 ? Math.round((activeClients / leads.length) * 100) : 0;
+  const untreatedCount = leads.filter(l => l.status === 'חדש' && !safeArr(l.activityLog).length && !l.lastContactDate).length;
 
-  const upcomingTasks = leads
-    .flatMap(l => safeArr<import('../types').Task>(l.tasks).filter(t => !t.completed).map(t => ({ ...t, company: safeStr(l.company), lead: l })))
-    .slice(0, 5);
+  // ── Bulk messaging helpers ───────────────────────────────────────────────────
+  const getBulkTargetLeads = () => {
+    if (bulkRecipients === 'all') return leads;
+    if (bulkRecipients === 'status') return leads.filter(l => l.status === bulkFilterValue);
+    if (bulkRecipients === 'source') return leads.filter(l => l.source === bulkFilterValue);
+    return leads;
+  };
 
-  const statusCounts = ALL_STATUSES.reduce((acc, s) => {
+  const handleBulkEmail = () => {
+    const targets = getBulkTargetLeads().filter(l => l.email);
+    const emails = targets.slice(0, 50).map(l => l.email).join(',');
+    const mailto = `mailto:${emails}?subject=${encodeURIComponent(bulkTitle)}&body=${encodeURIComponent(bulkContent)}`;
+    window.open(mailto, '_blank');
+    setShowBulkModal(false);
+    setBulkStep(1);
+  };
+
+  const handleBulkWhatsApp = () => {
+    const targets = getBulkTargetLeads().filter(l => l.phone);
+    if (targets.length === 0) return;
+    const msg = `${bulkTitle}\n\n${bulkContent}`;
+    const firstPhone = targets[0].phone!.replace(/\D/g, '');
+    const formattedPhone = firstPhone.startsWith('0') ? '972' + firstPhone.slice(1) : firstPhone;
+    window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+    if (targets.length > 1) {
+      onToast?.(`נפתח וואטסאפ ל-${targets[0].contactName}. ${targets.length - 1} נמענים נוספים ממתינים.`, 'info');
+    }
+    setShowBulkModal(false);
+    setBulkStep(1);
+  };
+
+  // Lead-embedded tasks
+  const leadTasks: DashTask[] = leads
+    .flatMap(l => safeArr<import('../types').Task>(l.tasks).filter(t => !t.completed).map(t => ({
+      id:          t.id,
+      description: t.description,
+      date:        t.date,
+      time:        t.time ?? '',
+      priority:    (t.priority ?? 'medium') as import('../types').TaskPriority,
+      completed:   false,
+      company:     safeStr(l.company),
+      lead:        l as import('../types').Lead,
+      isStandalone: false,
+    })));
+
+  // Standalone tasks (from the tasks subcollection)
+  const standaloneMapped: DashTask[] = safeArr<import('../types').StandaloneTask>(standaloneTask)
+    .filter(t => !t.completed)
+    .map(t => ({
+      id:           `standalone-${t.id}`,
+      description:  t.description ?? '',
+      date:         t.date ?? '',
+      time:         t.time ?? '',
+      completed:    false,
+      priority:     (t.priority ?? 'medium') as import('../types').TaskPriority,
+      company:      t.leadId ? safeStr(leads.find(l => l.id === t.leadId)?.company) : '—',
+      lead:         t.leadId ? (leads.find(l => l.id === t.leadId) ?? null) : null,
+      isStandalone: true,
+      standaloneRef: t,
+    }));
+
+  const upcomingTasks: DashTask[] = [...leadTasks, ...standaloneMapped]
+    .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+    .slice(0, 8);
+
+  // ── Daily insights ───────────────────────────────────────────────────────────
+  const todayISO = new Date().toISOString().split('T')[0];
+  const staleInsightLeads = leads
+    .filter(l => ['חדש','בתהליך','רימרקטינג'].includes(l.status) && daysSince(l.lastUpdate) >= 7)
+    .sort((a, b) => daysSince(b.lastUpdate) - daysSince(a.lastUpdate))
+    .slice(0, 8);
+  const hotInsightLeads = leads
+    .filter(l => isHotLead(l) && ['חדש','בתהליך'].includes(l.status))
+    .sort((a, b) => safeNum(b.aiScore) - safeNum(a.aiScore))
+    .slice(0, 8);
+  const allTasks = [...leadTasks, ...standaloneMapped];
+  const todayInsightTasks  = allTasks.filter(t => t.date === todayISO);
+  const overdueInsightTasks = allTasks.filter(t => t.date && t.date < todayISO);
+  const staleLeadsCount   = staleInsightLeads.length;
+  const overdueTasksCount = overdueInsightTasks.length;
+  const hotLeadsToContact = hotInsightLeads.length;
+  const todayTasksCount   = todayInsightTasks.length;
+
+  const dailyInsights = [
+    staleLeadsCount > 0 && {
+      icon: '⏰', color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.25)',
+      text: `${staleLeadsCount} לידים לא עודכנו מעל שבוע`,
+      action: `איזה לידים לא עודכנו מעל 7 ימים ומה כדאי לעשות?`,
+      guidance: 'הלידים האלה לא עודכנו מזמן — כדאי לחדש קשר. שלח מייל אישי, הודעת WhatsApp, או התקשר. אחרי הפנייה — עדכן סטטוס והוסף הערה.',
+      insightLeads: staleInsightLeads,
+      insightTasks: [] as DashTask[],
+    },
+    hotLeadsToContact > 0 && {
+      icon: '🔥', color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.2)',
+      text: `${hotLeadsToContact} לידים חמים ממתינים לתשומת לב`,
+      action: `מי הלידים החמים ביותר שכדאי לפנות אליהם היום?`,
+      guidance: 'אלה ההזדמנויות הכי טובות שלך עכשיו! יש להם ציון AI גבוה ופעילות עדכנית. הגיע הזמן לסגור — שלח הצעת מחיר, קבע פגישה, או פנה אישית.',
+      insightLeads: hotInsightLeads,
+      insightTasks: [] as DashTask[],
+    },
+    todayTasksCount > 0 && {
+      icon: '✅', color: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.2)',
+      text: `${todayTasksCount} משימות מתוכננות להיום`,
+      action: `מה המשימות שלי להיום?`,
+      guidance: 'אלה המשימות שתכננת להיום. סמן כל משימה שהשלמת, ועדכן לידים רלוונטיים בהתאם.',
+      insightLeads: [] as Lead[],
+      insightTasks: todayInsightTasks,
+    },
+    overdueTasksCount > 0 && !todayTasksCount && {
+      icon: '⚠️', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)',
+      text: `${overdueTasksCount} משימות שפג תוקפן`,
+      action: `אילו משימות עברו את המועד שלהן?`,
+      guidance: 'משימות שפג תוקפן — טפל בהן מיד או עדכן תאריך. עיכוב בטיפול בלידים עלול לגרום לאיבוד הזדמנויות.',
+      insightLeads: [] as Lead[],
+      insightTasks: overdueInsightTasks,
+    },
+    staleLeadsCount === 0 && hotLeadsToContact === 0 && todayTasksCount === 0 && overdueTasksCount === 0 && {
+      icon: '🎯', color: '#6366f1', bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.2)',
+      text: 'הכל עדכני — יום מצוין!',
+      action: `מה ההזדמנויות הטובות ביותר שיש לי כרגע?`,
+      guidance: 'אין פעולות דחופות — הכל מטופל. זה זמן טוב להכין הצעות מחיר חדשות או לנתח את הפייפליין.',
+      insightLeads: [] as Lead[],
+      insightTasks: [] as DashTask[],
+    },
+  ].filter(Boolean) as Array<{ icon: string; color: string; bg: string; border: string; text: string; action: string; guidance: string; insightLeads: Lead[]; insightTasks: DashTask[] }>;
+  const shownInsights = dailyInsights.slice(0, 3);
+
+  const dynamicStatuses = statusConfigs.map(c => c.label);
+  const statusCounts = dynamicStatuses.reduce((acc, s) => {
     acc[s] = leads.filter(l => l.status === s).length;
     return acc;
   }, {} as Record<LeadStatus, number>);
 
-  // ── Sort handler ─────────────────────────────────────────────────────────────
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortField(field); setSortDir('desc'); }
   };
 
-  // ── Filtered + sorted leads ──────────────────────────────────────────────────
   const filtered = useMemo(() => {
     const q = safeStr(search).toLowerCase();
+    const weekAgo = Date.now() - 7 * 86400000;
     const base = leads.filter(l => {
-      const matchSearch = !q
-        || [l.company, l.contactName, l.phone, l.email].some(f => safeStr(f).toLowerCase().includes(q));
+      const matchSearch = !q || [l.company, l.contactName, l.phone, l.email].some(f => safeStr(f).toLowerCase().includes(q));
       const matchStatus = activeStatus === 'הכל' || l.status === activeStatus;
       const matchSource = !sourceFilter || l.source === sourceFilter;
-      return matchSearch && matchStatus && matchSource;
+      let matchQuick = true;
+      if (quickFilter === 'hot')        matchQuick = isHotLead(l);
+      if (quickFilter === 'objections') matchQuick = !!(l as any).objection;
+      if (quickFilter === 'new')        matchQuick = parseDate(l.lastUpdate) >= weekAgo || l.status === 'חדש';
+      // Advanced filters
+      const matchObjection  = !filterObjection || (l as any).objection === filterObjection;
+      const matchAdvSource  = !filterSource || l.source === filterSource;
+      const matchNoAnswer   = !filterNoAnswer || ((l as any).nextFollowUpDate && new Date((l as any).nextFollowUpDate) < new Date());
+      const matchUntreated  = !filterUntreated || (l.status === 'חדש' && !safeArr(l.activityLog).length && !l.lastContactDate);
+      return matchSearch && matchStatus && matchSource && matchQuick && matchObjection && matchAdvSource && matchNoAnswer && matchUntreated;
     });
-
     return [...base].sort((a, b) => {
       let cmp = 0;
       if (sortField === 'company')    cmp = safeStr(a.company).localeCompare(safeStr(b.company), 'he');
       if (sortField === 'status')     cmp = safeStr(a.status).localeCompare(safeStr(b.status), 'he');
       if (sortField === 'budget')     cmp = safeNum(a.budget) - safeNum(b.budget);
-      if (sortField === 'aiScore')    cmp = safeNum(a.aiScore)    - safeNum(b.aiScore);
+      if (sortField === 'aiScore')    cmp = safeNum(a.aiScore) - safeNum(b.aiScore);
       if (sortField === 'lastUpdate') cmp = parseDate(a.lastUpdate) - parseDate(b.lastUpdate);
+      if (sortField === 'createdAt')  cmp = (a.createdAt ?? 0) - (b.createdAt ?? 0);
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [leads, search, activeStatus, sourceFilter, sortField, sortDir]);
+  }, [leads, search, activeStatus, sourceFilter, sortField, sortDir, quickFilter, filterObjection, filterSource, filterNoAnswer, filterUntreated, isHotLead]);
 
-  // ── CSV Export ───────────────────────────────────────────────────────────────
   const exportCSV = () => {
     const headers = ['חברה', 'איש קשר', 'טלפון', 'מייל', 'סטטוס', 'תקציב', 'מקור', 'ציון AI'];
     const rows = filtered.map(l => [
       safeStr(l.company), safeStr(l.contactName), safeStr(l.phone), safeStr(l.email),
-      safeStr(l.status), safeNum(l.budget),
-      safeStr(l.source), safeNum(l.aiScore),
+      safeStr(l.status), safeNum(l.budget), safeStr(l.source), safeNum(l.aiScore),
     ]);
     const csv  = [headers, ...rows].map(r => r.join(',')).join('\n');
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -133,19 +424,12 @@ export default function Dashboard({
     onToast?.('קובץ CSV יוצא בהצלחה', 'success');
   };
 
-  // ── Selection ────────────────────────────────────────────────────────────────
-  const toggleSelect = (id: string) =>
-    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
-  const toggleSelectAll = () =>
-    setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(l => l.id)));
+  const toggleSelect    = (id: string) => setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const toggleSelectAll = () => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(l => l.id)));
   const clearSelection  = () => { setSelected(new Set()); setBulkStatus(''); setDeleteConfirm(false); };
 
   const handleBulkDelete = () => {
-    if (!deleteConfirm) {
-      setDeleteConfirm(true);
-      setTimeout(() => setDeleteConfirm(false), 3000);
-      return;
-    }
+    if (!deleteConfirm) { setDeleteConfirm(true); setTimeout(() => setDeleteConfirm(false), 3000); return; }
     onBulkDelete?.([...selected]);
     clearSelection();
   };
@@ -155,100 +439,197 @@ export default function Dashboard({
     clearSelection();
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────────
   const needsSetup = workspace && !workspace.leadsSetupDone;
 
-  return (
-    <div className="space-y-4">
-      {emailLead && <EmailModal lead={emailLead} workspace={workspace} onClose={() => setEmailLead(null)} />}
+  const dotGrid: React.CSSProperties = {
+    backgroundImage: 'radial-gradient(circle, rgba(99,102,241,0.12) 1px, transparent 1px)',
+    backgroundSize: '24px 24px',
+  };
 
-      {/* ── Lead card setup banner (shows until wizard is completed) ── */}
+  return (
+    <div
+      className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6 space-y-4"
+      style={{ background: c.pageBg, backgroundImage: c.pageBgImage, backgroundSize: c.pageBgSize, minHeight: 'calc(100vh - 56px)' }}
+      dir="rtl"
+    >
+      {emailLead    && <EmailModal    lead={emailLead}    workspace={workspace} onClose={() => setEmailLead(null)} />}
+      {whatsAppLead && <WhatsAppModal lead={whatsAppLead} workspace={workspace} onClose={() => setWhatsAppLead(null)} />}
+
+      {/* ── AI Insight Card ── */}
+      {onOpenAi && insights.length > 0 && (
+        <AiInsightCard insights={insights} currentPage="dashboard" onOpenAi={onOpenAi} />
+      )}
+
+      {/* ── Setup banner ── */}
       {needsSetup && !bannerDismissed && (
-        <div className="relative bg-gradient-to-l from-indigo-600 to-violet-600 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-4 shadow-lg shadow-indigo-500/20" dir="rtl">
-          {/* Dismiss */}
-          <button
-            onClick={() => setBannerDismissed(true)}
-            className="absolute left-3 top-3 text-white/50 hover:text-white transition-colors"
-          >
+        <div className="relative rounded-2xl px-5 py-4 flex flex-wrap items-center gap-4"
+          style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', border: '1px solid rgba(99,102,241,0.5)', boxShadow: '0 4px 24px rgba(99,102,241,0.3)' }}>
+          <button onClick={() => setBannerDismissed(true)} className="absolute left-3 top-3 transition-colors" style={{ color: 'rgba(255,255,255,0.5)' }}>
             <X size={14} />
           </button>
-
-          {/* Icon */}
-          <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.25)' }}>
             <Sparkles size={20} className="text-white" />
           </div>
-
-          {/* Text */}
           <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-sm">עצב את כרטיס הלקוח שלך</p>
-            <p className="text-white/70 text-xs mt-0.5 hidden sm:block">
-              ענה על 3 שאלות קצרות ו-AI יתאים את המערכת לעסק שלך
-            </p>
+            <p className="font-bold text-sm text-white">עצב את כרטיס הלקוח שלך</p>
+            <p className="text-xs mt-0.5 hidden sm:block" style={{ color: 'rgba(255,255,255,0.7)' }}>ענה על 3 שאלות קצרות ו-AI יתאים את המערכת לעסק שלך</p>
           </div>
-
-          {/* CTA */}
-          <button
-            onClick={onOpenLeadsWizard}
-            className="shrink-0 bg-white text-indigo-700 font-bold text-sm px-4 py-2 rounded-xl hover:bg-indigo-50 transition-colors flex items-center gap-1.5 shadow"
-          >
-            <Sparkles size={13} />
-            מתחילים
+          <button onClick={onOpenLeadsWizard} className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl flex items-center gap-1.5 transition-all text-white"
+            style={{ background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.35)', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
+            onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.3)'; }}
+            onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.2)'; }}>
+            <Sparkles size={13} />מתחילים
           </button>
         </div>
       )}
 
-      {/* Upcoming Tasks */}
-      {upcomingTasks.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {/* ── My Day Section ── */}
+      {(upcomingTasks.length > 0 || shownInsights.length > 0) && (
+        <div className="rounded-2xl overflow-hidden"
+          style={{ background: 'rgba(10,15,30,0.7)', border: '1px solid rgba(99,102,241,0.18)', backdropFilter: 'blur(12px)' }}>
+          {/* Header */}
           <div
-            className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-slate-50 transition-colors"
+            className="flex items-center justify-between px-5 py-3 cursor-pointer"
+            style={{ borderBottom: tasksExpanded ? '1px solid rgba(255,255,255,0.06)' : 'none', background: 'rgba(99,102,241,0.06)' }}
             onClick={() => setTasksExpanded(v => !v)}
           >
-            <ChevronDown size={16} className={`text-slate-400 transition-transform ${tasksExpanded ? '' : '-rotate-90'}`} />
             <div className="flex items-center gap-3">
-              <span className="bg-red-500 text-white text-xs font-bold px-2.5 py-0.5 rounded-full">{upcomingTasks.length} דחופות</span>
-              <span className="font-semibold text-slate-700">המשימות שלי</span>
-              <Bell size={16} className="text-slate-400" />
+              <span className="font-bold text-sm" style={{ color: 'rgba(255,255,255,0.8)' }}>☀️ היום שלי</span>
+              {upcomingTasks.length > 0 && (
+                <span className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                  style={{ background: 'rgba(239,68,68,0.18)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171' }}>
+                  {upcomingTasks.length}
+                </span>
+              )}
             </div>
+            <ChevronDown size={15} className={`transition-transform ${tasksExpanded ? '' : 'rotate-90'}`} style={{ color: 'rgba(255,255,255,0.25)' }} />
           </div>
+
           {tasksExpanded && (
-            <div className="px-5 pb-3 space-y-2">
-              {upcomingTasks.map(task => (
-                <div
-                  key={task.id}
-                  className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-4 py-2.5 cursor-pointer hover:bg-orange-100 transition-colors gap-2"
-                  onClick={() => onLeadClick(task.lead)}
-                >
-                  <div className="flex items-center gap-3 text-sm">
-                    <span className="text-slate-500 text-xs">📅 {task.date} · {task.time}</span>
-                    <span className="text-orange-600 font-medium">🏢 {task.company}</span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 sm:mt-0">
-                    <span className="text-sm font-medium text-slate-800">{task.description}</span>
-                    <button
-                      type="button"
-                      onClick={e => { e.stopPropagation(); onTaskComplete?.(task.lead.id, task.id); }}
-                      className="bg-green-500 hover:bg-green-600 text-white text-xs px-3 py-1 rounded-lg transition-colors"
-                    >
-                      בצע ✓
+            <div className="p-4 space-y-3">
+              {/* Daily insights strip */}
+              {shownInsights.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-1">
+                  {shownInsights.map((ins, i) => (
+                    <button key={i}
+                      onClick={() => {
+                        if (ins.insightLeads.length === 1 && ins.insightTasks.length === 0) {
+                          onLeadClick(ins.insightLeads[0]);
+                        } else {
+                          setRecPanel(ins);
+                        }
+                      }}
+                      className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-right transition-all text-sm"
+                      style={{ background: ins.bg, border: `1px solid ${ins.border}` }}
+                      onMouseEnter={e => { e.currentTarget.style.opacity = '0.8'; e.currentTarget.style.transform = 'scale(1.02)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = ''; }}>
+                      <span className="text-base flex-shrink-0">{ins.icon}</span>
+                      <span className="text-xs font-medium leading-tight flex-1" style={{ color: ins.color }}>{ins.text}</span>
+                      <span className="text-[9px] opacity-50 flex-shrink-0" style={{ color: ins.color }}>›</span>
                     </button>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              )}
+
+              {/* Task list */}
+              {upcomingTasks.map(task => {
+                const isOverdue = task.date && task.date < todayISO;
+                const isToday   = task.date === todayISO;
+                const rowBg     = isOverdue ? 'rgba(239,68,68,0.07)' : isToday ? 'rgba(99,102,241,0.08)' : 'rgba(249,115,22,0.06)';
+                const rowBorder = isOverdue ? 'rgba(239,68,68,0.22)' : isToday ? 'rgba(99,102,241,0.25)' : 'rgba(249,115,22,0.16)';
+                const taskId = task.isStandalone ? (task.standaloneRef?.id ?? task.id) : task.id;
+                const leadForComplete = task.lead;
+                return (
+                  <div key={task.id}
+                    className="flex items-center justify-between rounded-xl px-4 py-2.5 cursor-pointer transition-all gap-2"
+                    style={{ background: rowBg, border: `1px solid ${rowBorder}` }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.filter = 'brightness(1.15)'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.filter = ''; }}
+                    onClick={() => setEditingDashTask(task)}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs flex-shrink-0" style={{ color: isOverdue ? '#f87171' : 'rgba(255,255,255,0.3)' }}>
+                        {isOverdue ? '⚠️' : isToday ? '☀️' : '📅'} {task.date}
+                      </span>
+                      {task.company && task.company !== '—' && (
+                        <span className="text-xs font-medium flex-shrink-0" style={{ color: '#fb923c' }}>· {task.company}</span>
+                      )}
+                      <span className="text-sm font-medium truncate" style={{ color: 'rgba(255,255,255,0.8)' }}>{task.description}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-lg font-bold"
+                        style={task.priority === 'high'
+                          ? { background: 'rgba(239,68,68,0.18)', color: '#f87171' }
+                          : task.priority === 'medium'
+                            ? { background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }
+                            : { background: 'rgba(99,102,241,0.15)', color: '#818cf8' }
+                        }>
+                        {task.priority === 'high' ? 'דחוף' : task.priority === 'medium' ? 'בינוני' : 'נמוך'}
+                      </span>
+                      <button type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (!task.isStandalone && leadForComplete) {
+                            onTaskComplete?.(leadForComplete.id, taskId);
+                          } else if (task.isStandalone && task.standaloneRef) {
+                            onUpdateStandaloneTask?.({ ...task.standaloneRef, completed: true });
+                          }
+                        }}
+                        className="text-xs px-2.5 py-1 rounded-lg font-bold transition-all"
+                        style={{ background: 'rgba(16,185,129,0.18)', border: '1px solid rgba(16,185,129,0.3)', color: '#34d399' }}>
+                        ✓
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <KpiCard label="לידים VIP"                      value={hotLeads}      sub="תקציב ₪15K+"                    icon={<Flame      size={20} className="text-red-500"    />} color="red"    percent={Math.round(hotLeads / Math.max(leads.length, 1) * 100)} />
-        <KpiCard label={t('dashboard.activeClients')}   value={activeClients} sub={`${conversionRate}% ${t('dashboard.conversionRate')}`} icon={<CheckCircle2 size={20} className="text-green-500"  />} color="green"  percent={conversionRate} />
-        <KpiCard label={t('status.inProgress')}         value={onboarding}    sub="פרויקטים פעילים"               icon={<Rocket     size={20} className="text-orange-500"  />} color="orange" percent={Math.round(onboarding / Math.max(leads.length, 1) * 100)} />
-        <KpiCard label={t('dashboard.total')}           value={leads.length}  sub={`${newLeads} ${t('common.new')}`} icon={<Users    size={20} className="text-slate-600"  />} color="indigo" percent={100} />
+      {/* ── Task Edit Modal ── */}
+      {editingDashTask && (
+        <DashboardTaskEditModal
+          task={editingDashTask}
+          onClose={() => setEditingDashTask(null)}
+          onSave={(updated) => {
+            if (updated.isStandalone && updated.standaloneRef && onUpdateStandaloneTask) {
+              onUpdateStandaloneTask({
+                ...updated.standaloneRef,
+                description: updated.description,
+                date:        updated.date,
+                time:        updated.time,
+                priority:    updated.priority,
+              });
+            } else if (!updated.isStandalone && updated.lead && onUpdateLead) {
+              const originalTaskId = updated.id;
+              const updatedLead = {
+                ...updated.lead,
+                tasks: updated.lead.tasks.map(t =>
+                  t.id === originalTaskId
+                    ? { ...t, description: updated.description, date: updated.date, time: updated.time, priority: updated.priority }
+                    : t
+                ),
+              };
+              onUpdateLead(updatedLead);
+            }
+            setEditingDashTask(null);
+            onToast?.('משימה עודכנה ✓', 'success');
+          }}
+        />
+      )}
+
+
+      {/* ── KPI Cards ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <NeonKpiCard label="לידים חמים"                   value={hotLeads}      sub="דורשים תשומת לב"                                          icon={<Flame size={18} />}       neon="#f97316" percent={Math.round(hotLeads / Math.max(leads.length, 1) * 100)} />
+        <NeonKpiCard label={t('dashboard.activeClients')} value={activeClients} sub={`${conversionRate}% ${t('dashboard.conversionRate')}`}    icon={<CheckCircle2 size={18} />} neon="#10b981" percent={conversionRate} />
+        <NeonKpiCard label={t('status.inProgress')}       value={onboarding}    sub="פרויקטים פעילים"                                          icon={<Rocket size={18} />}      neon="#f97316" percent={Math.round(onboarding / Math.max(leads.length, 1) * 100)} />
+        <NeonKpiCard label={t('dashboard.total')}         value={leads.length}  sub={`${newLeads} ${t('common.new')}`}                        icon={<Users size={18} />}       neon="#6366f1" percent={100} />
       </div>
 
-      {/* AI Panel — stale lead follow-up + pipeline insights + coach */}
+      {/* ── AI Panel ── */}
       <DashboardAiPanel
         leads={leads}
         currentUser={currentUser}
@@ -258,154 +639,364 @@ export default function Dashboard({
         onToast={onToast}
         team={team}
         standaloneTask={standaloneTask}
+        statusConfigs={statusConfigs}
       />
 
-      {/* Search + Filters */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 space-y-2.5">
+      {/* ── Search + Filters ── */}
+      <div className="rounded-xl overflow-hidden" data-tour="dashboard-search-filters"
+        style={{ background: 'rgba(10,15,30,0.88)', border: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(16px)', boxShadow: '0 4px 24px rgba(0,0,0,0.3)' }}>
 
-        {/* Row 1 */}
-        <div className="flex items-center gap-2">
+        {/* Row 1 — compact search + quick filters + actions */}
+        <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap">
 
-          {/* ── SEARCH INPUT ─────────────────────────────────────────────────── */}
-          <div className="relative flex-1">
-            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          {/* Compact search */}
+          <div className="relative w-44 sm:w-52 flex-shrink-0">
+            <Search size={12} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'rgba(255,255,255,0.25)' }} />
             <input
               type="text"
               autoComplete="off"
               spellCheck={false}
-              placeholder={t('common.search') + '...'}
+              placeholder="חיפוש..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => {
-                // stop EVERY key from bubbling to window listeners
-                e.stopPropagation();
-                if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
-              }}
-              className="w-full pr-8 pl-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right bg-slate-50"
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault(); }}
+              className="w-full pr-8 pl-6 py-1.5 text-xs focus:outline-none rounded-xl transition-all"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+              onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.5)'; e.target.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.12)'; }}
+              onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; e.target.style.boxShadow = ''; }}
             />
             {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                tabIndex={-1}
-              >
-                <X size={13} />
+              <button type="button" onClick={() => setSearch('')} className="absolute left-2 top-1/2 -translate-y-1/2" tabIndex={-1}
+                style={{ color: 'rgba(255,255,255,0.3)' }}>
+                <X size={11} />
               </button>
             )}
           </div>
 
-          <span className="text-xs text-slate-400 whitespace-nowrap hidden sm:block">{filtered.length} לידים</span>
+          {/* Divider */}
+          <div className="w-px h-5 flex-shrink-0" style={{ background: 'rgba(255,255,255,0.08)' }} />
 
-          <button
-            type="button"
-            onClick={() => setShowFilters(v => !v)}
-            className={`flex items-center gap-1 px-2.5 py-2 rounded-lg border text-xs transition-colors flex-shrink-0 ${
-              showFilters || sourceFilter
-                ? 'bg-neutral-100 border-neutral-300 text-neutral-800'
-                : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            <Filter size={12} />
-            <span className="hidden sm:inline">{t('common.filter')}</span>
-            {sourceFilter && <span className="w-1.5 h-1.5 bg-black rounded-full" />}
+          {/* Quick filters */}
+          <button type="button" onClick={() => setQuickFilter(quickFilter === 'hot' ? null : 'hot')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="לידים חמים — פעילות אחרונה בשבוע או ציון AI גבוה"
+            style={quickFilter === 'hot'
+              ? { background: 'rgba(249,115,22,0.2)', border: '1px solid rgba(249,115,22,0.45)', color: '#fb923c', boxShadow: '0 0 10px rgba(249,115,22,0.2)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <Flame size={11} />
+            <span className="hidden sm:inline">חמים</span>
           </button>
 
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="hidden sm:flex items-center gap-1 px-2.5 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 text-xs text-slate-500 transition-colors"
-          >
-            <Download size={12} />CSV
+          <button type="button" onClick={() => setQuickFilter(quickFilter === 'objections' ? null : 'objections')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="לידים עם התנגדות — סטטוס לא רלוונטי עם סיבה"
+            style={quickFilter === 'objections'
+              ? { background: 'rgba(239,68,68,0.18)', border: '1px solid rgba(239,68,68,0.4)', color: '#f87171', boxShadow: '0 0 10px rgba(239,68,68,0.18)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <ShieldAlert size={11} />
+            <span className="hidden sm:inline">התנגדויות</span>
           </button>
 
-          {/* ── Excel Import button ── */}
+          <button type="button" onClick={() => setQuickFilter(quickFilter === 'new' ? null : 'new')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="לידים חדשים — הצטרפו השבוע"
+            style={quickFilter === 'new'
+              ? { background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.45)', color: '#a5b4fc', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <Zap size={11} />
+            <span className="hidden sm:inline">חדשים</span>
+          </button>
+
+          {/* AI score sort */}
+          <button type="button"
+            onClick={() => { setSortField('aiScore'); setSortDir(sortField === 'aiScore' && sortDir === 'desc' ? 'asc' : 'desc'); }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="מיון לפי ציון AI"
+            style={sortField === 'aiScore'
+              ? { background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.45)', color: '#c4b5fd', boxShadow: '0 0 10px rgba(139,92,246,0.18)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <BarChart2 size={11} />
+            <span className="hidden sm:inline">ציון AI</span>
+          </button>
+
+          {/* Divider */}
+          <div className="w-px h-5 flex-shrink-0 hidden sm:block" style={{ background: 'rgba(255,255,255,0.08)' }} />
+
+          {/* Count */}
+          <span className="text-[11px] font-bold whitespace-nowrap hidden sm:block" style={{ color: 'rgba(255,255,255,0.28)' }}>
+            {filtered.length} לידים
+          </span>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Untreated leads filter */}
+          <button type="button"
+            onClick={() => setFilterUntreated(v => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="לידים חדשים שלא טופלו — אין יומן פעילות ואין תאריך מגע"
+            style={filterUntreated
+              ? { background: 'rgba(245,158,11,0.22)', border: '1px solid rgba(245,158,11,0.5)', color: '#fbbf24', boxShadow: '0 0 10px rgba(245,158,11,0.2)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <AlertCircle size={11} />
+            <span className="hidden sm:inline">לא טופלו</span>
+            {untreatedCount > 0 && (
+              <span className="text-[9px] font-black px-1 py-0.5 rounded-full"
+                style={filterUntreated
+                  ? { background: 'rgba(245,158,11,0.35)', color: '#fbbf24' }
+                  : { background: 'rgba(245,158,11,0.18)', color: '#fbbf24' }
+                }>{untreatedCount}</span>
+            )}
+          </button>
+
+          {/* Bulk messaging button */}
+          <button type="button"
+            onClick={() => { setShowBulkModal(true); setBulkStep(1); }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="דיוור המוני — שלח מייל או וואטסאפ לקבוצת לידים"
+            style={{ background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.28)', color: '#818cf8' }}>
+            <Send size={11} />
+            <span className="hidden sm:inline">דיוור המוני</span>
+          </button>
+
+          {/* Advanced filter toggle */}
+          <button type="button"
+            onClick={() => setShowAdvancedFilter(v => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            title="סינון מתקדם"
+            style={showAdvancedFilter || filterObjection || filterSource || filterNoAnswer
+              ? { background: 'rgba(139,92,246,0.22)', border: '1px solid rgba(139,92,246,0.45)', color: '#c4b5fd', boxShadow: '0 0 10px rgba(139,92,246,0.18)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
+            }>
+            <Filter size={11} />
+            <span className="hidden sm:inline">סינון מתקדם</span>
+            {(filterObjection || filterSource || filterNoAnswer) && (
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#c4b5fd' }} />
+            )}
+          </button>
+
+          {/* Source filter */}
+          <button type="button" onClick={() => setShowFilters(v => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            style={showFilters || sourceFilter
+              ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.45)', color: '#818cf8', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
+              : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }
+            }>
+            <SlidersHorizontal size={11} />
+            <span className="hidden sm:inline">מקור</span>
+            {sourceFilter && <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#818cf8' }} />}
+          </button>
+
+          <button type="button" onClick={exportCSV}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }}>
+            <Download size={11} />CSV
+          </button>
+
           {onImportLeads && (
-            <button
-              type="button"
-              onClick={() => setShowExcelImport(true)}
-              title="ייבוא לידים מקובץ Excel"
-              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-medium transition-all flex-shrink-0"
-            >
-              <FileSpreadsheet size={12} />
+            <button type="button" onClick={() => setShowExcelImport(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+              style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.28)', color: '#34d399' }}>
+              <FileSpreadsheet size={11} />
               <span className="hidden sm:inline">{t('dashboard.importExcel')}</span>
             </button>
           )}
 
-          {/* ── Redesign lead card — always visible ── */}
           {onOpenLeadsWizard && (
-            <button
-              type="button"
-              onClick={onOpenLeadsWizard}
-              title="עצב מחדש את כרטיס הלקוח"
-              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-medium transition-all flex-shrink-0 ${
-                needsSetup
-                  ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-500 shadow shadow-indigo-200'
-                  : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 hover:border-indigo-200'
-              }`}
-            >
-              <Sparkles size={12} />
+            <button type="button" onClick={onOpenLeadsWizard}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+              style={needsSetup
+                ? { background: 'rgba(99,102,241,0.28)', border: '1px solid rgba(99,102,241,0.5)', color: '#a5b4fc', boxShadow: '0 0 12px rgba(99,102,241,0.18)' }
+                : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }
+              }>
+              <Sparkles size={11} />
               <span className="hidden sm:inline">{needsSetup ? 'עצב כרטיס' : 'עצב מחדש'}</span>
             </button>
           )}
         </div>
 
         {/* Row 2: Status tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
-          <StatusTab label="הכל" count={leads.length} active={activeStatus === 'הכל'} onClick={() => setActiveStatus('הכל')} primary />
-          {ALL_STATUSES.map(s => (
-            <StatusTab key={s} label={s} count={statusCounts[s] ?? 0} active={activeStatus === s} onClick={() => setActiveStatus(activeStatus === s ? 'הכל' : s)} />
-          ))}
+        <div className="flex items-center gap-1.5 overflow-x-auto px-3 pb-3 scrollbar-hide" dir="rtl"
+          style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <button type="button" onClick={() => setActiveStatus('הכל')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex-shrink-0 transition-all mt-2"
+            style={activeStatus === 'הכל'
+              ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.5)', color: '#818cf8', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.32)' }
+            }>
+            הכל
+            <span className="text-[9px] font-black px-1 py-0.5 rounded-full"
+              style={activeStatus === 'הכל'
+                ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8' }
+                : { background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.28)' }
+              }>{leads.length}</span>
+          </button>
+          {statusConfigs.map(cfg => {
+            const s = cfg.label;
+            const neon = cfg.color;
+            const active = activeStatus === s;
+            return (
+              <button type="button" key={s} onClick={() => setActiveStatus(activeStatus === s ? 'הכל' : s)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex-shrink-0 transition-all mt-2"
+                style={active
+                  ? { background: `${neon}22`, border: `1px solid ${neon}55`, color: neon, boxShadow: `0 0 12px ${neon}28` }
+                  : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.32)' }
+                }>
+                <span>{cfg.emoji}</span>
+                <span>{s}</span>
+                <span className="text-[9px] font-black px-1 py-0.5 rounded-full"
+                  style={active
+                    ? { background: `${neon}28`, color: neon }
+                    : { background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.28)' }
+                  }>{statusCounts[s] ?? 0}</span>
+              </button>
+            );
+          })}
+          {onOpenStatusEditor && (
+            <button
+              type="button"
+              onClick={onOpenStatusEditor}
+              title="ניהול סטטוסים"
+              className="flex items-center justify-center w-7 h-7 rounded-full flex-shrink-0 mt-2 transition-all hover:bg-indigo-500/20"
+              style={{ border: '1px solid rgba(99,102,241,0.3)', color: 'rgba(165,180,252,0.6)' }}
+            >
+              <Settings2 size={13} />
+            </button>
+          )}
         </div>
 
-        {/* Advanced filters */}
+        {/* Source filter panel */}
         {showFilters && (
-          <div className="space-y-2 pt-2 border-t border-slate-100">
+          <div className="px-3 pb-3 pt-2 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-slate-400 font-medium">מקור:</span>
+              <span className="text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.28)' }}>מקור:</span>
               {['', ...ALL_SOURCES].map(s => (
                 <button type="button" key={s} onClick={() => setSourceFilter(s)}
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${sourceFilter === s ? 'bg-black text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+                  style={sourceFilter === s
+                    ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.4)' }
+                    : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.38)', border: '1px solid rgba(255,255,255,0.08)' }
+                  }>
                   {s || 'הכל'}
                 </button>
               ))}
             </div>
           </div>
         )}
+
+        {/* Advanced filter panel */}
+        {showAdvancedFilter && (
+          <div className="px-3 pb-4 pt-3 space-y-3" style={{ borderTop: '1px solid rgba(139,92,246,0.15)', background: 'rgba(139,92,246,0.04)' }}>
+            <div className="flex items-center justify-between">
+              <button type="button" onClick={() => { setFilterObjection(''); setFilterSource(''); setFilterNoAnswer(false); }}
+                className="text-[10px] font-bold transition-colors"
+                style={{ color: 'rgba(255,255,255,0.25)' }}>
+                נקה הכל
+              </button>
+              <span className="text-[11px] font-bold" style={{ color: '#c4b5fd' }}>סינון מתקדם</span>
+            </div>
+
+            {/* Filter by source */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-bold flex-shrink-0" style={{ color: 'rgba(255,255,255,0.35)' }}>מקור:</span>
+              {['', ...ALL_SOURCES].map(s => (
+                <button type="button" key={s} onClick={() => setFilterSource(filterSource === s ? '' : s)}
+                  className="px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all"
+                  style={filterSource === s && s !== ''
+                    ? { background: 'rgba(139,92,246,0.28)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.4)' }
+                    : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.07)' }
+                  }>
+                  {s || 'הכל'}
+                </button>
+              ))}
+            </div>
+
+            {/* Filter by objection */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold flex-shrink-0" style={{ color: 'rgba(255,255,255,0.35)' }}>התנגדות:</span>
+              <input
+                type="text"
+                placeholder="הקלד התנגדות..."
+                value={filterObjection}
+                onChange={e => setFilterObjection(e.target.value)}
+                className="flex-1 max-w-[200px] px-3 py-1 text-xs rounded-lg focus:outline-none transition-all"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+                onFocus={e => { e.target.style.borderColor = 'rgba(139,92,246,0.5)'; }}
+                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+              />
+              {filterObjection && (
+                <button type="button" onClick={() => setFilterObjection('')} style={{ color: 'rgba(255,255,255,0.3)' }}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Toggle filters */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <button type="button"
+                onClick={() => setFilterNoAnswer(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+                style={filterNoAnswer
+                  ? { background: 'rgba(239,68,68,0.18)', border: '1px solid rgba(239,68,68,0.4)', color: '#f87171' }
+                  : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.38)' }
+                }>
+                <PhoneOff size={11} />
+                לא ענו (פגישה שעברה)
+              </button>
+
+              <button type="button"
+                onClick={() => setFilterUntreated(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+                style={filterUntreated
+                  ? { background: 'rgba(245,158,11,0.18)', border: '1px solid rgba(245,158,11,0.4)', color: '#fbbf24' }
+                  : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.38)' }
+                }>
+                <AlertCircle size={11} />
+                לא טופלו ({untreatedCount})
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Bulk Action Bar */}
+      {/* ── Bulk Action Bar ── */}
       {selected.size > 0 && (
-        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-30 bg-slate-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 border border-slate-700">
-          <button type="button" onClick={clearSelection} className="text-slate-400 hover:text-white text-xs transition-colors">✕ {t('common.cancel')}</button>
-          <div className="w-px h-5 bg-slate-700" />
-          <span className="text-sm font-bold text-white">{selected.size} {t('dashboard.selected')}</span>
-          <div className="w-px h-5 bg-slate-700" />
+        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-30 rounded-2xl px-5 py-3 flex items-center gap-4"
+          style={{ background: 'rgba(10,15,30,0.96)', backdropFilter: 'blur(20px)', border: '1px solid rgba(99,102,241,0.28)', boxShadow: '0 8px 40px rgba(0,0,0,0.5), 0 0 40px rgba(99,102,241,0.12)' }}>
+          <button type="button" onClick={clearSelection} className="text-xs font-bold transition-colors" style={{ color: 'rgba(255,255,255,0.32)' }}>✕ {t('common.cancel')}</button>
+          <div className="w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+          <span className="text-sm font-black" style={{ color: '#818cf8' }}>{selected.size} {t('dashboard.selected')}</span>
+          <div className="w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
           <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value as LeadStatus | '')}
-            className="bg-slate-800 text-white text-sm rounded-lg px-3 py-1.5 border border-slate-600 focus:outline-none cursor-pointer">
+            className="text-sm rounded-xl px-3 py-1.5 focus:outline-none cursor-pointer"
+            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.65)' }}>
             <option value="">{t('dashboard.bulkStatus')}...</option>
-            {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            {dynamicStatuses.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <button type="button" onClick={applyBulkStatus} disabled={!bulkStatus}
-            className="bg-white hover:bg-neutral-100 disabled:opacity-40 text-black text-sm px-4 py-1.5 rounded-lg font-medium transition-colors">
+            className="text-sm px-4 py-1.5 rounded-xl font-bold transition-all disabled:opacity-30"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.28)' }}>
             {t('common.confirm')}
           </button>
-          <div className="w-px h-5 bg-slate-700" />
-          <button type="button" onClick={exportCSV} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition-colors">
+          <div className="w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+          <button type="button" onClick={exportCSV} className="flex items-center gap-1.5 text-sm transition-colors"
+            style={{ color: 'rgba(255,255,255,0.35)' }}>
             <Download size={13} /> {t('common.export')}
           </button>
           {onBulkDelete && (
             <>
-              <div className="w-px h-5 bg-slate-700" />
-              <button
-                type="button"
-                onClick={handleBulkDelete}
-                className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg transition-all ${
-                  deleteConfirm
-                    ? 'bg-red-600 text-white animate-pulse'
-                    : 'text-red-400 hover:text-white hover:bg-red-600'
-                }`}
-              >
+              <div className="w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
+              <button type="button" onClick={handleBulkDelete}
+                className="flex items-center gap-1.5 text-sm font-bold px-3 py-1.5 rounded-xl transition-all"
+                style={deleteConfirm
+                  ? { background: 'rgba(239,68,68,0.28)', border: '1px solid rgba(239,68,68,0.5)', color: '#f87171', boxShadow: '0 0 12px rgba(239,68,68,0.18)' }
+                  : { color: 'rgba(239,68,68,0.55)' }
+                }>
                 <Trash2 size={13} />
                 {deleteConfirm ? `${t('common.confirm')} ${t('common.delete')} ${selected.size}` : t('common.delete')}
               </button>
@@ -414,140 +1005,342 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* Mobile cards */}
+      {/* ── Mobile Cards ── */}
       <div className="md:hidden space-y-2">
         {filtered.length === 0 ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-10 text-center text-slate-400">
-            <Search size={28} className="mx-auto mb-2 text-slate-200" />
-            {t('dashboard.noLeads')}
+          <div className="rounded-2xl py-16 text-center flex flex-col items-center gap-3"
+            style={{ border: '2px dashed rgba(99,102,241,0.18)' }}>
+            <Search size={28} style={{ color: 'rgba(99,102,241,0.28)' }} />
+            <span className="text-sm" style={{ color: 'rgba(255,255,255,0.2)' }}>{t('dashboard.noLeads')}</span>
           </div>
-        ) : filtered.map(lead => (
-          <div key={lead.id} onClick={() => onLeadClick(lead)}
-            className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 active:bg-slate-50 transition-colors cursor-pointer">
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                {lead.phone && (
-                  <a
-                    href={`https://wa.me/${lead.phone.replace(/\D/g,'').replace(/^0/,'972')}` }
-                    target="_blank" rel="noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    title="WhatsApp"
-                    className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
-                  >
-                    <MessageCircle size={13} />
-                  </a>
-                )}
-                <button type="button" onClick={e => { e.stopPropagation(); setEmailLead(lead); }}
-                  title="מייל חכם"
-                  className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors text-xs font-semibold">
-                  <Sparkles size={11} />מייל
-                </button>
-              </div>
-              <div className="flex-1 text-right">
-                <div className="font-semibold text-slate-800 text-sm leading-tight">{safeStr(lead.company)}</div>
-                <div className="text-xs text-slate-400">{safeStr(lead.contactName)}</div>
+        ) : filtered.map(lead => {
+          const neon = statusConfigs.find(c => c.label === lead.status)?.color ?? NEON[lead.status] ?? '#6366f1';
+          const temp = getTemperature(lead);
+          const budget = safeNum(lead.budget);
+          const isVIP = budget >= 15000;
+          const conversion = calcConversion(lead);
+          return (
+            <div key={lead.id} onClick={() => onLeadClick(lead)}
+              className="relative rounded-xl cursor-pointer overflow-hidden transition-all duration-200"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.3)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = neon + '48'; (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 24px ${neon}18`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(0,0,0,0.3)'; }}>
+              {/* Right NEON accent bar */}
+              <div className="absolute top-0 right-0 w-0.5 h-full" style={{ background: `linear-gradient(to bottom,${neon},${neon}40)` }} />
+              {/* Temperature strip */}
+              {temp === 'hot'    && <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 via-red-500 to-orange-500" style={{ boxShadow: '0 0 8px #f97316' }} />}
+              {temp === 'cold'   && <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-500" style={{ boxShadow: '0 0 8px #06b6d4' }} />}
+              {temp === 'active' && <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-400" style={{ boxShadow: '0 0 8px #fbbf24' }} />}
+
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {lead.phone && (
+                      <button type="button" onClick={e => { e.stopPropagation(); setWhatsAppLead(lead); }}
+                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
+                        style={{ background: 'rgba(22,163,74,0.14)', border: '1px solid rgba(22,163,74,0.28)', color: '#22c55e' }}
+                        title="שלח WhatsApp">
+                        <MessageCircle size={13} />
+                      </button>
+                    )}
+                    <button type="button" onClick={e => { e.stopPropagation(); setEmailLead(lead); }}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+                      style={{ background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.28)', color: '#818cf8' }}>
+                      <Sparkles size={11} />מייל
+                    </button>
+                  </div>
+                  <div className="flex-1 text-right">
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      <div className="font-bold text-white text-sm">{safeStr(lead.company)}</div>
+                      {isVIP && <span className="text-[9px] font-black text-amber-900 px-1.5 py-0.5 rounded" style={{ background: 'linear-gradient(90deg,#fbbf24,#f59e0b)', boxShadow: '0 0 6px #f59e0b48' }}>VIP</span>}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{safeStr(lead.contactName)}</div>
+                    <div className="flex items-center justify-end gap-1.5 mt-1.5 flex-wrap">
+                      {safeStr(lead.source) && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded"
+                          style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)' }}>
+                          {safeStr(lead.source)}
+                        </span>
+                      )}
+                      {/* Mobile inline assign */}
+                      {team && team.length > 0 && onUpdateLead && (
+                        <div className="relative" onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); setAssignOpen(assignOpen === `m-${lead.id}` ? null : `m-${lead.id}`); }}
+                            className="flex items-center justify-center gap-1 rounded-full transition-all"
+                            style={
+                              lead.assignedTo
+                                ? { width: 26, height: 26, background: 'rgba(99,102,241,0.3)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.5)', boxShadow: '0 0 6px rgba(99,102,241,0.2)' }
+                                : { width: 26, height: 26, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.15)' }
+                            }
+                            title={lead.assignedTo ? `משויך ל-${lead.assignedTo}` : 'שייך סוכן'}
+                          >
+                            {lead.assignedTo ? (
+                              <span className="text-[10px] font-black">{lead.assignedTo.charAt(0)}</span>
+                            ) : (
+                              <UserCheck size={11} />
+                            )}
+                          </button>
+                          {assignOpen === `m-${lead.id}` && (
+                            <div
+                              className="absolute left-0 top-full mt-1 z-50 rounded-xl overflow-hidden shadow-2xl min-w-[140px]"
+                              style={{ background: 'rgba(10,15,30,0.98)', border: '1px solid rgba(99,102,241,0.3)', backdropFilter: 'blur(12px)' }}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              {lead.assignedTo && (
+                                <button
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-right transition-colors hover:bg-red-500/10"
+                                  style={{ color: 'rgba(248,113,113,0.8)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+                                  onClick={() => handleAssign(lead, null)}
+                                >
+                                  <UserMinus size={11} />הסר שיוך
+                                </button>
+                              )}
+                              {team.map(member => (
+                                <button
+                                  key={member.id}
+                                  className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-right transition-colors"
+                                  style={{
+                                    color: lead.assignedTo === member.name ? '#a5b4fc' : 'rgba(255,255,255,0.7)',
+                                    background: lead.assignedTo === member.name ? 'rgba(99,102,241,0.15)' : 'transparent',
+                                  }}
+                                  onMouseEnter={e => { if (lead.assignedTo !== member.name) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; }}
+                                  onMouseLeave={e => { if (lead.assignedTo !== member.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                                  onClick={() => handleAssign(lead, member.name)}
+                                >
+                                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black flex-shrink-0"
+                                    style={{ background: 'rgba(99,102,241,0.25)', color: '#818cf8' }}>
+                                    {member.name.charAt(0)}
+                                  </span>
+                                  <span className="truncate">{member.name}</span>
+                                  {lead.assignedTo === member.name && <span className="mr-auto text-indigo-400">✓</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {/* Fallback: show avatar when no team */}
+                      {(!team || team.length === 0) && safeStr(lead.assignedTo) && (
+                        <span className="w-[26px] h-[26px] rounded-full flex items-center justify-center text-[10px] font-black flex-shrink-0"
+                          style={{ background: 'rgba(99,102,241,0.25)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.35)' }}>
+                          {safeStr(lead.assignedTo).charAt(0)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {budget > 0 && (
+                      <span className="text-xs font-black" style={{ color: neon }}>
+                        {workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}
+                      </span>
+                    )}
+                    <span className="text-xs" style={{ color: 'rgba(255,255,255,0.28)' }}>{safeStr(lead.lastUpdate)}</span>
+                    {temp === 'hot'  && <span className="flex items-center gap-0.5 text-[10px] font-bold text-orange-400"><Flame size={9} />חם</span>}
+                    {temp === 'cold' && <span className="flex items-center gap-0.5 text-[10px] font-bold text-cyan-400"><Snowflake size={9} />קר</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: `${neon}18`, color: neon, border: `1px solid ${neon}38` }}>
+                      פוטנציאל: {conversion}%
+                    </span>
+                    <ScoreRing score={getEffectiveScore(lead)} />
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {safeNum(lead.budget) > 0 && (
-                  <span className={`text-xs font-bold ${safeNum(lead.budget) >= 15000 ? 'text-emerald-600' : 'text-slate-600'}`}>
-                    {workspace?.cardLeftField?.prefix ?? '₪'}{safeNum(lead.budget).toLocaleString()}{safeNum(lead.budget) >= 15000 ? ' 🌟' : ''}
-                  </span>
-                )}
-                <span className="text-xs text-slate-400">{safeStr(lead.lastUpdate)}</span>
-              </div>
-              <StatusBadge status={lead.status} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {/* Desktop table */}
-      <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full">
+      {/* ── Desktop Table ── */}
+      <div className="hidden md:block rounded-xl overflow-hidden"
+        style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(8px)' }}>
+        <table className="w-full" style={{ tableLayout: 'fixed' }}>
+          {/* Fixed column widths – header and data cells always align */}
+          <colgroup>
+            <col style={{ width: '40px' }} />   {/* checkbox */}
+            <col style={{ width: '9%' }} />     {/* createdAt — first */}
+            <col style={{ width: '20%' }} />    {/* company */}
+            <col style={{ width: '11%' }} />    {/* contact */}
+            <col style={{ width: '10%' }} />    {/* status */}
+            <col style={{ width: '9%' }} />     {/* budget */}
+            <col style={{ width: '9%' }} />     {/* lastUpdate */}
+            <col style={{ width: '6%' }} />     {/* aiScore */}
+            <col style={{ width: '26%' }} />    {/* actions */}
+          </colgroup>
           <thead>
-            <tr className="border-b border-slate-100 bg-gradient-to-l from-slate-50 to-white">
-              <th className="px-4 py-3 w-10">
+            <tr style={{ background: 'rgba(10,15,30,0.85)', borderBottom: '1px solid rgba(99,102,241,0.18)' }}>
+              <th className="px-4 py-3">
                 <input type="checkbox"
                   checked={filtered.length > 0 && selected.size === filtered.length}
                   onChange={toggleSelectAll}
-                  className="rounded accent-indigo-600 cursor-pointer" />
+                  className="rounded cursor-pointer accent-indigo-500" />
               </th>
-              <SortTh label={t('dashboard.company')}    field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">{t('dashboard.contact')}</th>
-              <SortTh label={t('common.status')}       field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label={workspace?.cardLeftField?.label ?? t('dashboard.budget')} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label={t('dashboard.lastUpdate')} field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
-              <SortTh label={t('dashboard.score')}     field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">{t('common.actions')}</th>
+              <DarkSortTh label="תאריך יצירה"               field="createdAt"  current={sortField} dir={sortDir} onSort={handleSort} />
+              <DarkSortTh label={t('dashboard.company')}    field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
+              <th className="text-right px-4 py-3 text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.35)' }}>{t('dashboard.contact')}</th>
+              <DarkSortTh label={t('common.status')}        field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
+              <DarkSortTh label={workspace?.cardLeftField?.label ?? t('dashboard.budget')} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
+              <DarkSortTh label={t('dashboard.lastUpdate')} field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
+              <DarkSortTh label={t('dashboard.score')}      field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
+              <th className="text-right px-4 py-3 text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.35)' }}>{t('common.actions')}</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-center py-16 text-slate-400">
-                  <div className="flex flex-col items-center gap-2">
-                    <Search size={32} className="text-slate-200" />
-                    <span>{t('dashboard.noLeads')}</span>
+                <td colSpan={9} className="text-center py-16">
+                  <div className="flex flex-col items-center gap-3">
+                    <Search size={32} style={{ color: 'rgba(99,102,241,0.2)' }} />
+                    <span className="text-sm" style={{ color: 'rgba(255,255,255,0.2)' }}>{t('dashboard.noLeads')}</span>
                   </div>
                 </td>
               </tr>
-            ) : filtered.map((lead, i) => {
+            ) : filtered.map(lead => {
               const isSelected = selected.has(lead.id);
               const budget = safeNum(lead.budget);
+              const neon = statusConfigs.find(c => c.label === lead.status)?.color ?? NEON[lead.status] ?? '#6366f1';
+              const temp = getTemperature(lead);
+              const isVIP = budget >= 15000;
               return (
                 <tr key={lead.id}
-                  className={`border-b border-slate-50 transition-colors cursor-pointer ${
-                    isSelected ? 'bg-neutral-100 hover:bg-neutral-200'
-                    : i % 2 === 0 ? 'hover:bg-neutral-50'
-                    : 'bg-slate-50/30 hover:bg-neutral-50'
-                  }`}
-                  onClick={() => onLeadClick(lead)}
-                >
+                  className="transition-all cursor-pointer"
+                  style={{
+                    borderBottom: '1px solid rgba(255,255,255,0.04)',
+                    borderRight: `3px solid ${neon}`,
+                    background: isSelected ? 'rgba(99,102,241,0.1)' : 'transparent',
+                  }}
+                  onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = `${neon}08`; }}
+                  onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  onClick={() => onLeadClick(lead)}>
                   <td className="px-4 py-3 w-10" onClick={e => e.stopPropagation()}>
                     <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(lead.id)}
-                      className="rounded accent-indigo-600 cursor-pointer" />
+                      className="rounded cursor-pointer accent-indigo-500" />
                   </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}>
+                  {/* createdAt — first column */}
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-xs`} style={{ color: 'rgba(255,255,255,0.32)' }}>
+                    {lead.createdAt
+                      ? new Date(lead.createdAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                      : '—'}
+                  </td>
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} overflow-hidden`}>
                     <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-slate-800 text-sm">{safeStr(lead.company)}</span>
-                        {lead.waitingContent && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold leading-none">תוכן</span>}
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {temp === 'hot'    && <Flame size={10} className="text-orange-400 flex-shrink-0" />}
+                        {temp === 'cold'   && <Snowflake size={10} className="text-cyan-400 flex-shrink-0" />}
+                        <span className="font-bold text-white text-sm truncate">{safeStr(lead.company)}</span>
+                        {isVIP && <span className="text-[8px] font-black text-amber-900 px-1 py-0.5 rounded flex-shrink-0" style={{ background: 'linear-gradient(90deg,#fbbf24,#f59e0b)' }}>VIP</span>}
+                        {lead.waitingContent && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold flex-shrink-0" style={{ background: 'rgba(245,158,11,0.14)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.22)' }}>תוכן</span>}
                       </div>
-                      <span className="text-xs text-slate-400">{safeStr(lead.source)}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {safeStr(lead.source) && <span className="text-xs" style={{ color: 'rgba(255,255,255,0.28)' }}>{safeStr(lead.source)}</span>}
+                      </div>
                     </div>
                   </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm text-slate-700`}>{safeStr(lead.contactName)}</td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}><StatusBadge status={lead.status} /></td>
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm overflow-hidden`} style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    <span className="block truncate">{safeStr(lead.contactName)}</span>
+                  </td>
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ background: `${neon}18`, color: neon, border: `1px solid ${neon}38`, boxShadow: `0 0 6px ${neon}28` }}>
+                      {lead.status}
+                    </span>
+                  </td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm`}>
                     {budget > 0
-                      ? <span className={`font-medium ${budget >= 15000 ? 'text-emerald-600' : 'text-slate-700'}`}>{workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}{budget >= 15000 && ' 🌟'}</span>
-                      : <span className="text-slate-300">—</span>}
+                      ? <span className="font-black text-xs" style={{ color: neon }}>{workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}{isVIP && ' 🌟'}</span>
+                      : <span style={{ color: 'rgba(255,255,255,0.18)' }}>—</span>}
                   </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm text-slate-500`}>{safeStr(lead.lastUpdate)}</td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}><AiScoreBadge score={safeNum(lead.aiScore)} /></td>
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-xs`} style={{ color: 'rgba(255,255,255,0.32)' }}>{safeStr(lead.lastUpdate)}</td>
+                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}>
+                    <ScoreRing score={getEffectiveScore(lead)} />
+                  </td>
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`} onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => onNoteClick(lead)} title="שימור"
-                        className="text-xs text-slate-500 hover:text-black px-2 py-1 rounded hover:bg-neutral-100 transition-colors">
-                        <Star size={12} />
-                      </button>
+                    <div className="flex items-center gap-1 flex-wrap">
                       {lead.phone && (
-                        <a href={`https://wa.me/${lead.phone.replace(/\D/g,'').replace(/^0/,'972')}`}
-                          target="_blank" rel="noreferrer" title="WhatsApp"
-                          className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 px-2 py-1 rounded hover:bg-emerald-50 transition-colors font-medium">
-                          <MessageCircle size={12} /> WA
-                        </a>
+                        <button type="button"
+                          onClick={e => { e.stopPropagation(); setWhatsAppLead(lead); }}
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg font-bold transition-all"
+                          style={{ background: 'rgba(22,163,74,0.1)', color: 'rgba(34,197,94,0.55)', border: '1px solid rgba(22,163,74,0.2)' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#22c55e'; (e.currentTarget as HTMLElement).style.background = 'rgba(22,163,74,0.22)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(22,163,74,0.4)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(34,197,94,0.55)'; (e.currentTarget as HTMLElement).style.background = 'rgba(22,163,74,0.1)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(22,163,74,0.2)'; }}>
+                          <MessageCircle size={11} /> WA
+                        </button>
                       )}
-                      <button type="button" onClick={() => setEmailLead(lead)} title="מייל חכם ✨"
-                        className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 transition-colors font-medium">
-                        <Sparkles size={12} /> מייל
+                      <button type="button" onClick={() => setEmailLead(lead)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg font-bold transition-all"
+                        style={{ background: 'rgba(99,102,241,0.1)', color: 'rgba(129,140,248,0.45)', border: '1px solid rgba(99,102,241,0.14)' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#818cf8'; (e.currentTarget as HTMLElement).style.background = 'rgba(99,102,241,0.22)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(129,140,248,0.45)'; (e.currentTarget as HTMLElement).style.background = 'rgba(99,102,241,0.1)'; }}>
+                        <Sparkles size={11} /> מייל
                       </button>
-                      <button type="button" onClick={() => onLeadClick(lead)} title="פרטים"
-                        className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
-                        <MessageSquare size={12} />
-                      </button>
+
+                      {/* ── Inline assign dropdown ── */}
+                      {team && team.length > 0 && onUpdateLead && (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); setAssignOpen(assignOpen === lead.id ? null : lead.id); }}
+                            className="flex items-center justify-center rounded-full transition-all"
+                            style={
+                              lead.assignedTo
+                                ? { width: 28, height: 28, background: 'rgba(99,102,241,0.25)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.5)', boxShadow: '0 0 8px rgba(99,102,241,0.2)' }
+                                : { width: 28, height: 28, background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.14)', boxShadow: 'none' }
+                            }
+                            title={lead.assignedTo ? `משויך ל-${lead.assignedTo}` : 'שייך סוכן'}
+                          >
+                            {lead.assignedTo ? (
+                              <span className="text-[11px] font-black">{lead.assignedTo.charAt(0)}</span>
+                            ) : (
+                              <UserCheck size={12} />
+                            )}
+                          </button>
+
+                          {assignOpen === lead.id && (
+                            <div
+                              className="absolute left-0 top-full mt-1 z-50 rounded-xl overflow-hidden shadow-2xl min-w-[140px]"
+                              style={{ background: 'rgba(10,15,30,0.98)', border: '1px solid rgba(99,102,241,0.3)', backdropFilter: 'blur(12px)' }}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              {/* Remove assignment */}
+                              {lead.assignedTo && (
+                                <button
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-right transition-colors hover:bg-red-500/10"
+                                  style={{ color: 'rgba(248,113,113,0.8)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+                                  onClick={() => handleAssign(lead, null)}
+                                >
+                                  <UserMinus size={11} />
+                                  הסר שיוך
+                                </button>
+                              )}
+                              {/* Team members */}
+                              {team.map(member => (
+                                <button
+                                  key={member.id}
+                                  className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-right transition-colors"
+                                  style={{
+                                    color: lead.assignedTo === member.name ? '#a5b4fc' : 'rgba(255,255,255,0.7)',
+                                    background: lead.assignedTo === member.name ? 'rgba(99,102,241,0.15)' : 'transparent',
+                                  }}
+                                  onMouseEnter={e => { if (lead.assignedTo !== member.name) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; }}
+                                  onMouseLeave={e => { if (lead.assignedTo !== member.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                                  onClick={() => handleAssign(lead, member.name)}
+                                >
+                                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black flex-shrink-0"
+                                    style={{ background: 'rgba(99,102,241,0.25)', color: '#818cf8' }}>
+                                    {member.name.charAt(0)}
+                                  </span>
+                                  <span className="truncate">{member.name}</span>
+                                  {lead.assignedTo === member.name && <span className="mr-auto text-indigo-400">✓</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -563,68 +1356,551 @@ export default function Dashboard({
           onImport={leads => { onImportLeads(leads); }}
           onClose={() => setShowExcelImport(false)}
           currentUser={currentUser}
+          statusConfigs={statusConfigs}
+          customFieldDefs={workspace?.customFieldDefs ?? []}
         />
+      )}
+
+      {/* ── Bulk Messaging Modal ── */}
+      {showBulkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)' }}
+          onClick={e => { if (e.target === e.currentTarget) { setShowBulkModal(false); setBulkStep(1); } }}>
+          <div className="w-full max-w-lg rounded-2xl overflow-hidden"
+            style={{ background: 'rgba(10,15,30,0.98)', border: '1px solid rgba(99,102,241,0.28)', boxShadow: '0 24px 80px rgba(0,0,0,0.7), 0 0 40px rgba(99,102,241,0.12)' }}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(99,102,241,0.08)' }}>
+              <button type="button" onClick={() => { setShowBulkModal(false); setBulkStep(1); }}
+                className="transition-colors" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                <X size={18} />
+              </button>
+              <div className="flex items-center gap-2">
+                <Send size={16} style={{ color: '#818cf8' }} />
+                <span className="font-bold text-white">דיוור המוני</span>
+              </div>
+            </div>
+
+            {/* Step indicator */}
+            <div className="flex items-center gap-0 px-5 py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+              {([1, 2, 3] as const).map(step => (
+                <div key={step} className="flex items-center flex-1">
+                  <div className="flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-black flex-shrink-0 transition-all"
+                    style={bulkStep >= step
+                      ? { background: 'rgba(99,102,241,0.35)', border: '1px solid rgba(99,102,241,0.6)', color: '#a5b4fc' }
+                      : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.25)' }
+                    }>{step}</div>
+                  {step < 3 && <div className="flex-1 h-px mx-2" style={{ background: bulkStep > step ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.07)' }} />}
+                </div>
+              ))}
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+
+              {/* Step 1: Choose channel */}
+              {bulkStep === 1 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-bold text-right" style={{ color: 'rgba(255,255,255,0.6)' }}>בחר ערוץ שליחה</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" onClick={() => setBulkChannel('email')}
+                      className="flex flex-col items-center gap-2 py-5 rounded-xl transition-all"
+                      style={bulkChannel === 'email'
+                        ? { background: 'rgba(99,102,241,0.22)', border: '2px solid rgba(99,102,241,0.55)', color: '#a5b4fc', boxShadow: '0 0 16px rgba(99,102,241,0.18)' }
+                        : { background: 'rgba(255,255,255,0.04)', border: '2px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }
+                      }>
+                      <Mail size={24} />
+                      <span className="text-sm font-bold">📧 Email</span>
+                    </button>
+                    <button type="button" onClick={() => setBulkChannel('whatsapp')}
+                      className="flex flex-col items-center gap-2 py-5 rounded-xl transition-all"
+                      style={bulkChannel === 'whatsapp'
+                        ? { background: 'rgba(22,163,74,0.18)', border: '2px solid rgba(22,163,74,0.45)', color: '#4ade80', boxShadow: '0 0 16px rgba(22,163,74,0.15)' }
+                        : { background: 'rgba(255,255,255,0.04)', border: '2px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }
+                      }>
+                      <MessageCircle size={24} />
+                      <span className="text-sm font-bold">💬 WhatsApp</span>
+                    </button>
+                  </div>
+                  <button type="button" onClick={() => setBulkStep(2)}
+                    className="w-full py-2.5 rounded-xl text-sm font-bold transition-all"
+                    style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 16px rgba(99,102,241,0.28)' }}>
+                    המשך
+                  </button>
+                </div>
+              )}
+
+              {/* Step 2: Choose recipients */}
+              {bulkStep === 2 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-bold text-right" style={{ color: 'rgba(255,255,255,0.6)' }}>בחר נמענים</p>
+                  <div className="space-y-2">
+                    {([
+                      { value: 'all',    label: 'כל הלידים', count: leads.length },
+                      { value: 'status', label: 'לפי סטטוס', count: null },
+                      { value: 'source', label: 'לפי מקור',  count: null },
+                    ] as const).map(opt => (
+                      <button type="button" key={opt.value} onClick={() => { setBulkRecipients(opt.value); setBulkFilterValue(''); }}
+                        className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-bold transition-all"
+                        style={bulkRecipients === opt.value
+                          ? { background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.45)', color: '#a5b4fc' }
+                          : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.45)' }
+                        }>
+                        <span>{opt.count !== null ? `${opt.count} לידים` : ''}</span>
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {bulkRecipients === 'status' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {statusConfigs.map(cfg => (
+                        <button type="button" key={cfg.label} onClick={() => setBulkFilterValue(cfg.label)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+                          style={bulkFilterValue === cfg.label
+                            ? { background: `${cfg.color}22`, color: cfg.color, border: `1px solid ${cfg.color}44` }
+                            : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }
+                          }>{cfg.emoji} {cfg.label}</button>
+                      ))}
+                    </div>
+                  )}
+
+                  {bulkRecipients === 'source' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {ALL_SOURCES.map(s => (
+                        <button type="button" key={s} onClick={() => setBulkFilterValue(s)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+                          style={bulkFilterValue === s
+                            ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.4)' }
+                            : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }
+                          }>{s}</button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setBulkStep(1)}
+                      className="flex-1 py-2 rounded-xl text-sm font-bold transition-all"
+                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.45)' }}>
+                      חזור
+                    </button>
+                    <button type="button"
+                      onClick={() => setBulkStep(3)}
+                      disabled={bulkRecipients !== 'all' && !bulkFilterValue}
+                      className="flex-[2] py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-30"
+                      style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.28)' }}>
+                      המשך ({getBulkTargetLeads().filter(l => bulkChannel === 'email' ? l.email : l.phone).length} נמענים)
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Compose */}
+              {bulkStep === 3 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-bold text-right" style={{ color: 'rgba(255,255,255,0.6)' }}>כתוב הודעה</p>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="כותרת / נושא..."
+                      value={bulkTitle}
+                      onChange={e => setBulkTitle(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl text-sm focus:outline-none transition-all text-right"
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+                      onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.5)'; }}
+                      onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                    />
+                    <textarea
+                      rows={5}
+                      placeholder="תוכן ההודעה..."
+                      value={bulkContent}
+                      onChange={e => setBulkContent(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl text-sm focus:outline-none transition-all text-right resize-none"
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+                      onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.5)'; }}
+                      onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setBulkStep(2)}
+                      className="flex-1 py-2 rounded-xl text-sm font-bold transition-all"
+                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.45)' }}>
+                      חזור
+                    </button>
+                    <button type="button"
+                      onClick={bulkChannel === 'email' ? handleBulkEmail : handleBulkWhatsApp}
+                      disabled={!bulkContent.trim()}
+                      className="flex-[2] py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-30 flex items-center justify-center gap-2"
+                      style={bulkChannel === 'email'
+                        ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 16px rgba(99,102,241,0.28)' }
+                        : { background: 'linear-gradient(135deg,#16a34a,#22c55e)', color: 'white', boxShadow: '0 0 16px rgba(22,163,74,0.28)' }
+                      }>
+                      {bulkChannel === 'email' ? <><Mail size={14} /> שלח מייל</> : <><MessageCircle size={14} /> שלח WhatsApp</>}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Recommendation Action Panel ───────────────────────────────────── */}
+      {recPanel && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
+          onClick={() => setRecPanel(null)}>
+          <div className="w-full max-w-md rounded-2xl overflow-hidden flex flex-col"
+            style={{ background: '#0f1e32', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 32px 80px rgba(0,0,0,0.5)', maxHeight: '85vh' }}
+            onClick={e => e.stopPropagation()}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 flex-shrink-0"
+              style={{ background: recPanel.bg, borderBottom: `1px solid ${recPanel.border}` }}>
+              <div className="flex items-center gap-2.5">
+                <span className="text-2xl">{recPanel.icon}</span>
+                <span className="font-bold text-sm leading-snug" style={{ color: recPanel.color }}>{recPanel.text}</span>
+              </div>
+              <button onClick={() => setRecPanel(null)}
+                className="w-7 h-7 rounded-full flex items-center justify-center transition-all"
+                style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)' }}>✕</button>
+            </div>
+
+            {/* Guidance message */}
+            <div className="px-5 py-3.5 flex-shrink-0" style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-xs leading-relaxed text-right" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                💡 {recPanel.guidance}
+              </p>
+            </div>
+
+            {/* Lead list */}
+            {recPanel.insightLeads.length > 0 && (
+              <div className="overflow-y-auto flex-1">
+                {recPanel.insightLeads.map((lead, i) => {
+                  const since = daysSince(lead.lastUpdate);
+                  const aiScore = safeNum(lead.aiScore);
+                  return (
+                    <div key={lead.id}
+                      className="px-5 py-3.5 transition-all"
+                      style={{
+                        borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : undefined,
+                        background: 'transparent',
+                      }}>
+                      <div className="flex items-start justify-between gap-3">
+                        {/* Lead info */}
+                        <div className="flex-1 min-w-0 text-right">
+                          <div className="flex items-center gap-2 justify-end flex-wrap">
+                            <span className="font-bold text-sm text-white truncate">{lead.company}</span>
+                            {aiScore >= 70 && <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>🔥 חם</span>}
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>{lead.status}</span>
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>{lead.contactName}</div>
+                          <div className="flex items-center gap-3 mt-1 justify-end flex-wrap">
+                            {lead.phone && <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>📞 {lead.phone}</span>}
+                            {lead.budget > 0 && <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>₪{lead.budget.toLocaleString()}/חודש</span>}
+                            {since > 0 && <span className="text-[10px]" style={{ color: since >= 14 ? '#f87171' : since >= 7 ? '#fbbf24' : 'rgba(255,255,255,0.3)' }}>לפני {since} ימים</span>}
+                          </div>
+                        </div>
+
+                        {/* Quick actions */}
+                        <div className="flex flex-col gap-1.5 flex-shrink-0">
+                          {/* Open card */}
+                          <button
+                            onClick={() => { onLeadClick(lead); setRecPanel(null); }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all text-white"
+                            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 2px 10px rgba(99,102,241,0.35)' }}
+                            title="פתח כרטיס ליד">
+                            👤 פתח כרטיס
+                          </button>
+                          {/* Email */}
+                          {lead.email && (
+                            <a href={`mailto:${lead.email}`}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                              style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#a5b4fc' }}
+                              title={`שלח מייל ל-${lead.email}`}>
+                              📧 מייל
+                            </a>
+                          )}
+                          {/* Call */}
+                          {lead.phone && (
+                            <a href={`tel:${lead.phone}`}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                              style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.22)', color: '#6ee7b7' }}
+                              title={`התקשר ל-${lead.phone}`}>
+                              📞 התקשר
+                            </a>
+                          )}
+                          {/* WhatsApp */}
+                          {lead.phone && (
+                            <button
+                              onClick={() => { setWhatsAppLead(lead); setRecPanel(null); }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                              style={{ background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.22)', color: '#86efac' }}
+                              title="שלח WhatsApp">
+                              💬 WhatsApp
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Task list (for task-type insights) */}
+            {recPanel.insightTasks.length > 0 && recPanel.insightLeads.length === 0 && (
+              <div className="overflow-y-auto flex-1">
+                {recPanel.insightTasks.map((task, i) => {
+                  const isOverdue = task.date && task.date < todayISO;
+                  return (
+                    <div key={task.id}
+                      className="px-5 py-3.5 transition-all cursor-pointer"
+                      style={{
+                        borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : undefined,
+                        background: 'transparent',
+                      }}
+                      onClick={() => { setEditingDashTask(task); setRecPanel(null); }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-right flex-1 min-w-0">
+                          <div className="font-medium text-sm text-white truncate">{task.description}</div>
+                          <div className="flex items-center gap-2 justify-end mt-0.5">
+                            {task.company && task.company !== '—' && (
+                              <span className="text-[10px]" style={{ color: '#fb923c' }}>{task.company}</span>
+                            )}
+                            <span className="text-[10px]" style={{ color: isOverdue ? '#f87171' : 'rgba(255,255,255,0.35)' }}>
+                              {isOverdue ? '⚠️' : '📅'} {task.date}
+                            </span>
+                          </div>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-lg font-bold flex-shrink-0"
+                          style={task.priority === 'high'
+                            ? { background: 'rgba(239,68,68,0.18)', color: '#f87171' }
+                            : task.priority === 'medium'
+                              ? { background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }
+                              : { background: 'rgba(99,102,241,0.15)', color: '#818cf8' }}>
+                          {task.priority === 'high' ? 'דחוף' : task.priority === 'medium' ? 'בינוני' : 'נמוך'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="px-5 py-3 flex-shrink-0 flex items-center justify-between gap-3"
+              style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+              <button onClick={() => { onOpenAi?.(recPanel.action); setRecPanel(null); }}
+                className="flex items-center gap-1.5 text-xs font-medium transition-all"
+                style={{ color: '#818cf8' }}>
+                🤖 שאל את RAY
+              </button>
+              <button onClick={() => setRecPanel(null)}
+                className="text-xs px-4 py-2 rounded-xl transition-all"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)' }}>
+                סגור
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-// ─── Sub-components ────────────────────────────────────────────────────────────
-function AiScoreBadge({ score }: { score: number }) {
-  if (!score) return <span className="text-slate-300 text-xs">—</span>;
-  const color = score >= 75 ? 'text-green-600 bg-green-50' : score >= 50 ? 'text-orange-500 bg-orange-50' : 'text-slate-500 bg-slate-100';
-  return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${color}`}>{score}%</span>;
+// ─── Sub-components ─────────────────────────────────────────────────────────────
+
+function ScoreRing({ score }: { score: number }) {
+  const { isDark } = useTheme();
+  const r = 14;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  const color = score >= 75 ? '#10b981' : score >= 50 ? '#f97316' : '#ef4444';
+  const trackColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  return (
+    <svg width="36" height="36" viewBox="0 0 36 36" className="flex-shrink-0">
+      <circle cx="18" cy="18" r={r} fill="none" stroke={trackColor} strokeWidth="3" />
+      <circle cx="18" cy="18" r={r} fill="none" stroke={color} strokeWidth="3"
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${circ}`}
+        strokeDashoffset={circ * 0.25}
+        style={{ filter: `drop-shadow(0 0 4px ${color}88)`, transition: 'stroke-dasharray 0.6s ease' }} />
+      <text x="18" y="22" textAnchor="middle" fontSize="8" fontWeight="800" fill={color}>{score}</text>
+    </svg>
+  );
 }
 
-function KpiCard({ label, value, sub, icon, color, percent }: {
-  label: string; value: number; sub: string; icon: React.ReactNode;
-  color: 'red' | 'green' | 'orange' | 'indigo'; percent: number;
-  // indigo → slate for Ray brand
+function NeonKpiCard({ label, value, sub, icon, neon, percent }: {
+  label: string; value: number; sub: string; icon: React.ReactNode; neon: string; percent: number;
 }) {
-  const barColor  = { red: 'bg-red-400', green: 'bg-green-400', orange: 'bg-orange-400', indigo: 'bg-slate-500' }[color];
-  const textColor = { red: 'text-red-600', green: 'text-green-600', orange: 'text-orange-600', indigo: 'text-slate-700' }[color];
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:shadow-md transition-shadow">
+    <div
+      className="rounded-xl p-4 transition-all duration-200 hover:-translate-y-0.5 cursor-default"
+      style={{
+        background: `linear-gradient(135deg,${neon}10,${neon}06)`,
+        border: `1px solid ${neon}28`,
+        backdropFilter: 'blur(8px)',
+        boxShadow: `0 2px 16px ${neon}12`,
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 32px ${neon}28, 0 0 0 1px ${neon}48`; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 2px 16px ${neon}12`; }}>
       <div className="flex items-center justify-between mb-2">
-        <div className={`text-3xl font-bold ${textColor}`}>{value}</div>
-        <div className="p-2 rounded-lg bg-slate-50">{icon}</div>
+        <div className="text-3xl font-black text-white">{value}</div>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: `${neon}18`, border: `1px solid ${neon}28` }}>
+          <div style={{ color: neon }}>{icon}</div>
+        </div>
       </div>
-      <div className="text-sm font-medium text-slate-700 text-right">{label}</div>
-      <div className="text-xs text-slate-400 text-right mt-0.5">{sub}</div>
-      <div className="mt-3 h-1 bg-slate-100 rounded-full">
-        <div className={`h-1 rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${Math.min(percent, 100)}%` }} />
+      <div className="text-sm font-bold text-right" style={{ color: 'rgba(255,255,255,0.75)' }}>{label}</div>
+      <div className="text-xs text-right mt-0.5" style={{ color: 'rgba(255,255,255,0.32)' }}>{sub}</div>
+      <div className="mt-3 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${Math.min(percent, 100)}%`, background: `linear-gradient(90deg,${neon}55,${neon})`, boxShadow: `0 0 6px ${neon}55` }} />
       </div>
     </div>
   );
 }
 
-function SortTh({ label, field, current, dir, onSort }: {
-  label: string; field: SortField; current: SortField; dir: SortDir; onSort: (f: SortField) => void;
+function DarkSortTh({ label, field, current, dir, onSort, className }: {
+  label: string; field: SortField; current: SortField; dir: SortDir; onSort: (f: SortField) => void; className?: string;
 }) {
   const active = current === field;
   return (
-    <th className={`text-right px-4 py-3 text-xs font-semibold cursor-pointer select-none transition-colors ${active ? 'text-black' : 'text-slate-500 hover:text-slate-700'}`}
+    <th
+      className={`text-right px-4 py-3 text-[11px] font-bold cursor-pointer select-none transition-colors ${className ?? ''}`}
+      style={{ color: active ? '#818cf8' : 'rgba(255,255,255,0.35)' }}
       onClick={() => onSort(field)}>
-      <div className="flex items-center gap-1 justify-end">
-        {active ? (dir === 'asc' ? <ArrowUp size={12} className="text-black" /> : <ArrowDown size={12} className="text-black" />) : <ArrowUpDown size={12} className="text-slate-300" />}
+      {/* dir="ltr" keeps the icon-then-label order left→right so the text stays right-edge-aligned matching data cells */}
+      <div className="flex items-center gap-1 justify-end" dir="ltr">
+        {active
+          ? (dir === 'asc' ? <ArrowUp size={12} style={{ color: '#818cf8' }} /> : <ArrowDown size={12} style={{ color: '#818cf8' }} />)
+          : <ArrowUpDown size={12} style={{ color: 'rgba(255,255,255,0.18)' }} />}
         {label}
       </div>
     </th>
   );
 }
 
-function StatusTab({ label, count, active, onClick, primary }: {
-  label: string; count: number; active: boolean; onClick: () => void; primary?: boolean;
+/* ═══════════════════════════════════════════════════════════════════════════
+   DASHBOARD TASK EDIT MODAL — lightweight version for "My Day" clicks
+═══════════════════════════════════════════════════════════════════════════ */
+function DashboardTaskEditModal({ task, onClose, onSave }: {
+  task: DashTask;
+  onClose: () => void;
+  onSave: (updated: DashTask) => void;
 }) {
+  const [desc,     setDesc]     = useState(task.description);
+  const [date,     setDate]     = useState(task.date);
+  const [time,     setTime]     = useState(task.time);
+  const [priority, setPriority] = useState<import('../types').TaskPriority>(task.priority);
+
+  const todayISO = new Date().toISOString().split('T')[0];
+
   return (
-    <button type="button" onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-        active && primary ? 'bg-black text-white' :
-        active            ? 'bg-neutral-100 text-black border border-neutral-300' :
-                            'bg-slate-100 text-slate-600 hover:bg-slate-200'
-      }`}>
-      {label}
-      <span className={`font-bold ${active && primary ? 'text-white' : active ? 'text-black' : 'text-slate-500'}`}>{count}</span>
-    </button>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
+      style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}>
+      <div className="rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-md overflow-hidden"
+        dir="rtl"
+        style={{ background: '#ffffff', border: '1px solid #e2e8f0', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+        <div className="h-1" style={{ background: 'linear-gradient(90deg,#6366f1,#8b5cf6,#06b6d4)' }} />
+
+        {/* Header */}
+        <div className="px-5 pt-5 pb-4 flex items-center justify-between" style={{ borderBottom: '1px solid #f1f5f9' }}>
+          <button onClick={onClose}
+            className="w-8 h-8 rounded-xl flex items-center justify-center transition-all"
+            style={{ color: '#94a3b8', background: '#f1f5f9' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#e0e7ff'; e.currentTarget.style.color = '#6366f1'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#94a3b8'; }}>
+            <X size={16} />
+          </button>
+          <div className="text-right">
+            <h2 className="font-black text-base" style={{ color: '#0f172a' }}>✏️ עריכת משימה</h2>
+            {task.company && task.company !== '—' && (
+              <p className="text-[11px] mt-0.5" style={{ color: '#94a3b8' }}>🏢 {task.company}</p>
+            )}
+          </div>
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 0 12px rgba(99,102,241,0.35)' }}>
+            <Bell size={14} className="text-white" />
+          </div>
+        </div>
+
+        <div className="px-5 pb-5 space-y-4 pt-4">
+          {/* Description */}
+          <div className="rounded-2xl p-4" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+            <label className="block text-[10px] font-bold mb-2 uppercase tracking-wide" style={{ color: '#94a3b8' }}>תיאור</label>
+            <textarea rows={2} value={desc} onChange={e => setDesc(e.target.value)} autoFocus
+              className="w-full bg-transparent text-sm text-right focus:outline-none resize-none placeholder-slate-400"
+              style={{ color: '#0f172a' }}
+              placeholder="תיאור המשימה..."
+            />
+          </div>
+
+          {/* Date + Time */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-2xl p-3" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+              <label className="block text-[10px] font-bold mb-1.5" style={{ color: '#94a3b8' }}>📅 תאריך</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="w-full bg-transparent text-sm focus:outline-none" style={{ colorScheme: 'light', color: '#0f172a' }} />
+            </div>
+            <div className="rounded-2xl p-3" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+              <label className="block text-[10px] font-bold mb-1.5" style={{ color: '#94a3b8' }}>⏰ שעה</label>
+              <input type="time" value={time} onChange={e => setTime(e.target.value)}
+                className="w-full bg-transparent text-sm focus:outline-none" style={{ colorScheme: 'light', color: '#0f172a' }} />
+            </div>
+          </div>
+
+          {/* Quick dates */}
+          <div className="flex gap-2">
+            {[{ label: '☀️ היום', days: 0 }, { label: '→ מחר', days: 1 }, { label: '+3', days: 3 }, { label: '+7', days: 7 }].map(({ label, days }) => {
+              const d = new Date(); d.setDate(d.getDate() + days);
+              const val = d.toISOString().split('T')[0];
+              return (
+                <button key={label} onClick={() => setDate(val)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+                  style={date === val
+                    ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 10px rgba(99,102,241,0.3)' }
+                    : { background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b' }
+                  }>{label}</button>
+              );
+            })}
+          </div>
+
+          {/* Priority */}
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              { p: 'high'   as const, label: 'דחוף',   emoji: '🔴', activeBg: '#fef2f2', activeBorder: '#fca5a5', activeColor: '#dc2626' },
+              { p: 'medium' as const, label: 'בינוני', emoji: '🟡', activeBg: '#fffbeb', activeBorder: '#fde68a', activeColor: '#d97706' },
+              { p: 'low'    as const, label: 'נמוך',   emoji: '🟢', activeBg: '#f0fdf4', activeBorder: '#86efac', activeColor: '#16a34a' },
+            ] as const).map(({ p, label, emoji, activeBg, activeBorder, activeColor }) => (
+              <button key={p} onClick={() => setPriority(p)}
+                className="py-3 rounded-2xl flex flex-col items-center gap-1 transition-all"
+                style={priority === p
+                  ? { background: activeBg, color: activeColor, border: `1.5px solid ${activeBorder}` }
+                  : { background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#94a3b8' }}>
+                <span className="text-lg leading-none">{emoji}</span>
+                <span className="text-xs font-semibold">{label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3">
+            <button onClick={onClose}
+              className="flex-1 py-3 rounded-2xl text-sm font-semibold transition-all"
+              style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b' }}>
+              ביטול
+            </button>
+            <button onClick={() => { if (!desc.trim() || !date) return; onSave({ ...task, description: desc, date, time, priority }); }}
+              disabled={!desc.trim() || !date}
+              className="flex-1 py-3 rounded-2xl text-white text-sm font-bold transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 0 16px rgba(99,102,241,0.3)' }}>
+              <CheckCircle2 size={14} /> שמור
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

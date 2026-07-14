@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { X, Mail, Loader2, Copy, Check, ExternalLink, Sparkles, Send, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, LeadStatus, WorkspaceProfile } from '../types';
-import { getApiKey } from '../lib/apiKey';
-import { sendLeadEmail, isEmailJSConfigured } from '../lib/emailjs';
+import { sendLeadEmail, isEmailConfigured } from '../lib/email';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { useLang } from '../contexts/LangContext';
 
@@ -197,7 +196,7 @@ export default function EmailModal({ lead, onClose, workspace }: EmailModalProps
   const [copied, setCopied]                  = useState(false);
   const [sendStatus, setSendStatus]          = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [showContext, setShowContext]        = useState(false);
-  const emailJSReady = isEmailJSConfigured();
+  const emailJSReady = isEmailConfigured(workspace);
 
   const options = EMAIL_OPTIONS_BY_STATUS[lead.status] || EMAIL_OPTIONS_BY_STATUS['default'];
 
@@ -214,11 +213,6 @@ export default function EmailModal({ lead, onClose, workspace }: EmailModalProps
   const generateEmail = async (option: EmailOption) => {
     setSelectedOption(option);
     setGeneratedEmail('');
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      setGeneratedEmail('⚠️ מפתח API חסר. הגדר VITE_ANTHROPIC_API_KEY ב-.env');
-      return;
-    }
     // Check token balance before making the API call
     if (workspace?.id) {
       const hasBal = await hasBalance(workspace.id);
@@ -229,7 +223,7 @@ export default function EmailModal({ lead, onClose, workspace }: EmailModalProps
     }
     setLoading(true);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       let text = '';
       const bizCtx = buildBusinessContext(workspace);
       const stream = await client.messages.stream({
@@ -290,7 +284,7 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
     if (!generatedEmail || sendStatus === 'sending') return;
     setSendStatus('sending');
     try {
-      await sendLeadEmail({ toEmail: lead.email, toName: lead.contactName, subject: getSubject(), message: getBody(), fromName: 'RAY Digital Agency' });
+      await sendLeadEmail({ toEmail: lead.email, toName: lead.contactName, subject: getSubject(), message: getBody(), fromName: workspace?.emailConfig?.fromName || workspace?.name || 'RAY CRM', workspaceId: workspace?.id, workspace });
       setSendStatus('sent');
       setTimeout(() => setSendStatus('idle'), 4000);
     } catch {
@@ -378,23 +372,27 @@ ${bizCtx ? `\nפרטי העסק:\n${bizCtx}` : ''}
             <button
               onClick={() => generateEmail(AUTO_OPTION)}
               disabled={loading}
-              className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all mb-3 ${
+              className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 transition-all mb-3 ${
                 selectedOption?.id === 'auto'
                   ? 'border-indigo-500 bg-indigo-50'
-                  : 'border-indigo-200 bg-gradient-to-l from-indigo-50 to-violet-50 hover:border-indigo-400'
+                  : 'border-indigo-300 bg-gradient-to-l from-indigo-50 to-violet-50 hover:border-indigo-500 hover:shadow-md hover:shadow-indigo-100'
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 2px 8px rgba(99,102,241,0.35)' }}>
                 {loading && selectedOption?.id === 'auto'
-                  ? <Loader2 size={15} className="animate-spin text-indigo-500" />
-                  : <span className="text-lg">⚡</span>
+                  ? <Loader2 size={16} className="animate-spin text-white" />
+                  : <span className="text-base">⚡</span>
                 }
-                <span className="text-sm text-indigo-600 font-semibold">{t('emailModal.autoEmail')}</span>
               </div>
-              <div className="text-right">
-                <p className="text-xs font-black text-indigo-700">{t('emailModal.recommended')}</p>
-                <p className="text-xs text-indigo-400">{t('emailModal.analysesAll')}</p>
+              <div className="flex-1 text-right">
+                <p className="text-sm font-bold text-indigo-700">{t('emailModal.autoEmail')}</p>
+                <p className="text-xs text-indigo-400 mt-0.5">{t('emailModal.analysesAll')}</p>
               </div>
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0"
+                style={{ background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', color: '#fff' }}>
+                {t('emailModal.recommended')}
+              </span>
             </button>
 
             {/* Divider */}

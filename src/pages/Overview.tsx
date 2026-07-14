@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend,
@@ -10,9 +11,8 @@ import {
   ChevronDown, ArrowUpRight, ArrowDownRight, Star, Zap,
   BarChart2, PieChartIcon, TableIcon, Sparkles, Loader2, Copy,
 } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
-import { getApiKey } from '../lib/apiKey';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 import type { Lead, LeadStatus } from '../types';
 
 /* ─── constants ───────────────────────────────────────────────────────────── */
@@ -94,33 +94,44 @@ function KpiCard({ label, value, sub, trend, color, icon: Icon }: {
   label: string; value: string|number; sub?: string;
   trend?: { value: number; label: string }; color: string; icon: React.ElementType;
 }) {
+  const { c } = useTheme();
   const up = (trend?.value ?? 0) >= 0;
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-all">
+    <div
+      className="rounded-2xl p-5 transition-all"
+      style={{
+        background: `linear-gradient(135deg,${color}10,${color}06)`,
+        border: `1px solid ${color}28`,
+        backdropFilter: 'blur(8px)',
+      }}
+    >
       <div className="flex items-start justify-between mb-3">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: color+'15' }}>
           <Icon size={18} style={{ color }} />
         </div>
         {trend && (
           <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg ${
-            up ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+            up
+              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+              : 'bg-red-500/10 text-red-400 border border-red-500/20'
           }`}>
             {up ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
             {Math.abs(trend.value)}%
           </div>
         )}
       </div>
-      <p className="text-2xl font-black text-slate-900 mb-0.5">{value}</p>
-      <p className="text-sm font-medium text-slate-500">{label}</p>
-      {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
-      {trend && <p className="text-xs text-slate-400 mt-1">{trend.label}</p>}
+      <p className="text-2xl font-black mb-0.5" style={{ color: c.textPrimary }}>{value}</p>
+      <p className="text-sm font-medium" style={{ color: c.textSecondary }}>{label}</p>
+      {sub && <p className="text-xs mt-0.5" style={{ color: c.textMuted }}>{sub}</p>}
+      {trend && <p className="text-xs mt-1" style={{ color: c.textMuted }}>{trend.label}</p>}
     </div>
   );
 }
 
 const tooltipStyle = {
-  contentStyle: { background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, fontSize:12, boxShadow:'0 8px 24px rgba(0,0,0,0.08)' },
-  cursor: { fill: 'rgba(99,102,241,0.04)' },
+  contentStyle: { background:'rgba(10,15,30,0.95)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:8, color:'white', fontSize:12 },
+  labelStyle: { color:'rgba(255,255,255,0.6)' },
+  cursor: { fill: 'rgba(99,102,241,0.06)' },
 };
 
 /* ─── SOURCE COLORS ────────────────────────────────────────────────────────── */
@@ -140,6 +151,7 @@ function getSrcEmoji(src: string) { return SOURCE_EMOJI[src]  ?? '📊'; }
 
 /* ─── SOURCES ANALYSIS COMPONENT ───────────────────────────────────────────── */
 function SourcesAnalysis({ leads, workspaceId }: { leads: Lead[]; workspaceId?: string }) {
+  const { c } = useTheme();
   const [loading,  setLoading]  = useState(false);
   const [analysis, setAnalysis] = useState('');
   const [budget,   setBudget]   = useState('10000');
@@ -174,15 +186,13 @@ function SourcesAnalysis({ leads, workspaceId }: { leads: Lead[]; workspaceId?: 
   );
 
   const analyze = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) return;
     if (workspaceId) {
       const ok = await hasBalance(workspaceId);
       if (!ok) return;
     }
     setLoading(true); setAnalysis('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const statsText = stats.map(s =>
         `${s.src}: ${s.total} לידים → ${s.active} לקוחות (${s.conv}% המרה) → ₪${s.rev.toLocaleString()}/חודש, ציון AI ממוצע ${s.avgScore}%`
       ).join('\n');
@@ -225,9 +235,9 @@ ${statsText}
   };
 
   if (stats.length === 0) return (
-    <div className="bg-white rounded-2xl border border-slate-100 p-16 text-center shadow-sm">
-      <BarChart2 size={44} className="mx-auto mb-3 text-slate-200"/>
-      <p className="text-slate-500 font-medium">אין נתוני מקורות — הוסף מקור ללידים</p>
+    <div className="rounded-2xl p-16 text-center" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+      <BarChart2 size={44} className="mx-auto mb-3" style={{ color: c.textMuted }}/>
+      <p style={{ color: c.textMuted }} className="font-medium">אין נתוני מקורות — הוסף מקור ללידים</p>
     </div>
   );
 
@@ -238,11 +248,12 @@ ${statsText}
       {/* Header row */}
       <div className="flex items-center justify-between">
         <button onClick={exportSources}
-          className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm transition-all">
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+          style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
           <Download size={12}/> ייצוא CSV
         </button>
-        <h2 className="font-black text-slate-800 flex items-center gap-2">
-          <BarChart2 size={18} className="text-indigo-500"/> ניתוח מקורות לידים
+        <h2 className="font-black flex items-center gap-2" style={{ color: c.textPrimary }}>
+          <BarChart2 size={18} style={{ color: c.accentText }}/> ניתוח מקורות לידים
         </h2>
       </div>
 
@@ -256,21 +267,21 @@ ${statsText}
 
       {/* Best source banner */}
       {best && (
-        <div className="bg-gradient-to-l from-emerald-50 to-indigo-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-4">
+        <div className="rounded-2xl p-4 flex items-center gap-4" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', backdropFilter: 'blur(8px)' }}>
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0"
             style={{ backgroundColor: getSrcColor(best.src) + '20' }}>
             {getSrcEmoji(best.src)}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">🏆 המקור הטוב ביותר</p>
-            <p className="text-lg font-black text-slate-800">{best.src}</p>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-[11px] font-bold uppercase tracking-wider mb-0.5" style={{ color: '#4ade80' }}>🏆 המקור הטוב ביותר</p>
+            <p className="text-lg font-black" style={{ color: c.textPrimary }}>{best.src}</p>
+            <p className="text-xs mt-0.5" style={{ color: c.textMuted }}>
               {best.total} לידים · {best.active} לקוחות פעילים · {fmtMoney(best.rev)}/חודש
             </p>
           </div>
           <div className="text-center flex-shrink-0">
             <p className="text-3xl font-black" style={{ color: getSrcColor(best.src) }}>{best.conv}%</p>
-            <p className="text-xs text-slate-400">המרה</p>
+            <p className="text-xs" style={{ color: c.textMuted }}>המרה</p>
           </div>
         </div>
       )}
@@ -278,23 +289,23 @@ ${statsText}
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Revenue bars */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-          <h3 className="font-bold text-slate-800 mb-4 text-right">הכנסה לפי מקור</h3>
+        <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+          <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>הכנסה לפי מקור</h3>
           <div className="space-y-3">
             {stats.map(s => (
               <div key={s.src}>
                 <div className="flex justify-between text-xs mb-1.5">
-                  <span className="font-bold text-slate-700">{fmtMoney(s.rev)}/חודש</span>
+                  <span className="font-bold" style={{ color: c.textSecondary }}>{fmtMoney(s.rev)}/חודש</span>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-slate-600">{s.src}</span>
+                    <span style={{ color: c.textSecondary }}>{s.src}</span>
                     <span className="text-lg leading-none">{getSrcEmoji(s.src)}</span>
                   </div>
                 </div>
-                <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-2.5 rounded-full overflow-hidden" style={{ backgroundColor: c.subtleBg }}>
                   <div className="h-full rounded-full transition-all duration-700"
                     style={{ width: `${Math.max(4, (s.rev / maxRev) * 100)}%`, backgroundColor: getSrcColor(s.src) }}/>
                 </div>
-                <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+                <div className="flex justify-between text-[10px] mt-0.5" style={{ color: c.textMuted }}>
                   <span>{s.active} לקוחות · {s.conv}% המרה</span>
                   <span>{s.total} לידים</span>
                 </div>
@@ -304,17 +315,16 @@ ${statsText}
         </div>
 
         {/* Volume Recharts bar */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-          <h3 className="font-bold text-slate-800 mb-4 text-right">נפח לידים vs לקוחות</h3>
+        <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+          <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>נפח לידים vs לקוחות</h3>
           <ResponsiveContainer width="100%" height={190}>
             <BarChart data={stats} margin={{ top: 4, right: 4, left: -20, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
-              <XAxis dataKey="src" tick={{ fontSize: 9, fill: '#94a3b8' }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" interval={0}/>
-              <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={24}/>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
+              <XAxis dataKey="src" tick={{ fontSize: 9, fill: 'rgba(255,255,255,0.4)' }} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} tickLine={false} angle={-30} textAnchor="end" interval={0}/>
+              <YAxis tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.4)' }} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} tickLine={false} width={24}/>
               <Tooltip {...tooltipStyle}/>
-              <Legend iconType="circle" iconSize={7}
-                formatter={v => <span style={{ fontSize: 10, color: '#64748b' }}>{v}</span>}/>
-              <Bar dataKey="total"  name="לידים"        radius={[4,4,0,0]} maxBarSize={30} fill="#e0e7ff"/>
+              <Legend iconType="circle" iconSize={7} wrapperStyle={{ color: c.textSecondary, fontSize: 11 }}/>
+              <Bar dataKey="total"  name="לידים"        radius={[4,4,0,0]} maxBarSize={30} fill="#6366f1" opacity={0.4}/>
               <Bar dataKey="active" name="לקוחות פעילים" radius={[4,4,0,0]} maxBarSize={30}>
                 {stats.map((s, i) => <Cell key={i} fill={getSrcColor(s.src)}/>)}
               </Bar>
@@ -324,50 +334,53 @@ ${statsText}
       </div>
 
       {/* Detailed table */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <span className="text-xs text-slate-400">{stats.length} מקורות</span>
-          <h3 className="font-bold text-slate-800">ביצועים מפורטים לפי מקור</h3>
+      <div className="rounded-2xl overflow-hidden" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${c.divider}` }}>
+          <span className="text-xs" style={{ color: c.textMuted }}>{stats.length} מקורות</span>
+          <h3 className="font-bold" style={{ color: c.textPrimary }}>ביצועים מפורטים לפי מקור</h3>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 text-right">
-                <th className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">מקור</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">לידים</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">לקוחות</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">המרה</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">ציון AI</th>
-                <th className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-left">הכנסה/חודש</th>
+              <tr className="text-right" style={{ borderBottom: `1px solid ${c.divider}` }}>
+                <th className="px-5 py-3 text-xs font-bold uppercase tracking-wider" style={{ color: c.textMuted }}>מקור</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-center" style={{ color: c.textMuted }}>לידים</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-center" style={{ color: c.textMuted }}>לקוחות</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-center" style={{ color: c.textMuted }}>המרה</th>
+                <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-center" style={{ color: c.textMuted }}>ציון AI</th>
+                <th className="px-5 py-3 text-xs font-bold uppercase tracking-wider text-left" style={{ color: c.textMuted }}>הכנסה/חודש</th>
               </tr>
             </thead>
             <tbody>
               {stats.map((s, i) => (
-                <tr key={s.src} className={`border-b border-slate-50 ${
-                  i === 0 ? 'bg-emerald-50/40' : i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
-                }`}>
+                <tr key={s.src} style={{
+                  borderBottom: `1px solid ${c.divider}`,
+                  background: i === 0 ? 'rgba(34,197,94,0.05)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                }}>
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center gap-2 justify-end">
-                      {i === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded-full">🏆</span>}
-                      <span className="font-semibold text-slate-800">{s.src}</span>
+                      {i === 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>🏆</span>}
+                      <span className="font-semibold" style={{ color: c.textPrimary }}>{s.src}</span>
                       <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: getSrcColor(s.src) }}/>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-center font-semibold text-slate-700">{s.total}</td>
-                  <td className="px-4 py-3 text-center font-bold text-emerald-600">{s.active}</td>
+                  <td className="px-4 py-3 text-center font-semibold" style={{ color: c.textSecondary }}>{s.total}</td>
+                  <td className="px-4 py-3 text-center font-bold" style={{ color: '#4ade80' }}>{s.active}</td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                      s.conv >= 30 ? 'bg-emerald-100 text-emerald-700'
-                      : s.conv >= 15 ? 'bg-amber-100 text-amber-700'
-                      : 'bg-slate-100 text-slate-500'
-                    }`}>{s.conv}%</span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={
+                      s.conv >= 30
+                        ? { background: 'rgba(34,197,94,0.15)', color: '#4ade80' }
+                        : s.conv >= 15
+                          ? { background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }
+                          : { background: c.subtleBg, color: c.textMuted }
+                    }>{s.conv}%</span>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`text-xs font-semibold ${
-                      s.avgScore >= 70 ? 'text-emerald-600' : s.avgScore >= 50 ? 'text-amber-600' : 'text-slate-400'
-                    }`}>{s.avgScore}%</span>
+                    <span className="text-xs font-semibold" style={{
+                      color: s.avgScore >= 70 ? '#4ade80' : s.avgScore >= 50 ? '#fbbf24' : 'rgba(255,255,255,0.38)',
+                    }}>{s.avgScore}%</span>
                   </td>
-                  <td className="px-5 py-3 text-left font-black text-slate-800">₪{s.rev.toLocaleString()}</td>
+                  <td className="px-5 py-3 text-left font-black" style={{ color: c.textPrimary }}>₪{s.rev.toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
@@ -376,46 +389,49 @@ ${statsText}
       </div>
 
       {/* AI Analysis panel */}
-      <div className="bg-gradient-to-bl from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-5">
+      <div className="rounded-2xl p-5" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.18)', backdropFilter: 'blur(8px)' }}>
         <div className="flex items-center gap-2 mb-4 justify-end">
-          <h3 className="font-bold text-slate-800">ניתוח AI + המלצות תקציב</h3>
-          <Brain size={16} className="text-indigo-500"/>
+          <h3 className="font-bold" style={{ color: c.textPrimary }}>ניתוח AI + המלצות תקציב</h3>
+          <Brain size={16} style={{ color: c.accentText }}/>
         </div>
         <div className="grid md:grid-cols-3 gap-4">
           <div className="space-y-3">
             <div>
-              <label className="block text-slate-600 text-xs font-semibold mb-1.5 text-right">תקציב שיווק חודשי (₪)</label>
+              <label className="block text-xs font-semibold mb-1.5 text-right" style={{ color: c.textSecondary }}>תקציב שיווק חודשי (₪)</label>
               <input type="number" value={budget} onChange={e => setBudget(e.target.value)}
-                className="w-full bg-white border border-indigo-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 text-right focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200"/>
+                className="w-full rounded-xl px-3 py-2.5 text-sm text-right focus:outline-none"
+                style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textPrimary }}/>
             </div>
             <button onClick={analyze} disabled={loading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+              className="w-full font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white' }}>
               {loading
                 ? <><Loader2 size={14} className="animate-spin"/> מנתח...</>
                 : <><Brain size={14}/> נתח ויעץ</>}
             </button>
-            <p className="text-[10px] text-slate-400 text-center">מנתח את כל מקורות הלידים של סביבת העבודה</p>
+            <p className="text-[10px] text-center" style={{ color: c.textMuted }}>מנתח את כל מקורות הלידים של סביבת העבודה</p>
           </div>
-          <div className="md:col-span-2 bg-white border border-indigo-100 rounded-2xl p-4 min-h-[160px]">
+          <div className="md:col-span-2 rounded-2xl p-4 min-h-[160px]" style={{ background: c.subtleBg, border: '1px solid rgba(99,102,241,0.15)' }}>
             {analysis ? (
               <>
                 <div className="flex items-center justify-between mb-3">
                   <button
                     onClick={() => { navigator.clipboard.writeText(analysis).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
-                    className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg transition-colors font-medium">
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors font-medium"
+                    style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary }}>
                     <Copy size={10}/> {copied ? '✓ הועתק' : 'העתק'}
                   </button>
-                  <span className="text-xs text-indigo-400 flex items-center gap-1"><Sparkles size={9}/> ניתוח AI</span>
+                  <span className="text-xs flex items-center gap-1" style={{ color: c.accentText }}><Sparkles size={9}/> ניתוח AI</span>
                 </div>
-                <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap text-right overflow-y-auto max-h-[400px]">
+                <div className="text-sm leading-relaxed whitespace-pre-wrap text-right overflow-y-auto max-h-[400px]" style={{ color: c.textSecondary }}>
                   {analysis}
                 </div>
               </>
             ) : (
               <div className="flex flex-col items-center justify-center h-full py-8 text-center">
-                <Brain size={36} className="text-indigo-200 mb-2"/>
-                <p className="text-slate-500 text-sm font-medium">הכנס תקציב ולחץ "נתח"</p>
-                <p className="text-slate-400 text-xs mt-1">AI ימליץ על חלוקת תקציב אופטימלית לכל מקור</p>
+                <Brain size={36} className="mb-2" style={{ color: 'rgba(99,102,241,0.3)' }}/>
+                <p className="text-sm font-medium" style={{ color: c.textMuted }}>הכנס תקציב ולחץ "נתח"</p>
+                <p className="text-xs mt-1" style={{ color: c.textMuted }}>AI ימליץ על חלוקת תקציב אופטימלית לכל מקור</p>
               </div>
             )}
           </div>
@@ -430,6 +446,7 @@ interface OverviewProps { leads: Lead[]; onLeadClick: (lead: Lead) => void; work
 
 export default function Overview({ leads, onLeadClick, workspaceId }: OverviewProps) {
   const { t, dir } = useLang();
+  const { isDark, c } = useTheme();
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [tab,       setTab]       = useState<ReportTab>('overview');
   const [sortCol,   setSortCol]   = useState<'company'|'budget'|'aiScore'|'status'|'lastUpdate'>('aiScore');
@@ -522,15 +539,15 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
   const insights = useMemo(() => {
     const list: {icon:string; text:string; color:string}[] = [];
     const bestSrc = sourceStats[0];
-    if (bestSrc) list.push({ icon:'🏆', color:'text-amber-600', text:`המקור הטוב ביותר הוא "${bestSrc.src}" עם ${bestSrc.total} לידים ו-${bestSrc.conv}% המרה` });
-    if (kpi.stale>0) list.push({ icon:'⚠️', color:'text-red-500', text:`${kpi.stale} לידים לא עודכנו ב-14+ ימים — זקוקים לטיפול` });
+    if (bestSrc) list.push({ icon:'🏆', color:'#fbbf24', text:`המקור הטוב ביותר הוא "${bestSrc.src}" עם ${bestSrc.total} לידים ו-${bestSrc.conv}% המרה` });
+    if (kpi.stale>0) list.push({ icon:'⚠️', color:'#f87171', text:`${kpi.stale} לידים לא עודכנו ב-14+ ימים — זקוקים לטיפול` });
     const hot = filtered.filter(l=>l.aiScore>=80 && l.status==='חדש');
-    if (hot.length>0) list.push({ icon:'🔥', color:'text-orange-500', text:`${hot.length} לידים חמים (ציון 80+) ממתינים לטיפול ראשוני` });
-    if (kpi.conv>=30) list.push({ icon:'✅', color:'text-emerald-600', text:`יחס המרה של ${kpi.conv}% — מעל הממוצע בתעשייה (20%)` });
-    else if (kpi.conv>0) list.push({ icon:'📈', color:'text-blue-500', text:`יחס המרה ${kpi.conv}% — יש פוטנציאל לשיפור, הממוצע בתעשייה 20%` });
+    if (hot.length>0) list.push({ icon:'🔥', color:'#fb923c', text:`${hot.length} לידים חמים (ציון 80+) ממתינים לטיפול ראשוני` });
+    if (kpi.conv>=30) list.push({ icon:'✅', color:'#4ade80', text:`יחס המרה של ${kpi.conv}% — מעל הממוצע בתעשייה (20%)` });
+    else if (kpi.conv>0) list.push({ icon:'📈', color:'#60a5fa', text:`יחס המרה ${kpi.conv}% — יש פוטנציאל לשיפור, הממוצע בתעשייה 20%` });
     const waiting = filtered.filter(l=>l.waitingContent);
-    if (waiting.length>0) list.push({ icon:'⏳', color:'text-slate-500', text:`${waiting.length} לידים ממתינים לתוכן מהלקוח` });
-    if (kpi.avgDeal>0) list.push({ icon:'💰', color:'text-violet-600', text:`ערך לקוח פעיל ממוצע: ${fmtMoney(kpi.avgDeal)}/חודש` });
+    if (waiting.length>0) list.push({ icon:'⏳', color: c.textSecondary, text:`${waiting.length} לידים ממתינים לתוכן מהלקוח` });
+    if (kpi.avgDeal>0) list.push({ icon:'💰', color:'#c084fc', text:`ערך לקוח פעיל ממוצע: ${fmtMoney(kpi.avgDeal)}/חודש` });
     return list;
   }, [filtered, sourceStats, kpi]);
 
@@ -556,25 +573,38 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
 
   /* ─── render ─────────────────────────────────────────────────────────────── */
   return (
-    <div className="space-y-5" dir={dir}>
+    <div
+      className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6 space-y-5"
+      dir={dir}
+      style={{
+        background: c.pageBg,
+        backgroundImage: c.pageBgImage,
+        backgroundSize: c.pageBgSize,
+        minHeight: 'calc(100vh - 56px)',
+      }}
+    >
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
+      <div
+        className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 rounded-2xl px-5 py-4"
+        style={{ background: 'rgba(10,15,30,0.88)', border: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(16px)' }}
+      >
         <div>
-          <h1 className="text-lg md:text-xl font-black text-slate-900 flex items-center gap-2">
-            <BarChart2 size={20} className="text-indigo-500" /> {t('overview.reportTitle')}
+          <h1 className="text-lg md:text-xl font-black flex items-center gap-2" style={{ color: c.textPrimary }}>
+            <BarChart2 size={20} style={{ color: c.accentText }} /> {t('overview.reportTitle')}
           </h1>
-          <p className="text-sm text-slate-400 mt-0.5">{filtered.length} {t('overview.leadsInRange')}</p>
+          <p className="text-sm mt-0.5" style={{ color: c.textMuted }}>{filtered.length} {t('overview.leadsInRange')}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Time range */}
-          <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="flex rounded-xl overflow-hidden" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
             {(['7','30','90','all'] as TimeRange[]).map(k => (
               <button key={k} onClick={()=>setTimeRange(k)}
-                className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  timeRange===k ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50'
-                }`}>
+                className="px-3 py-1.5 text-xs font-semibold transition-colors"
+                style={timeRange===k
+                  ? { background: 'rgba(99,102,241,0.22)', color: c.accentText }
+                  : { color: c.textMuted }}>
                 {k==='7'?t('overview.week'):k==='30'?t('overview.month'):k==='90'?t('overview.quarter'):t('overview.all')}
               </button>
             ))}
@@ -583,15 +613,18 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           {/* Export buttons */}
           <div className="flex gap-1.5 flex-wrap">
             <button onClick={()=>exportLeads(filtered)}
-              className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
               <Download size={12}/> {t('overview.exportLeadsCSV')}
             </button>
             <button onClick={()=>exportRevenue(filtered)}
-              className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
               <FileText size={12}/> {t('overview.exportRevenueCSV')}
             </button>
             <button onClick={()=>exportTeam(filtered)}
-              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white' }}>
               <Download size={12}/> {t('overview.exportTeamCSV')}
             </button>
           </div>
@@ -599,23 +632,24 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
       </div>
 
       {/* ── Tabs ───────────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto pb-1">
-      <div className="flex gap-1 bg-slate-100 rounded-2xl p-1 w-fit">
-        {([
-          { key:'overview', label:t('overview.tabOverview'),  icon: PieChartIcon },
-          { key:'leads',    label:t('overview.tabLeads'),     icon: TableIcon },
-          { key:'revenue',  label:t('overview.tabRevenue'),   icon: TrendingUp },
-          { key:'team',     label:t('overview.tabTeam'),      icon: Users },
-          { key:'sources',  label:'מקורות ROI',               icon: BarChart2 },
-        ] as {key:ReportTab;label:string;icon:React.ElementType}[]).map(t => (
-          <button key={t.key} onClick={()=>setTab(t.key)}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
-              tab===t.key ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}>
-            <t.icon size={13}/>{t.label}
-          </button>
-        ))}
-      </div>
+      <div className="overflow-x-auto pb-1" dir="ltr">
+        <div className="flex gap-1 rounded-2xl p-1 w-fit" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+          {([
+            { key:'overview', label:t('overview.tabOverview'),  icon: PieChartIcon },
+            { key:'leads',    label:t('overview.tabLeads'),     icon: TableIcon },
+            { key:'revenue',  label:t('overview.tabRevenue'),   icon: TrendingUp },
+            { key:'team',     label:t('overview.tabTeam'),      icon: Users },
+            { key:'sources',  label:'מקורות ROI',               icon: BarChart2 },
+          ] as {key:ReportTab;label:string;icon:React.ElementType}[]).map(t => (
+            <button key={t.key} onClick={()=>setTab(t.key)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+              style={tab===t.key
+                ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.4)', color: c.accentText }
+                : { background: 'transparent', border: '1px solid transparent', color: c.textMuted }}>
+              <t.icon size={13}/>{t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ══ TAB: OVERVIEW ══════════════════════════════════════════════════════ */}
@@ -630,30 +664,30 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           </div>
 
           {/* Monthly trend */}
-          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+          <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
             <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-4 text-[11px]">
+              <div className="flex items-center gap-4 text-[11px]" style={{ color: c.textMuted }}>
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"/>לידים</span>
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"/>לקוחות</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-violet-400 inline-block"/>הכנסות (K₪)</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: '#a78bfa' }}/>הכנסות (K₪)</span>
               </div>
-              <h3 className="font-bold text-slate-800">{t('overview.monthlyTrend')}</h3>
+              <h3 className="font-bold" style={{ color: c.textPrimary }}>{t('overview.monthlyTrend')}</h3>
             </div>
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
                 <defs>
                   <linearGradient id="gLead" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.15}/>
+                    <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.25}/>
                     <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
                   </linearGradient>
                   <linearGradient id="gAct" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.15}/>
+                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.25}/>
                     <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
-                <XAxis dataKey="name" tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={24}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
+                <XAxis dataKey="name" tick={{ fontSize:11, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false}/>
+                <YAxis tick={{ fontSize:11, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false} width={24}/>
                 <Tooltip {...tooltipStyle}/>
                 <Area type="monotone" dataKey="לידים"   stroke="#6366f1" fill="url(#gLead)" strokeWidth={2} dot={false}/>
                 <Area type="monotone" dataKey="לקוחות"  stroke="#22c55e" fill="url(#gAct)"  strokeWidth={2} dot={false}/>
@@ -665,17 +699,17 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           {/* Status dist + Funnel + Source */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Status donut */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.statusDistribution')}</h3>
+            <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+              <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>{t('overview.statusDistribution')}</h3>
               <div className="flex items-center gap-3">
                 <div className="space-y-2 flex-1">
                   {statusData.map(d=>(
                     <div key={d.name}>
                       <div className="flex justify-between text-xs mb-1">
                         <span className="font-bold" style={{color:d.color}}>{d.value}</span>
-                        <span className="text-slate-500">{d.name}</span>
+                        <span style={{ color: c.textSecondary }}>{d.name}</span>
                       </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: c.subtleBg }}>
                         <div className="h-full rounded-full transition-all duration-700"
                           style={{width:`${filtered.length?(d.value/filtered.length)*100:0}%`,backgroundColor:d.color}}/>
                       </div>
@@ -688,7 +722,7 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                       <Pie data={statusData} dataKey="value" cx="50%" cy="50%" outerRadius={46} innerRadius={26} paddingAngle={2}>
                         {statusData.map((d,i)=><Cell key={i} fill={d.color} stroke="none"/>)}
                       </Pie>
-                      <Tooltip contentStyle={{borderRadius:8,border:'none',fontSize:11,boxShadow:'0 4px 20px rgba(0,0,0,0.1)'}} cursor={false}/>
+                      <Tooltip contentStyle={{ background:'rgba(10,15,30,0.95)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:8, color: c.textPrimary, fontSize:11 }} cursor={false}/>
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -696,8 +730,8 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
             </div>
 
             {/* Funnel */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.salesFunnel')}</h3>
+            <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+              <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>{t('overview.salesFunnel')}</h3>
               <div className="flex items-end gap-2 h-28">
                 {funnel.map((s,i)=>{
                   const max = Math.max(...funnel.map(f=>f.value),1);
@@ -705,13 +739,13 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                   const conv = i>0 && funnel[i-1].value>0 ? Math.round((s.value/funnel[i-1].value)*100) : null;
                   return (
                     <div key={s.name} className="flex-1 flex flex-col items-center gap-1">
-                      {conv!==null && <span className="text-[10px] text-slate-400 mb-1">↓{conv}%</span>}
+                      {conv!==null && <span className="text-[10px] mb-1" style={{ color: c.textMuted }}>↓{conv}%</span>}
                       <div className="w-full flex items-end" style={{height:80}}>
                         <div className="w-full rounded-t-xl transition-all duration-500"
                           style={{height:`${Math.max(pct,8)}%`,backgroundColor:s.color,opacity:0.85}}/>
                       </div>
-                      <span className="text-base font-black text-slate-800">{s.value}</span>
-                      <span className="text-[10px] text-slate-500 text-center">{s.name}</span>
+                      <span className="text-base font-black" style={{ color: c.textPrimary }}>{s.value}</span>
+                      <span className="text-[10px] text-center" style={{ color: c.textMuted }}>{s.name}</span>
                     </div>
                   );
                 })}
@@ -719,12 +753,12 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
             </div>
 
             {/* Source bar */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.leadsBySource')}</h3>
+            <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+              <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>{t('overview.leadsBySource')}</h3>
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={sourceStats.slice(0,5)} layout="vertical" margin={{right:0,left:0}}>
-                  <XAxis type="number" tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
-                  <YAxis type="category" dataKey="src" tick={{fontSize:10,fill:'#64748b'}} width={70} axisLine={false} tickLine={false}/>
+                  <XAxis type="number" tick={{ fontSize:10, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false}/>
+                  <YAxis type="category" dataKey="src" tick={{ fontSize:10, fill:'rgba(255,255,255,0.4)' }} width={70} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false}/>
                   <Tooltip {...tooltipStyle} formatter={(v:number)=>[v,'לידים']}/>
                   <Bar dataKey="total" fill="#6366f1" radius={[0,6,6,0]} maxBarSize={16}/>
                 </BarChart>
@@ -733,19 +767,19 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           </div>
 
           {/* Smart Insights */}
-          <div className="bg-gradient-to-bl from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100 p-5">
+          <div className="rounded-2xl p-5" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.18)', backdropFilter: 'blur(8px)' }}>
             <div className="flex items-center gap-2 mb-4 justify-end">
-              <h3 className="font-bold text-slate-800">{t('overview.smartInsights')}</h3>
-              <Sparkles size={15} className="text-indigo-500"/>
+              <h3 className="font-bold" style={{ color: c.textPrimary }}>{t('overview.smartInsights')}</h3>
+              <Sparkles size={15} style={{ color: c.accentText }}/>
             </div>
             {insights.length===0 ? (
-              <p className="text-slate-400 text-sm text-right">{t('overview.noInsights')}</p>
+              <p className="text-sm text-right" style={{ color: c.textMuted }}>{t('overview.noInsights')}</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {insights.map((ins,i)=>(
-                  <div key={i} className="flex items-start gap-2.5 bg-white/70 rounded-xl px-4 py-3 text-right">
+                  <div key={i} className="flex items-start gap-2.5 rounded-xl px-4 py-3 text-right" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
                     <span className="text-lg flex-shrink-0">{ins.icon}</span>
-                    <p className={`text-sm font-medium ${ins.color}`}>{ins.text}</p>
+                    <p className="text-sm font-medium" style={{ color: ins.color }}>{ins.text}</p>
                   </div>
                 ))}
               </div>
@@ -756,22 +790,28 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
 
       {/* ══ TAB: LEADS TABLE ═══════════════════════════════════════════════════ */}
       {tab==='leads' && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="rounded-2xl overflow-hidden" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
           {/* Table toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-100">
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+            style={{ borderBottom: `1px solid ${c.divider}`, background: 'rgba(10,15,30,0.88)', backdropFilter: 'blur(16px)' }}
+          >
             <div className="flex items-center gap-2">
               <button onClick={()=>exportLeads(sortedLeads)}
-                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white' }}>
                 <Download size={12}/> {t('overview.exportCSV')} ({sortedLeads.length})
               </button>
             </div>
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <span className="text-xs text-slate-400">{sortedLeads.length} לידים</span>
+              <span className="text-xs" style={{ color: c.textMuted }}>{sortedLeads.length} לידים</span>
               {(['הכל',...Object.keys(STATUS_COLORS)] as string[]).map(s=>(
                 <button key={s} onClick={()=>setStatusFilter(s)}
-                  className={`text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors ${
-                    statusFilter===s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                  }`}>{s}</button>
+                  className="text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors"
+                  style={statusFilter===s
+                    ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.4)', color: c.accentText }
+                    : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }
+                  }>{s}</button>
               ))}
             </div>
           </div>
@@ -780,7 +820,7 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-right">
+                <tr className="text-right" style={{ borderBottom: `1px solid ${c.divider}` }}>
                   {([
                     {col:'company',   label:t('overview.company')},
                     {col:'status',    label:t('common.status')},
@@ -790,26 +830,37 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                   ] as {col:typeof sortCol;label:string}[]).map(h=>(
                     <th key={h.col}
                       onClick={()=>toggleSort(h.col)}
-                      className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider cursor-pointer hover:text-indigo-600 select-none whitespace-nowrap">
+                      className="px-4 py-3 text-xs font-bold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap transition-colors"
+                      style={{ color: c.textMuted }}>
                       {h.label}<SortIcon col={h.col}/>
                     </th>
                   ))}
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.source')}</th>
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.responsible')}</th>
-                  <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{t('overview.daysSinceContact')}</th>
+                  <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider" style={{ color: c.textMuted }}>{t('overview.source')}</th>
+                  <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider" style={{ color: c.textMuted }}>{t('overview.responsible')}</th>
+                  <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider" style={{ color: c.textMuted }}>{t('overview.daysSinceContact')}</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedLeads.map((lead,i)=>{
                   const stale = daysSince(lead.lastUpdate);
-                  const scoreColor = lead.aiScore>=75?'text-emerald-600 bg-emerald-50':lead.aiScore>=50?'text-amber-600 bg-amber-50':'text-slate-500 bg-slate-100';
+                  const scoreColor = lead.aiScore>=75
+                    ? { background:'rgba(34,197,94,0.15)', color:'#4ade80' }
+                    : lead.aiScore>=50
+                      ? { background:'rgba(245,158,11,0.15)', color:'#fbbf24' }
+                      : { background: c.subtleBg, color: c.textMuted };
                   return (
                     <tr key={lead.id}
                       onClick={()=>onLeadClick(lead)}
-                      className={`border-b border-slate-50 hover:bg-indigo-50/40 cursor-pointer transition-colors ${i%2===0?'bg-white':'bg-slate-50/30'}`}>
+                      className="cursor-pointer transition-colors"
+                      style={{
+                        borderBottom: `1px solid ${c.divider}`,
+                        background: i%2===0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.07)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = i%2===0 ? 'transparent' : 'rgba(255,255,255,0.01)')}>
                       <td className="px-4 py-3">
-                        <div className="font-semibold text-slate-800">{lead.company}</div>
-                        <div className="text-xs text-slate-400">{lead.contactName}</div>
+                        <div className="font-semibold" style={{ color: c.textPrimary }}>{lead.company}</div>
+                        <div className="text-xs" style={{ color: c.textMuted }}>{lead.contactName}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-xs font-bold px-2 py-0.5 rounded-full"
@@ -817,15 +868,15 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                           {lead.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-bold text-slate-800">{fmtMoney(lead.budget??0)}</td>
+                      <td className="px-4 py-3 font-bold" style={{ color: c.textPrimary }}>{fmtMoney(lead.budget??0)}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${scoreColor}`}>{lead.aiScore}%</span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={scoreColor}>{lead.aiScore}%</span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{lead.lastUpdate}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{lead.source}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{lead.assignedTo||'—'}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: c.textMuted }}>{lead.lastUpdate}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: c.textMuted }}>{lead.source}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: c.textMuted }}>{lead.assignedTo||'—'}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs font-bold ${stale>=14?'text-red-500':stale>=7?'text-amber-500':'text-emerald-500'}`}>
+                        <span className="text-xs font-bold" style={{ color: stale>=14?'#f87171':stale>=7?'#fbbf24':'#4ade80' }}>
                           {stale} {t('overview.days')}
                         </span>
                       </td>
@@ -833,7 +884,7 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                   );
                 })}
                 {sortedLeads.length===0 && (
-                  <tr><td colSpan={8} className="text-center py-12 text-slate-400 text-sm">{t('overview.noLeadsFilter')}</td></tr>
+                  <tr><td colSpan={8} className="text-center py-12 text-sm" style={{ color: c.textMuted }}>{t('overview.noLeadsFilter')}</td></tr>
                 )}
               </tbody>
             </table>
@@ -852,13 +903,14 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           </div>
 
           {/* Revenue by source */}
-          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+          <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
             <div className="flex items-center justify-between mb-5">
               <button onClick={()=>exportRevenue(filtered)}
-                className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-semibold">
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
                 <Download size={11}/> CSV
               </button>
-              <h3 className="font-bold text-slate-800">{t('overview.salesBySource')}</h3>
+              <h3 className="font-bold" style={{ color: c.textPrimary }}>{t('overview.salesBySource')}</h3>
             </div>
             <div className="space-y-3">
               {sourceStats.map(s=>{
@@ -866,16 +918,16 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
                 return (
                   <div key={s.src} className="flex items-center gap-4">
                     <div className="text-left w-12">
-                      <span className="text-xs font-bold text-indigo-600">{s.conv}%</span>
+                      <span className="text-xs font-bold" style={{ color: c.accentText }}>{s.conv}%</span>
                     </div>
                     <div className="flex-1">
                       <div className="flex justify-between text-xs mb-1.5">
-                        <span className="text-slate-400">{s.total} לידים · {s.active} פעילים · {fmtMoney(s.rev)}/חודש</span>
-                        <span className="font-semibold text-slate-700">{s.src}</span>
+                        <span style={{ color: c.textMuted }}>{s.total} לידים · {s.active} פעילים · {fmtMoney(s.rev)}/חודש</span>
+                        <span className="font-semibold" style={{ color: c.textSecondary }}>{s.src}</span>
                       </div>
-                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-l from-indigo-500 to-violet-500 rounded-full transition-all duration-700"
-                          style={{width:`${(s.rev/maxRev)*100}%`}}/>
+                      <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: c.subtleBg }}>
+                        <div className="h-full rounded-full transition-all duration-700"
+                          style={{ width:`${(s.rev/maxRev)*100}%`, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }}/>
                       </div>
                     </div>
                   </div>
@@ -885,17 +937,17 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           </div>
 
           {/* Monthly revenue chart */}
-          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-5 text-right">{t('overview.monthlyRevenueChart')}</h3>
+          <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+            <h3 className="font-bold mb-5 text-right" style={{ color: c.textPrimary }}>{t('overview.monthlyRevenueChart')}</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={monthlyTrend} margin={{top:4,right:4,left:-20,bottom:0}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
-                <XAxis dataKey="name" tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fontSize:11,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={30}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
+                <XAxis dataKey="name" tick={{ fontSize:11, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false}/>
+                <YAxis tick={{ fontSize:11, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false} width={30}/>
                 <Tooltip {...tooltipStyle} formatter={(v:number)=>[`₪${v}K`,'הכנסות']}/>
                 <Bar dataKey="הכנסות" radius={[6,6,0,0]} maxBarSize={40}>
                   {monthlyTrend.map((_,i)=>(
-                    <Cell key={i} fill={i===monthlyTrend.length-1?'#6366f1':'#e0e7ff'}/>
+                    <Cell key={i} fill={i===monthlyTrend.length-1?'#6366f1':'rgba(99,102,241,0.3)'}/>
                   ))}
                 </Bar>
               </BarChart>
@@ -903,26 +955,29 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
           </div>
 
           {/* Top revenue leads */}
-          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-4 text-right">{t('overview.topClients')}</h3>
+          <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+            <h3 className="font-bold mb-4 text-right" style={{ color: c.textPrimary }}>{t('overview.topClients')}</h3>
             <div className="space-y-2">
               {[...kpi.active].sort((a,b)=>(b.budget??0)-(a.budget??0)).slice(0,10).map((lead,i)=>{
                 const max = kpi.active[0]?.budget ?? 1;
                 return (
                   <div key={lead.id} onClick={()=>onLeadClick(lead)}
-                    className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors">
+                    className="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors"
+                    style={{ background: c.subtleBg }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}>
                     <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black flex-shrink-0"
-                      style={{background:i<3?['#fbbf24','#94a3b8','#f97316'][i]:'#e2e8f0',color:i<3?'white':'#94a3b8'}}>
+                      style={{background:i<3?['#fbbf24','#94a3b8','#f97316'][i]:'rgba(255,255,255,0.08)',color:i<3?'white':'rgba(255,255,255,0.4)'}}>
                       {i+1}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between text-sm mb-1">
-                        <span className="font-black text-emerald-600">{fmtMoney(lead.budget??0)}/חודש</span>
-                        <span className="font-semibold text-slate-800 truncate mr-2">{lead.company}</span>
+                        <span className="font-black" style={{ color: '#4ade80' }}>{fmtMoney(lead.budget??0)}/חודש</span>
+                        <span className="font-semibold truncate mr-2" style={{ color: c.textPrimary }}>{lead.company}</span>
                       </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-l from-emerald-500 to-teal-400 rounded-full"
-                          style={{width:`${((lead.budget??0)/max)*100}%`}}/>
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: c.subtleBg }}>
+                        <div className="h-full rounded-full"
+                          style={{ width:`${((lead.budget??0)/max)*100}%`, background: 'linear-gradient(90deg,#10b981,#34d399)' }}/>
                       </div>
                     </div>
                   </div>
@@ -938,15 +993,16 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
         <>
           <div className="flex justify-end">
             <button onClick={()=>exportTeam(filtered)}
-              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white' }}>
               <Download size={12}/> {t('overview.exportTeamReport')}
             </button>
           </div>
 
           {teamStats.length===0 ? (
-            <div className="bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 shadow-sm">
-              <Users size={32} className="mx-auto mb-3 opacity-30"/>
-              <p>{t('overview.noTeamData')}</p>
+            <div className="rounded-2xl p-12 text-center" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+              <Users size={32} className="mx-auto mb-3" style={{ color: c.textMuted }}/>
+              <p style={{ color: c.textMuted }}>{t('overview.noTeamData')}</p>
             </div>
           ) : (
             <>
@@ -959,48 +1015,49 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
               </div>
 
               {/* Leaderboard */}
-              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-                <h3 className="font-bold text-slate-800 mb-5 text-right flex items-center gap-2 justify-end">
-                  <Award size={16} className="text-amber-500"/>{t('overview.leaderboard')}
+              <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+                <h3 className="font-bold mb-5 text-right flex items-center gap-2 justify-end" style={{ color: c.textPrimary }}>
+                  <Award size={16} style={{ color: '#fbbf24' }}/>{t('overview.leaderboard')}
                 </h3>
                 <div className="space-y-3">
                   {teamStats.map((agent,i)=>{
                     const maxRev = teamStats[0]?.rev||1;
                     const medals = ['🥇','🥈','🥉'];
                     return (
-                      <div key={agent.name} className={`rounded-xl p-4 border transition-all ${
-                        i===0?'border-amber-200 bg-amber-50/40':i===1?'border-slate-200 bg-slate-50/40':'border-slate-100 bg-white'
-                      }`}>
+                      <div key={agent.name} className="rounded-xl p-4 transition-all" style={{
+                        border: i===0 ? '1px solid rgba(251,191,36,0.25)' : i===1 ? '1px solid rgba(148,163,184,0.2)' : '1px solid rgba(255,255,255,0.07)',
+                        background: i===0 ? 'rgba(251,191,36,0.06)' : i===1 ? 'rgba(148,163,184,0.04)' : 'rgba(255,255,255,0.02)',
+                      }}>
                         <div className="flex items-center gap-3 mb-3">
                           <span className="text-xl">{medals[i]||`#${i+1}`}</span>
                           <div className="flex-1">
                             <div className="flex justify-between items-center">
                               <div className="flex gap-4 text-xs">
-                                <span className="text-emerald-600 font-bold">{fmtMoney(agent.rev)}/חודש</span>
-                                <span className="text-indigo-600 font-bold">{agent.conv}% המרה</span>
-                                <span className="text-slate-400">ציון AI: {agent.avgScore}%</span>
+                                <span style={{ color: '#4ade80' }} className="font-bold">{fmtMoney(agent.rev)}/חודש</span>
+                                <span style={{ color: c.accentText }} className="font-bold">{agent.conv}% המרה</span>
+                                <span style={{ color: c.textMuted }}>ציון AI: {agent.avgScore}%</span>
                               </div>
-                              <p className="font-bold text-slate-800">{agent.name}</p>
+                              <p className="font-bold" style={{ color: c.textPrimary }}>{agent.name}</p>
                             </div>
                           </div>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
-                          <div className="bg-white rounded-lg p-2 border border-slate-100">
-                            <div className="font-black text-slate-800 text-lg">{agent.total}</div>
-                            <div className="text-slate-400">{t('overview.totalLeadsLabel')}</div>
+                          <div className="rounded-lg p-2" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+                            <div className="font-black text-lg" style={{ color: c.textPrimary }}>{agent.total}</div>
+                            <div style={{ color: c.textMuted }}>{t('overview.totalLeadsLabel')}</div>
                           </div>
-                          <div className="bg-white rounded-lg p-2 border border-slate-100">
-                            <div className="font-black text-emerald-600 text-lg">{agent.active}</div>
-                            <div className="text-slate-400">{t('overview.activeClientsLabel')}</div>
+                          <div className="rounded-lg p-2" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+                            <div className="font-black text-lg" style={{ color: '#4ade80' }}>{agent.active}</div>
+                            <div style={{ color: c.textMuted }}>{t('overview.activeClientsLabel')}</div>
                           </div>
-                          <div className="bg-white rounded-lg p-2 border border-slate-100">
-                            <div className="font-black text-indigo-600 text-lg">{agent.conv}%</div>
-                            <div className="text-slate-400">{t('overview.conversionRateLabel')}</div>
+                          <div className="rounded-lg p-2" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+                            <div className="font-black text-lg" style={{ color: c.accentText }}>{agent.conv}%</div>
+                            <div style={{ color: c.textMuted }}>{t('overview.conversionRateLabel')}</div>
                           </div>
                         </div>
-                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-l from-indigo-500 to-violet-500 rounded-full"
-                            style={{width:`${(agent.rev/maxRev)*100}%`}}/>
+                        <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: c.subtleBg }}>
+                          <div className="h-full rounded-full"
+                            style={{ width:`${(agent.rev/maxRev)*100}%`, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }}/>
                         </div>
                       </div>
                     );
@@ -1009,17 +1066,16 @@ export default function Overview({ leads, onLeadClick, workspaceId }: OverviewPr
               </div>
 
               {/* Team performance chart */}
-              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-                <h3 className="font-bold text-slate-800 mb-5 text-right">{t('overview.teamByMember')}</h3>
+              <div className="rounded-2xl p-5" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' }}>
+                <h3 className="font-bold mb-5 text-right" style={{ color: c.textPrimary }}>{t('overview.teamByMember')}</h3>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={teamStats} margin={{top:0,right:0,left:-20,bottom:0}}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
-                    <XAxis dataKey="name" tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fontSize:10,fill:'#94a3b8'}} axisLine={false} tickLine={false} width={24}/>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
+                    <XAxis dataKey="name" tick={{ fontSize:10, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false}/>
+                    <YAxis tick={{ fontSize:10, fill:'rgba(255,255,255,0.4)' }} axisLine={{ stroke:'rgba(255,255,255,0.1)' }} tickLine={false} width={24}/>
                     <Tooltip {...tooltipStyle}/>
-                    <Legend iconType="circle" iconSize={7}
-                      formatter={v=><span style={{fontSize:11,color:'#64748b'}}>{v}</span>}/>
-                    <Bar dataKey="total"  name={t('overview.totalLeadsLabel')}    fill="#e0e7ff" radius={[4,4,0,0]} maxBarSize={32}/>
+                    <Legend iconType="circle" iconSize={7} wrapperStyle={{ color: c.textSecondary, fontSize: 11 }}/>
+                    <Bar dataKey="total"  name={t('overview.totalLeadsLabel')}    fill="#6366f1" opacity={0.4} radius={[4,4,0,0]} maxBarSize={32}/>
                     <Bar dataKey="active" name={t('overview.activeClientsLabel')} fill="#6366f1" radius={[4,4,0,0]} maxBarSize={32}/>
                   </BarChart>
                 </ResponsiveContainer>

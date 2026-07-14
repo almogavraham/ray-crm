@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react';
+import { Mail, RefreshCw, LogOut } from 'lucide-react';
+import { startProductTour, maybeAutoStartTour } from './lib/productTour';
 import type { ReactNode, ErrorInfo } from 'react';
 import './index.css';
 import Layout from './components/Layout';
@@ -13,6 +15,9 @@ import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
 import Agents from './pages/Agents';
 import Workflows from './pages/Workflows';
+import Analytics from './pages/Analytics';
+import AiStudio from './pages/AiStudio';
+import Integrations from './pages/Integrations';
 import LeadModal from './components/LeadModal';
 import NewLeadModal from './components/NewLeadModal';
 import CommandPalette from './components/CommandPalette';
@@ -20,20 +25,33 @@ import Toast from './components/Toast';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import PublicRegister from './pages/PublicRegister';
 import WorkspaceOnboarding from './pages/WorkspaceOnboarding';
 import WorkspaceSettings from './pages/WorkspaceSettings';
 import AdminPanel from './pages/AdminPanel';
 import LandingPage from './pages/LandingPage';
 import BillingPage from './pages/BillingPage';
+import EmailAgent from './pages/EmailAgent';
+import MarketingAgent from './pages/MarketingAgent';
 import LeadsOnboardingWizard from './pages/LeadsOnboardingWizard';
 import ForgotPassword from './pages/ForgotPassword';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LangProvider } from './contexts/LangContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import type { Lead, Note, Page, TeamMember, AppSettings, Task, StandaloneTask, WorkspacePlan } from './types';
 import type { ToastMessage } from './components/Toast';
+import {
+  loadStatusConfigs, saveStatusConfigs, getStatusConfig, resolveTaskDescription,
+  DEFAULT_STATUS_CONFIGS,
+} from './lib/statusConfig';
+import type { StatusConfig } from './lib/statusConfig';
+import StatusConfigEditor from './components/StatusConfigEditor';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
+import { computeInsights } from './lib/insightEngine';
+import type { Insight } from './lib/insightEngine';
+import { wakeWordDetector, isSpeechSupported } from './lib/wakeWord';
 import {
   collection, doc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
 } from 'firebase/firestore';
@@ -96,26 +114,30 @@ class ErrorBoundary extends Component<
 }
 
 // ─── Lead normalizer — guards against missing/null/invalid fields from Firestore or localStorage ──
-const VALID_STATUSES: Lead['status'][] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
-const VALID_SOURCES:  Lead['source'][] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
+// Note: VALID_STATUSES is only used for legacy migration — custom statuses are allowed (LeadStatus = string)
+const LEGACY_STATUS_MIGRATIONS: Record<string, string> = { 'הטמעה': 'בתהליך' };
+const VALID_SOURCES: Lead['source'][] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 
 function normalizeLead(raw: unknown): Lead {
   const r = (raw ?? {}) as Record<string, unknown>;
-  const rawStatus = r.status as Lead['status'];
+  const rawStatus = String(r.status ?? 'חדש');
   const rawSource = r.source as Lead['source'];
-  // migrate old status names from cheX era
-  const migratedStatus: Lead['status'] =
-    (rawStatus as string) === 'הטמעה' ? 'בתהליך' : rawStatus;
+  // migrate old status names from cheX era — but allow ALL other string statuses (including custom)
+  const migratedStatus: Lead['status'] = LEGACY_STATUS_MIGRATIONS[rawStatus] ?? rawStatus;
   // migrate old source names
   const migratedSource: Lead['source'] =
     ['cheX', 'ci3', 'סורקים'].includes(rawSource as string) ? 'אורגני' : rawSource;
   return {
+    // Spread all raw fields first so optional fields (objection, activityLog,
+    // lastContactDate, nextFollowUpDate, createdAt, etc.) are preserved from Firestore.
+    // The explicit assignments below then override with validated/migrated values.
+    ...r,
     id:             String(r.id           ?? Date.now()),
     company:        String(r.company      ?? ''),
     contactName:    String(r.contactName  ?? ''),
     email:          String(r.email        ?? ''),
     phone:          String(r.phone        ?? ''),
-    status:         VALID_STATUSES.includes(migratedStatus) ? migratedStatus : 'חדש',
+    status:         migratedStatus || 'חדש',  // allow any string — custom statuses pass through
     source:         VALID_SOURCES.includes(migratedSource)  ? migratedSource : 'אורגני',
     assignedTo:     String(r.assignedTo   ?? ''),
     lastUpdate:     String(r.lastUpdate   ?? ''),
@@ -138,6 +160,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showOverduePopup: true,
   defaultPage: 'home',
   accentColor: 'indigo',
+  theme: 'light',
 };
 
 // ─── localStorage helpers ────────────────────────────────────────────────────
@@ -157,9 +180,105 @@ function loadSettings(): AppSettings {
   catch { return DEFAULT_SETTINGS; }
 }
 
+// Map a Firebase auth error (from sending a verification email) to a clear Hebrew message.
+function verificationErrorMsg(e: unknown): string {
+  const code    = (e as { code?: string })?.code ?? '';
+  const message = (e as { message?: string })?.message ?? '';
+  if (code === 'auth/too-many-requests')
+    return '⏳ נשלחו יותר מדי בקשות אימות. המתן מספר דקות ונסה שוב — המייל שכבר נשלח עדיין תקף, בדוק גם בתיקיית הספאם.';
+  if (code === 'auth/network-request-failed')
+    return '📡 בעיית תקשורת. בדוק את החיבור לאינטרנט ונסה שוב.';
+  if (code === 'auth/requires-recent-login' || code === 'auth/user-token-expired')
+    return '🔑 פג תוקף ההתחברות. התנתק והתחבר מחדש ונסה שוב.';
+  return 'שגיאה בשליחת מייל האימות: ' + (message || code || 'לא ידוע');
+}
+
+// ─── Email Verification Banner ────────────────────────────────────────────────
+function EmailVerificationBanner({ email, onResend, daysLeft }: { email: string; onResend: () => Promise<void>; daysLeft: number }) {
+  const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+
+  const handleResend = async () => {
+    setLoading(true);
+    try { await onResend(); setSent(true); }
+    catch (e) { alert(verificationErrorMsg(e)); }
+    finally { setLoading(false); }
+  };
+
+  const urgentColor = daysLeft <= 1
+    ? 'linear-gradient(90deg, #ef4444, #dc2626)'
+    : daysLeft === 2
+      ? 'linear-gradient(90deg, #f97316, #ea580c)'
+      : 'linear-gradient(90deg, #f59e0b, #f97316)';
+
+  if (minimized) {
+    return (
+      <button
+        onClick={() => setMinimized(false)}
+        title="הצג הודעת אימות מייל"
+        style={{
+          position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, background: urgentColor,
+          color: '#fff', border: 'none', borderRadius: 20, padding: '4px 14px',
+          fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 6,
+          boxShadow: '0 2px 10px rgba(249,115,22,0.5)',
+        }}
+      >
+        📧 אימות מייל — {daysLeft} {daysLeft === 1 ? 'יום' : 'ימים'} נותרו
+      </button>
+    );
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+      background: urgentColor,
+      color: '#fff', padding: '10px 20px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      gap: 12, fontSize: 13, fontWeight: 500,
+    }}>
+      <span>📧</span>
+      <span>
+        יש לאמת את המייל <strong>{email}</strong> — נותרו <strong>{daysLeft} {daysLeft === 1 ? 'יום' : 'ימים'}</strong> לפני חסימת הגישה
+      </span>
+      {!sent ? (
+        <button
+          onClick={handleResend}
+          disabled={loading}
+          style={{
+            background: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.5)',
+            borderRadius: 8, padding: '3px 12px', color: '#fff', cursor: 'pointer', fontSize: 12,
+          }}
+        >
+          {loading ? 'שולח...' : 'שלח שוב'}
+        </button>
+      ) : (
+        <span style={{ background: 'rgba(255,255,255,0.2)', borderRadius: 8, padding: '3px 12px', fontSize: 12 }}>
+          ✓ נשלח!
+        </span>
+      )}
+      <button
+        onClick={() => setMinimized(true)}
+        title="מזער"
+        style={{
+          position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+          background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.4)',
+          borderRadius: 6, width: 24, height: 24, color: '#fff', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 14, fontWeight: 700, lineHeight: 1,
+        }}
+      >
+        —
+      </button>
+    </div>
+  );
+}
+
 // ─── AppInner: rendered inside AuthProvider ──────────────────────────────────
 function AppInner() {
-  const { user, profile, workspace, loading, isAdmin, isSuperAdmin, signOut, refreshWorkspace, refreshProfile } = useAuth();
+  const { user, profile, workspace, loading, isAdmin, isSuperAdmin, emailVerified, resendVerification, signOut, refreshWorkspace, refreshProfile } = useAuth();
 
   // ─── Domain routing ─────────────────────────────────────────────────────────
   // Supports two modes:
@@ -210,8 +329,9 @@ function AppInner() {
   const wsSlug   = wsSlugFromHost ?? wsSlugFromPath;
 
   // ── Workspace detection ───────────────────────────────────────────────────
-  // isWorkspaceUser = a real tenant user (has workspaceId, not super admin)
-  const isWorkspaceUser = !!(user && profile?.workspaceId && !isSuperAdmin);
+  // isWorkspaceUser = a real tenant user (has workspaceId).
+  // Super admin on admin domain → admin env. Super admin on workspace domain → workspace user.
+  const isWorkspaceUser = !!(user && profile?.workspaceId && (!isSuperAdmin || !isAdminDomain));
   // isAdminWorkspace = super admin on admin domain → uses workspace-scoped Firestore (staging env)
   const isAdminWorkspace = !!(isSuperAdmin && isAdminDomain && workspace);
   // Effective workspace ID for Firestore paths (tenant or admin staging)
@@ -228,16 +348,34 @@ function AppInner() {
 
   // On admin domain → land directly on the admin page
   const [page, setPage]               = useState<Page>(isAdminDomain ? 'admin' : 'home');
+  const [settingsDefaultSection, setSettingsDefaultSection] = useState<'profile' | 'integrations' | undefined>(undefined);
+  const [emailAgentDefaultTab, setEmailAgentDefaultTab] = useState<'inbox' | 'workflows' | undefined>(undefined);
   const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
   const [team, setTeam]               = useState<TeamMember[]>([]);  // populated by effects
   const [settings, setSettings]       = useState<AppSettings>(loadSettings);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [showNewLead, setShowNewLead] = useState(false);
+  const [showAiPanel,     setShowAiPanel]     = useState(false);
+  const [aiPanelExpanded, setAiPanelExpanded] = useState(false);
+  // Tracks prefill query + a nonce so AiAssistant can react even when already mounted
+  const [aiPrefill, setAiPrefill] = useState<{ query: string; nonce: number } | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [toasts, setToasts]           = useState<ToastMessage[]>([]);
   const [fbReady, setFbReady]             = useState(false);
   const [standaloneTask, setStandaloneTask] = useState<StandaloneTask[]>([]);
   const [showLeadsWizard, setShowLeadsWizard] = useState(false);
+  const [statusConfigs, setStatusConfigs] = useState<StatusConfig[]>(() => {
+    // Eagerly load from localStorage so configs are available before Firestore responds
+    try {
+      const stored = localStorage.getItem('ray-crm-status-configs');
+      if (stored) {
+        const parsed: StatusConfig[] = JSON.parse(stored);
+        if (parsed?.length) return parsed;
+      }
+    } catch { /* ignore */ }
+    return DEFAULT_STATUS_CONFIGS;
+  });
+  const [showStatusEditor, setShowStatusEditor] = useState(false);
   const initialSyncDone                   = useRef(false);
   const adminWsCreating                   = useRef(false);
 
@@ -251,6 +389,105 @@ function AppInner() {
         .length;
     } catch { return 0; }
   }, [leads]);
+
+  // ─── Token low-balance badge ──────────────────────────────────────────────
+  const tokenLowAlert = useMemo(() => {
+    if (!workspace) return false;
+    // Use persisted flag OR compute locally for immediate feedback
+    if ((workspace as { tokenLowAlert?: boolean }).tokenLowAlert) return true;
+    const bal   = workspace.tokenBalance ?? 0;
+    const alloc = workspace.tokenPlanAllocation ?? 0;
+    if (bal <= 0.000001) return true;
+    if (alloc > 0 && (bal / alloc) * 100 < 20) return true;
+    return false;
+  }, [workspace]);
+
+  const totalBadge = overdueBadge + (tokenLowAlert ? 1 : 0);
+
+  // ─── AI Insights (client-side, zero API calls) ────────────────────────────
+  const aiInsights = useMemo<Insight[]>(() => {
+    if (!fbReady) return [];
+    return computeInsights({ leads, standaloneTask, team, workspace, currentPage: page });
+  }, [leads, standaloneTask, team, workspace, page, fbReady]); // eslint-disable-line
+
+  // ─── HEY RAY wake word ───────────────────────────────────────────────────
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [wakeActivated,   setWakeActivated]   = useState(false); // pulses true → triggers conversation mode in AiAssistant
+
+  // Detect mobile — wake word keeps the mic open 24/7 which is intrusive on mobile (indicator + battery)
+  const isMobileDevice = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ||
+    (typeof window !== 'undefined' && 'ontouchstart' in window && navigator.maxTouchPoints > 1);
+
+  useEffect(() => {
+    const storedPref = localStorage.getItem('ray-wake-word');
+    // Desktop: ON by default (unless user disabled with '0')
+    // Mobile:  OFF by default (opt-in only — keeps mic indicator out of status bar)
+    const defaultOn = !isMobileDevice;
+    const shouldEnable = storedPref !== null
+      ? storedPref === '1'          // respect explicit user preference on any device
+      : defaultOn && isSpeechSupported(); // no saved pref → use device default
+    if (shouldEnable) setWakeWordEnabled(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Extracted wake callback — shared between normal start and post-conversation restart
+  const handleWakeWord = useCallback(() => {
+    setShowAiPanel(true);
+    setWakeActivated(true);
+    setTimeout(() => setWakeActivated(false), 200);
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.setValueAtTime(660, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.06, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start(); osc.stop(ctx.currentTime + 0.35);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!isSpeechSupported()) return;
+    if (wakeWordEnabled) {
+      // If the user explicitly enables via toggle, reset any prior denial latch
+      // (they may have granted mic permission in browser settings since last denial)
+      wakeWordDetector.resetPermission();
+      wakeWordDetector.start(handleWakeWord, () => {
+        // Permission denied callback — disable the toggle to reflect reality
+        setWakeWordEnabled(false);
+        localStorage.setItem('ray-wake-word', '0');
+      });
+    } else {
+      wakeWordDetector.stop();
+    }
+    return () => wakeWordDetector.stop();
+  }, [wakeWordEnabled, handleWakeWord]);
+
+  // When conversation mode ends (AiAssistant fires 'ray-conv-ended'), restart wake word detection
+  useEffect(() => {
+    if (!wakeWordEnabled || !isSpeechSupported()) return;
+    const onConvEnded = () => {
+      // Small delay so the mic is fully released before restarting
+      // Don't restart if permission was denied during conversation
+      setTimeout(() => {
+        if (wakeWordEnabled && !wakeWordDetector.isPermissionDenied) {
+          wakeWordDetector.start(handleWakeWord);
+        }
+      }, 600);
+    };
+    window.addEventListener('ray-conv-ended', onConvEnded);
+    return () => window.removeEventListener('ray-conv-ended', onConvEnded);
+  }, [wakeWordEnabled, handleWakeWord]);
+
+  // Helper: open AI panel with a pre-filled query
+  const openAiWithQuery = useCallback((query: string) => {
+    setShowAiPanel(true);
+    // Use both sessionStorage (for fresh-mount case) and state prop (for already-open case)
+    sessionStorage.setItem('ray-prefill-query', query);
+    setAiPrefill({ query, nonce: Date.now() });
+  }, []);
 
   // ─── Global Cmd+K listener ────────────────────────────────────────────────
   useEffect(() => {
@@ -270,6 +507,9 @@ function AppInner() {
     // Skip: still loading, workspace tenant (or admin staging), or unauthenticated production user
     if (loading) return;
     if (useWorkspaceFirestore) return;
+    // On admin domain: workspace Firestore handles everything — skip root collection entirely.
+    // This prevents a brief flash of root data before the workspace Firestore takes over.
+    if (isSuperAdmin && isAdminDomain) return;
     // Only run Firestore init when there IS a user (super admin) or dev bypass
     if (!user && !bypassAuth) {
       setFbReady(true); // no Firestore needed for the landing page
@@ -342,8 +582,20 @@ function AppInner() {
             return (bTime as number) - (aTime as number);
           });
         setLeads(wsLeads);
+        // Only mark ready AFTER the first real snapshot arrives — prevents the
+        // brief flash of 'RAY' branding while workspace doc is still loading.
+        if (!initialSyncDone.current) {
+          initialSyncDone.current = true;
+          setFbReady(true);
+        }
       },
-      () => { /* permission error — handled silently */ },
+      () => {
+        // Permission error — still mark ready so the app doesn't hang
+        if (!initialSyncDone.current) {
+          initialSyncDone.current = true;
+          setFbReady(true);
+        }
+      },
     );
 
     // Listen to workspace tasks subcollection
@@ -362,14 +614,35 @@ function AppInner() {
       setTeam(snap.docs.map(d => d.data() as TeamMember));
     }).catch(() => setTeam([]));
 
-    initialSyncDone.current = true;
-    setFbReady(true);
-
     return () => {
       if (unsubLeads) unsubLeads();
       if (unsubTasks) unsubTasks();
     };
   }, [useWorkspaceFirestore, wid]); // eslint-disable-line
+
+  // ─── Load status configs from Firestore (with localStorage fallback) ────────
+  // targetWid: wid covers normal workspace users; profile?.workspaceId covers
+  // the super-admin who is also a workspace owner (wid is null for them because
+  // isWorkspaceUser is false when isSuperAdmin is true).
+  useEffect(() => {
+    const targetWid = wid ?? profile?.workspaceId ?? null;
+    if (!targetWid) return;
+    loadStatusConfigs(targetWid).then(configs => {
+      if (configs !== null) {
+        // Firestore had real saved data — use it and sync localStorage
+        setStatusConfigs(configs);
+        try { localStorage.setItem('ray-crm-status-configs', JSON.stringify(configs)); } catch { /* ignore */ }
+      } else {
+        // Firestore document doesn't exist yet — keep the localStorage value
+        // already loaded by useState, and write it to Firestore now so future
+        // loads return the correct data.
+        const lsRaw = localStorage.getItem('ray-crm-status-configs');
+        const lsConfigs: StatusConfig[] | null = lsRaw ? JSON.parse(lsRaw) : null;
+        const toSave = lsConfigs?.length ? lsConfigs : DEFAULT_STATUS_CONFIGS;
+        saveStatusConfigs(targetWid, toSave).catch(console.error);
+      }
+    }).catch(() => { /* network error — keep state as-is */ });
+  }, [wid, profile?.workspaceId]); // eslint-disable-line
 
   // ─── Save team to Firestore (workspace-aware) ─────────────────────────────
   useEffect(() => {
@@ -440,6 +713,16 @@ function AppInner() {
     localStorage.setItem('crm-settings', JSON.stringify(settings));
   }, [settings]);
 
+  // ─── Apply theme class to <html> ─────────────────────────────────────────
+  useEffect(() => {
+    const root = document.documentElement;
+    if (settings.theme === 'light') {
+      root.classList.add('light-theme');
+    } else {
+      root.classList.remove('light-theme');
+    }
+  }, [settings.theme]);
+
   // ─── Toast helpers ────────────────────────────────────────────────────────
   const addToast = useCallback((message: string, type: ToastMessage['type'] = 'success') => {
     const id = Date.now().toString();
@@ -473,14 +756,37 @@ function AppInner() {
     saveLead(updated);
   };
 
+  const handleAssignLead = (leadId: string, assignedTo: string) => {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    handleLeadUpdate({ ...lead, assignedTo });
+    addToast(assignedTo ? `הליד שויך ל-${assignedTo} ✓` : 'שיוך הוסר ✓', 'success');
+  };
+
   const handleLeadDelete = (id: string) => {
     setLeads(prev => prev.filter(l => l.id !== id));
     setSelectedLead(null);
+
+    // Delete the lead document
     if (useWorkspaceFirestore && wid) {
       deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
     } else {
       deleteDoc(doc(db, 'leads', id)).catch(console.error);
     }
+
+    // Delete all standalone tasks linked to this lead
+    const linkedTasks = standaloneTask.filter(t => t.leadId === id);
+    linkedTasks.forEach(t => {
+      if (useWorkspaceFirestore && wid) {
+        deleteDoc(doc(db, 'workspaces', wid, 'tasks', t.id)).catch(console.error);
+      } else {
+        deleteDoc(doc(db, 'tasks', t.id)).catch(console.error);
+      }
+    });
+    if (linkedTasks.length > 0) {
+      setStandaloneTask(prev => prev.filter(t => t.leadId !== id));
+    }
+
     addToast('הליד נמחק', 'info');
   };
 
@@ -518,6 +824,18 @@ function AppInner() {
     addToast('משימה נמחקה', 'info');
   };
 
+  const handleLeadTaskEdit = (leadId: string, task: Task) => {
+    setLeads(prev => {
+      const next = prev.map(l =>
+        l.id === leadId ? { ...l, tasks: l.tasks.map(t => t.id === task.id ? { ...t, ...task } : t) } : l
+      );
+      const updated = next.find(l => l.id === leadId);
+      if (updated) saveLead(updated);
+      return next;
+    });
+    addToast('משימה עודכנה ✓', 'success');
+  };
+
   const handleAddTask = (leadId: string, task: Task) => {
     setLeads(prev => {
       const next = prev.map(l =>
@@ -531,7 +849,10 @@ function AppInner() {
   };
 
   const handleBulkDelete = (leadIds: string[]) => {
-    setLeads(prev => prev.filter(l => !leadIds.includes(l.id)));
+    const leadIdSet = new Set(leadIds);
+    setLeads(prev => prev.filter(l => !leadIdSet.has(l.id)));
+
+    // Delete lead documents
     leadIds.forEach(id => {
       if (useWorkspaceFirestore && wid) {
         deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
@@ -539,6 +860,20 @@ function AppInner() {
         deleteDoc(doc(db, 'leads', id)).catch(console.error);
       }
     });
+
+    // Delete all standalone tasks linked to any of the deleted leads
+    const linkedTasks = standaloneTask.filter(t => t.leadId && leadIdSet.has(t.leadId));
+    linkedTasks.forEach(t => {
+      if (useWorkspaceFirestore && wid) {
+        deleteDoc(doc(db, 'workspaces', wid, 'tasks', t.id)).catch(console.error);
+      } else {
+        deleteDoc(doc(db, 'tasks', t.id)).catch(console.error);
+      }
+    });
+    if (linkedTasks.length > 0) {
+      setStandaloneTask(prev => prev.filter(t => !t.leadId || !leadIdSet.has(t.leadId)));
+    }
+
     addToast(`${leadIds.length} לידים נמחקו`, 'info');
   };
 
@@ -556,6 +891,20 @@ function AppInner() {
       return next;
     });
     addToast(`${leadIds.length} לידים עודכנו לסטטוס "${status}"`, 'success');
+  };
+
+  // ─── Status config handlers ───────────────────────────────────────────────
+  const handleSaveStatusConfigs = async (configs: StatusConfig[]) => {
+    setStatusConfigs(configs);
+    // Always save to localStorage (works even without Firestore)
+    try { localStorage.setItem('ray-crm-status-configs', JSON.stringify(configs)); } catch { /* ignore */ }
+    // Save to Firestore — use wid for normal users, or profile?.workspaceId for
+    // super-admin who owns a workspace (wid is null for them on non-admin domain)
+    const targetWid = wid ?? profile?.workspaceId ?? null;
+    if (targetWid) {
+      await saveStatusConfigs(targetWid, configs).catch(console.error);
+    }
+    addToast('הגדרות סטטוסים נשמרו ✓', 'success');
   };
 
   // ─── Team handlers ────────────────────────────────────────────────────────
@@ -646,12 +995,59 @@ function AppInner() {
     addToast('הערה נוספה ✓', 'success');
   };
 
+  // ─── Integrations → redirect to Settings > Integrations tab ────────────
+  // Also reset settingsDefaultSection when navigating away so Settings opens
+  // on the default tab next time the user clicks "הגדרות" directly.
+  useEffect(() => {
+    if (page === 'integrations') {
+      setPage('settings');
+      setSettingsDefaultSection('integrations');
+    } else if (page !== 'settings') {
+      // User navigated away from settings — clear the override
+      setSettingsDefaultSection(undefined);
+    }
+  }, [page]);
+
+  // ─── Meta OAuth callback param handling ──────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pageParam        = params.get('page');
+    const metaConnected    = params.get('meta_connected');
+    const metaError        = params.get('meta_error');
+    const metaPagesCount   = params.get('pages');
+    if (pageParam === 'integrations' || metaConnected || metaError) {
+      if (pageParam === 'integrations') { setPage('settings'); setSettingsDefaultSection('integrations'); }
+      if (metaConnected === 'success') {
+        const pagesStr = metaPagesCount ? ` (${metaPagesCount} דפים)` : '';
+        addToast(`Facebook חובר בהצלחה!${pagesStr} ✓`, 'success');
+      } else if (metaError) {
+        const errMap: Record<string, string> = {
+          access_denied:            'המשתמש דחה את הבקשה',
+          missing_params:           'פרמטרים חסרים',
+          workspace_not_found:      'Workspace לא נמצא',
+          app_credentials_missing:  'App ID ו-App Secret חסרים — שמור אותם קודם',
+          db_error:                 'שגיאת מסד נתונים',
+        };
+        addToast(`שגיאה בחיבור Facebook: ${errMap[metaError] ?? metaError}`, 'error');
+      }
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []); // eslint-disable-line
+
   // ─── Billing / plan update ────────────────────────────────────────────────
   const handlePlanUpdate = useCallback((plan: WorkspacePlan) => {
     // Refresh workspace so the rest of the app sees the new plan
     refreshWorkspace();
     addToast(`התוכנית עודכנה ל-${plan} ✓`, 'success');
   }, [refreshWorkspace, addToast]); // eslint-disable-line
+
+  // ─── Workspace field update (label / solutions) ──────────────────────────
+  const handleWorkspaceFieldUpdate = useCallback(async (updates: Partial<import('./types').WorkspaceProfile>) => {
+    const wid = workspace?.id;
+    if (!wid) return;
+    await setDoc(doc(db, 'workspaces', wid), updates, { merge: true });
+    await refreshWorkspace();
+  }, [workspace?.id, refreshWorkspace]); // eslint-disable-line
 
   // ─── Settings handlers ────────────────────────────────────────────────────
   const handleSettingsChange = (s: AppSettings) => {
@@ -698,8 +1094,23 @@ function AppInner() {
     }
   }, [isWorkspaceUser, wid, workspace?.slug]); // eslint-disable-line
 
+  // ─── Auto-start product tour on first entry into the main app ────────────
+  useEffect(() => {
+    const inMainApp = !!user && !!workspace && workspace.onboardingComplete && !isAdminDomain;
+    if (inMainApp) maybeAutoStartTour({ navigate: (p) => setPage(p as Page), returnTo: page });
+  }, [user, workspace?.onboardingComplete, isAdminDomain]); // eslint-disable-line
+
   // ─── Auth gates ──────────────────────────────────────────────────────────
   if (loading) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  // Wait until both the workspace document AND the first Firestore snapshot have
+  // arrived before rendering anything. This prevents the brief flash of 'RAY'
+  // branding (the Layout default) while workspace data is still in flight.
+  if ((isWorkspaceUser && !workspace) || (useWorkspaceFirestore && !fbReady)) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
     </div>
@@ -719,6 +1130,16 @@ function AppInner() {
         }}
       />
     );
+  }
+
+  // Email verification link from Firebase email (?mode=verifyEmail&oobCode=xxx)
+  if (resetMode === 'verifyEmail' && resetCode) {
+    return <VerifyEmail oobCode={resetCode} />;
+  }
+
+  // Email verification link from Firebase email (?mode=verifyEmail&oobCode=xxx)
+  if (resetMode === 'verifyEmail' && resetCode) {
+    return <VerifyEmail oobCode={resetCode} />;
   }
 
   // admin domain, not logged in → show Login (no landing page, no signup link)
@@ -827,14 +1248,77 @@ function AppInner() {
     );
   }
 
+  // Grace-period calculation — 3 days from account creation before hard block
+  const GRACE_DAYS = 3;
+  const createdAt = user?.metadata?.creationTime ? new Date(user.metadata.creationTime).getTime() : Date.now();
+  const daysSinceCreation = (Date.now() - createdAt) / (1000 * 60 * 60 * 24);
+  const inGracePeriod = daysSinceCreation < GRACE_DAYS;
+  const daysLeft = Math.max(1, Math.ceil(GRACE_DAYS - daysSinceCreation));
+
+  // Email not yet verified AND grace period expired → block access
+  if (user && !emailVerified && !bypassAuth && !inGracePeriod) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-6 text-center" style={{ background: '#0f172a' }} dir="rtl">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg" style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
+          <Mail size={30} className="text-white" />
+        </div>
+        <div className="space-y-2 max-w-xs">
+          <h2 className="text-white font-black text-2xl">אמת את האימייל שלך</h2>
+          <p className="text-slate-400 text-sm leading-relaxed">
+            שלחנו קישור אימות לכתובת{' '}
+            <span className="text-indigo-400 font-semibold">{user.email}</span>.
+            <br />לחץ על הקישור במייל כדי להיכנס למערכת.
+          </p>
+          <p className="text-slate-500 text-xs pt-1">בדוק גם בתיקיית הספאם</p>
+        </div>
+        <div className="flex flex-col gap-3 w-full max-w-xs">
+          <button
+            onClick={async () => {
+              try { await resendVerification(); alert('✅ מייל אימות נשלח מחדש. בדוק גם בתיקיית הספאם.'); }
+              catch (e) { alert(verificationErrorMsg(e)); }
+            }}
+            className="flex items-center justify-center gap-2 py-3 px-6 rounded-xl font-bold text-white transition-opacity hover:opacity-90"
+            style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
+            <RefreshCw size={15} /> שלח מחדש
+          </button>
+          <button
+            onClick={() => { void signOut(); window.location.replace('/signin'); }}
+            className="flex items-center justify-center gap-2 py-3 px-6 rounded-xl font-medium transition-colors"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)' }}>
+            <LogOut size={15} /> התנתק
+          </button>
+        </div>
+        <p className="text-slate-600 text-xs">
+          לאחר האימות, רענן את הדף או{' '}
+          <button onClick={() => window.location.reload()} className="text-indigo-400 hover:underline">לחץ כאן</button>
+        </p>
+      </div>
+    );
+  }
+
   return (
+    <ThemeProvider theme={settings.theme ?? 'light'}>
     <>
+      {/* ── Email verification banner (within grace period) ─────────────────── */}
+      {user && !emailVerified && inGracePeriod && (
+        <EmailVerificationBanner
+          email={user.email ?? ''}
+          onResend={resendVerification}
+          daysLeft={daysLeft}
+        />
+      )}
       <Layout
         currentPage={page}
-        onPageChange={setPage}
+        onStartTour={() => startProductTour({ navigate: (p) => setPage(p as Page), returnTo: page })}
+        onPageChange={(p) => {
+          // 'ai' page → open the single shared panel instead of a separate instance
+          if (p === 'ai') { setShowAiPanel(true); setAiPanelExpanded(true); return; }
+          setPage(p);
+        }}
         onNewLead={() => setShowNewLead(true)}
         onRefresh={() => addToast(fbReady ? 'מחובר ל-Firebase ✓' : 'טוען...', 'info')}
-        overdueBadge={overdueBadge}
+        overdueBadge={totalBadge}
+        tokenLowAlert={tokenLowAlert}
         userInitials={displayInitials}
         userName={displayName}
         allowedPages={
@@ -848,7 +1332,7 @@ function AppInner() {
                 return pages.filter((p: Page) => p !== 'admin');
               })()
             // Super admin / dev bypass: full access
-            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','team','ai','kanban','tasks','settings','content','deals','agents','workflows','admin','billing'] as Page[] : []))
+            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','analytics','team','ai','kanban','tasks','settings','content','deals','agents','workflows','admin','billing','integrations','email-agent','marketing-agent'] as Page[] : []))
         }
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
@@ -856,6 +1340,16 @@ function AppInner() {
         logoUrl={(isWorkspaceUser || isAdminWorkspace) ? workspace?.logoUrl : undefined}
         workspaceName={(isWorkspaceUser || isAdminWorkspace) ? workspace?.name : undefined}
         workspace={(isWorkspaceUser || isAdminWorkspace) ? workspace ?? undefined : undefined}
+        theme={settings.theme ?? 'light'}
+        onAiClick={() => { setShowAiPanel(v => !v); if (showAiPanel) setAiPanelExpanded(false); }}
+        showAiPanel={showAiPanel}
+        aiInsightBadge={aiInsights.length}
+        wakeWordEnabled={wakeWordEnabled}
+        onToggleWakeWord={() => {
+          const next = !wakeWordEnabled;
+          setWakeWordEnabled(next);
+          localStorage.setItem('ray-wake-word', next ? '1' : '0');
+        }}
       >
         {/* Firebase loading indicator */}
         {!fbReady && (
@@ -890,27 +1384,21 @@ function AppInner() {
             currentUser={displayName}
             onCreateTask={handleStandaloneAdd}
             onUpdateLead={handleLeadUpdate}
+            onUpdateStandaloneTask={handleStandaloneEdit}
             team={team}
             standaloneTask={standaloneTask}
+            insights={aiInsights}
+            onOpenAi={openAiWithQuery}
+            statusConfigs={statusConfigs}
+            onOpenStatusEditor={() => setShowStatusEditor(true)}
           />
         )}
         {page === 'overview' && (
           <Overview leads={leads} onLeadClick={setSelectedLead} workspaceId={wid ?? undefined} />
         )}
-        {page === 'ai' && (
-          <AiAssistant
-            leads={leads}
-            team={team}
-            currentUser={displayName}
-            standaloneTask={standaloneTask}
-            onCreateTask={handleStandaloneAdd}
-            onUpdateLead={handleLeadUpdate}
-            onAddNote={handleAddNote}
-            workspace={workspace}
-          />
-        )}
+        {/* 'ai' page now redirects to the shared side panel — no separate instance here */}
         {page === 'kanban' && (
-          <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} onPageChange={setPage} />
+          <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} onPageChange={setPage} statusConfigs={statusConfigs} workspace={workspace ?? undefined} />
         )}
         {page === 'tasks' && (
           <Tasks
@@ -926,10 +1414,11 @@ function AppInner() {
             onStandaloneComplete={handleStandaloneComplete}
             onStandaloneDelete={handleStandaloneDelete}
             onStandaloneEdit={handleStandaloneEdit}
+            onLeadTaskEdit={handleLeadTaskEdit}
             onPageChange={setPage}
           />
         )}
-        {page === 'settings' && isWorkspaceUser && workspace && (
+        {page === 'settings' && (isWorkspaceUser || isAdminWorkspace) && workspace && (
           <WorkspaceSettings
             workspace={workspace}
             team={team}
@@ -939,9 +1428,23 @@ function AppInner() {
             currentUserEmail={user?.email ?? ''}
             onToast={addToast}
             onWorkspaceUpdate={refreshWorkspace}
+            settings={settings}
+            onSettingsChange={handleSettingsChange}
+            integrationsPanel={
+              <Integrations
+                leads={leads}
+                workspace={workspace}
+                team={team}
+                currentUser={displayName}
+                onLeadClick={setSelectedLead}
+                onToast={addToast}
+                onWorkspaceUpdate={refreshWorkspace}
+              />
+            }
+            defaultSection={settingsDefaultSection}
           />
         )}
-        {page === 'settings' && !isWorkspaceUser && (bypassAuth || isAdmin) && (
+        {page === 'settings' && !isWorkspaceUser && !isAdminWorkspace && (bypassAuth || isAdmin) && (
           <Settings
             settings={settings}
             leads={leads}
@@ -955,6 +1458,20 @@ function AppInner() {
             onUpdateRole={handleUpdateRole}
             onInvite={handleInvite}
             onRemoveMember={handleRemoveMember}
+            onAssignLead={handleAssignLead}
+            onNavigateTo={(p) => setPage(p as import('./types').Page)}
+            integrationsPanel={workspace ? (
+              <Integrations
+                leads={leads}
+                workspace={workspace}
+                team={team}
+                currentUser={displayName}
+                onLeadClick={setSelectedLead}
+                onToast={addToast}
+                onWorkspaceUpdate={refreshWorkspace}
+              />
+            ) : undefined}
+            defaultSection={settingsDefaultSection}
           />
         )}
         {page === 'agents' && (
@@ -969,19 +1486,39 @@ function AppInner() {
             workspaceId={wid ?? undefined}
           />
         )}
-        {page === 'workflows' && (
-          <Workflows
+        {page === 'workflows' && (() => {
+          // Redirect: show workflows inside email-agent tab
+          if (typeof window !== 'undefined') {
+            setTimeout(() => { setPage('email-agent'); setEmailAgentDefaultTab('workflows'); }, 0);
+          }
+          return null;
+        })()}
+        {page === 'analytics' && (
+          <Analytics
             leads={leads}
-            currentUser={displayName}
+            team={team}
             standaloneTask={standaloneTask}
-            onCreateTask={handleStandaloneAdd}
-            onUpdateLead={handleLeadUpdate}
-            onToast={addToast}
+            currentUser={displayName}
+            onLeadClick={setSelectedLead}
             workspaceId={wid ?? undefined}
           />
         )}
+        {/* 'integrations' page redirects to Settings > Integrations tab via useEffect */}
         {page === 'content' && (
-          <ContentHub />
+          <ContentHub
+            workspace={workspace ?? undefined}
+            currentUser={displayName}
+            onNavigateToBilling={() => setPage('billing')}
+            onToast={addToast}
+          />
+        )}
+        {page === 'ai-studio' && (
+          <AiStudio
+            workspace={workspace ?? undefined}
+            currentUser={displayName}
+            onNavigateToBilling={() => setPage('billing')}
+            onToast={addToast}
+          />
         )}
         {page === 'deals' && (
           <Deals leads={leads} team={team} currentUser={displayName} onLeadClick={setSelectedLead} onToast={addToast} />
@@ -991,6 +1528,34 @@ function AppInner() {
         )}
         {page === 'billing' && workspace && (
           <BillingPage workspace={workspace} onPlanUpdate={handlePlanUpdate} />
+        )}
+        {page === 'email-agent' && (
+          <EmailAgent
+            workspaceId={wid ?? undefined}
+            workspace={workspace ?? undefined}
+            onToast={addToast}
+            onNavigate={(p) => setPage(p as import('./types').Page)}
+            defaultTab={emailAgentDefaultTab}
+            workflowsPanel={
+              <Workflows
+                leads={leads}
+                currentUser={displayName}
+                standaloneTask={standaloneTask}
+                onCreateTask={handleStandaloneAdd}
+                onUpdateLead={handleLeadUpdate}
+                onToast={addToast}
+                workspaceId={wid ?? undefined}
+              />
+            }
+          />
+        )}
+        {page === 'marketing-agent' && (
+          <MarketingAgent
+            workspaceId={wid ?? undefined}
+            workspace={workspace ?? undefined}
+            onToast={addToast}
+            onNavigate={(p) => setPage(p as import('./types').Page)}
+          />
         )}
       </Layout>
 
@@ -1014,7 +1579,10 @@ function AppInner() {
           onDelete={handleLeadDelete}
           workspace={workspace ?? undefined}
           currentUser={displayName}
+          team={team}
           onToast={addToast}
+          onWorkspaceUpdate={handleWorkspaceFieldUpdate}
+          statusConfigs={statusConfigs}
         />
       )}
 
@@ -1025,6 +1593,7 @@ function AppInner() {
           workspaceSolutions={workspace?.businessSolutions ?? []}
           currentUser={displayName}
           existingLeads={leads}
+          statusConfigs={statusConfigs}
         />
       )}
 
@@ -1040,8 +1609,132 @@ function AppInner() {
         />
       )}
 
+      {/* ── AI Side Panel ──────────────────────────────────────────────────── */}
+      {showAiPanel && (
+        <>
+          {/* Backdrop — desktop only (mobile panel is always full-screen, no backdrop needed) */}
+          {!aiPanelExpanded && (
+            <div
+              className="hidden md:block fixed inset-0 top-14 z-40 bg-black/20"
+              onClick={() => setShowAiPanel(false)}
+            />
+          )}
+
+          {/* Drawer — full-screen on mobile, side panel on desktop
+              Mobile: use inset-0 (top+right+bottom+left=0) instead of h-screen.
+              position:fixed + inset-0 adapts to the visual viewport on iOS/Android,
+              so when the soft keyboard opens the panel shrinks from the bottom and
+              the input bar stays visible. h-screen (100vh) does NOT shrink on iOS. */}
+          <div
+            className={`fixed z-50 flex flex-col shadow-2xl transition-all duration-300 ${
+              aiPanelExpanded
+                ? 'inset-0'
+                : 'inset-0 md:top-14 md:right-auto md:bottom-0 md:w-[380px] md:rounded-tr-2xl md:rounded-br-2xl'
+            }`}
+            style={{ boxShadow: '8px 0 40px rgba(0,0,0,0.5)' }}
+          >
+            <AiAssistant
+              leads={leads}
+              team={team}
+              currentUser={displayName}
+              standaloneTask={standaloneTask}
+              onCreateTask={handleStandaloneAdd}
+              onUpdateLead={handleLeadUpdate}
+              onAddNote={handleAddNote}
+              onCreateLead={(lead) => {
+                const leadWithTimestamp = { ...lead, createdAt: Date.now() };
+                setLeads(prev => [leadWithTimestamp, ...prev]);
+                saveLead(leadWithTimestamp);
+                addToast(`ליד חדש נוסף: ${lead.company} ✓`, 'success');
+              }}
+              onCompleteStandaloneTask={handleStandaloneComplete}
+              workspace={workspace}
+              onClose={() => setShowAiPanel(false)}
+              onExpand={() => setAiPanelExpanded(v => !v)}
+              isExpanded={aiPanelExpanded}
+              currentPage={page}
+              insights={aiInsights}
+              wakeActivated={wakeActivated}
+              prefillQuery={aiPrefill ?? undefined}
+              statusConfigs={statusConfigs}
+            />
+          </div>
+        </>
+      )}
+
+
       <Toast toasts={toasts} onRemove={removeToast} />
+
+      {/* ── Status Config Editor ────────────────────────────────────────────── */}
+      {showStatusEditor && (
+        <StatusConfigEditor
+          configs={statusConfigs}
+          onSave={handleSaveStatusConfigs}
+          onClose={() => setShowStatusEditor(false)}
+        />
+      )}
+
+      {/* ── Floating AI Button (FAB) ──────────────────────────────────────── */}
+      {!showAiPanel && (
+        <button
+          onClick={() => { setShowAiPanel(true); }}
+          title="פתח עוזר AI"
+          style={{
+            position: 'fixed',
+            bottom: '80px',      // above mobile bottom nav
+            left: '20px',
+            zIndex: 55,
+            width: 56, height: 56,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 60%, #7c3aed 100%)',
+            boxShadow: '0 4px 24px rgba(99,102,241,0.5), 0 0 0 0 rgba(99,102,241,0.4)',
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'fabPulse 2.5s ease-in-out infinite',
+          }}
+          className="md:bottom-6"
+        >
+          {/* Insight badge */}
+          {aiInsights.length > 0 && (
+            <span style={{
+              position: 'absolute', top: -4, right: -4,
+              minWidth: 18, height: 18, borderRadius: 9,
+              background: '#ef4444', color: 'white',
+              fontSize: 10, fontWeight: 800,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '0 4px',
+              boxShadow: '0 0 8px rgba(239,68,68,0.6)',
+            }}>{aiInsights.length > 9 ? '9+' : aiInsights.length}</span>
+          )}
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+            <path d="M19 3v4"/>
+            <path d="M21 5h-4"/>
+          </svg>
+        </button>
+      )}
+      {/* FAB keyframe */}
+      <style>{`
+        @keyframes fabPulse {
+          0%, 100% { box-shadow: 0 4px 24px rgba(99,102,241,0.5), 0 0 0 0 rgba(99,102,241,0.4); }
+          50% { box-shadow: 0 4px 32px rgba(99,102,241,0.7), 0 0 0 10px rgba(99,102,241,0); }
+        }
+        @keyframes rayRing {
+          0% { transform: scale(0.7); opacity: 0.9; }
+          100% { transform: scale(2.8); opacity: 0; }
+        }
+        @keyframes rayPulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.06); }
+        }
+        @keyframes rayFloat {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-8px); }
+        }
+      `}</style>
     </>
+    </ThemeProvider>
   );
 }
 

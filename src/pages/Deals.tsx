@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
 import {
   ArrowRight, CheckCircle2, Clock, DollarSign, Calendar,
   TrendingUp, Users, AlertTriangle, X, Plus, FileText,
@@ -13,9 +14,8 @@ import {
   Percent, Receipt, PenLine, GripVertical,
   FolderOpen, Flag, Palette,
 } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
-import { getApiKey } from '../lib/apiKey';
 import { storage } from '../lib/firebase';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -35,18 +35,18 @@ import type {
 /* ═══════════════════════════════════════════════════════════════════════════
    CONSTANTS
 ═══════════════════════════════════════════════════════════════════════════ */
-const SOL_STATUS: Record<SolutionStatus, { label: string; color: string; bg: string; icon: React.ElementType }> = {
-  not_started: { label: 'טרם החל',  color: 'text-slate-500',   bg: 'bg-slate-100',   icon: Clock },
-  in_progress:  { label: 'בביצוע',   color: 'text-blue-600',    bg: 'bg-blue-100',    icon: TrendingUp },
-  delivered:    { label: 'הועבר',    color: 'text-amber-600',   bg: 'bg-amber-100',   icon: Package },
-  approved:     { label: 'אושר ✓',  color: 'text-emerald-600', bg: 'bg-emerald-100', icon: CheckCircle2 },
+const SOL_STATUS: Record<SolutionStatus, { label: string; color: string; bg: string; icon: React.ElementType; darkBg: string; darkColor: string }> = {
+  not_started: { label: 'טרם החל',  color: 'text-slate-500',   bg: 'bg-slate-100',   icon: Clock,        darkBg: 'rgba(100,116,139,0.15)', darkColor: 'rgba(148,163,184,0.9)' },
+  in_progress:  { label: 'בביצוע',   color: 'text-blue-600',    bg: 'bg-blue-100',    icon: TrendingUp,   darkBg: 'rgba(59,130,246,0.15)',   darkColor: '#60a5fa' },
+  delivered:    { label: 'הועבר',    color: 'text-amber-600',   bg: 'bg-amber-100',   icon: Package,      darkBg: 'rgba(245,158,11,0.15)',   darkColor: '#fbbf24' },
+  approved:     { label: 'אושר ✓',  color: 'text-emerald-600', bg: 'bg-emerald-100', icon: CheckCircle2, darkBg: 'rgba(16,185,129,0.15)',   darkColor: '#34d399' },
 };
 
 const PAY_STATUS = {
-  paid:      { label: 'שולם',   color: 'text-emerald-700', bg: 'bg-emerald-100' },
-  pending:   { label: 'ממתין',  color: 'text-amber-700',   bg: 'bg-amber-100'   },
-  overdue:   { label: 'באיחור', color: 'text-red-600',     bg: 'bg-red-100'     },
-  cancelled: { label: 'בוטל',   color: 'text-slate-500',   bg: 'bg-slate-100'   },
+  paid:      { label: 'שולם',   color: 'text-emerald-700', bg: 'bg-emerald-100', darkBg: 'rgba(16,185,129,0.15)',   darkColor: '#34d399' },
+  pending:   { label: 'ממתין',  color: 'text-amber-700',   bg: 'bg-amber-100',   darkBg: 'rgba(245,158,11,0.15)',   darkColor: '#fbbf24' },
+  overdue:   { label: 'באיחור', color: 'text-red-600',     bg: 'bg-red-100',     darkBg: 'rgba(239,68,68,0.15)',    darkColor: '#f87171' },
+  cancelled: { label: 'בוטל',   color: 'text-slate-500',   bg: 'bg-slate-100',   darkBg: 'rgba(100,116,139,0.15)', darkColor: 'rgba(148,163,184,0.7)' },
 };
 
 const PAY_TYPE: Record<PaymentType, string> = {
@@ -98,9 +98,9 @@ function calcHealth(lead: Lead, proj: Project | undefined, fallbackContractEnd?:
 }
 
 function healthMeta(score: number) {
-  if (score >= 70) return { labelKey: 'deals.healthOk',       bg: 'bg-emerald-500', ring: 'ring-emerald-200', text: 'text-emerald-700', lightBg: 'bg-emerald-50' };
-  if (score >= 40) return { labelKey: 'deals.healthWarning',  bg: 'bg-amber-500',   ring: 'ring-amber-200',   text: 'text-amber-700',   lightBg: 'bg-amber-50'   };
-  return               { labelKey: 'deals.healthCritical',  bg: 'bg-red-500',     ring: 'ring-red-200',     text: 'text-red-600',     lightBg: 'bg-red-50'     };
+  if (score >= 70) return { labelKey: 'deals.healthOk',       bg: 'bg-emerald-500', ring: 'ring-emerald-200', text: 'text-emerald-700', lightBg: 'bg-emerald-50',  darkBg: 'rgba(16,185,129,0.12)',  darkRing: 'rgba(16,185,129,0.35)',  darkText: '#34d399',  darkLightBg: 'rgba(16,185,129,0.08)'  };
+  if (score >= 40) return { labelKey: 'deals.healthWarning',  bg: 'bg-amber-500',   ring: 'ring-amber-200',   text: 'text-amber-700',   lightBg: 'bg-amber-50',    darkBg: 'rgba(245,158,11,0.12)',  darkRing: 'rgba(245,158,11,0.35)',  darkText: '#fbbf24',  darkLightBg: 'rgba(245,158,11,0.08)'  };
+  return               { labelKey: 'deals.healthCritical',  bg: 'bg-red-500',     ring: 'ring-red-200',     text: 'text-red-600',     lightBg: 'bg-red-50',      darkBg: 'rgba(239,68,68,0.12)',   darkRing: 'rgba(239,68,68,0.35)',   darkText: '#f87171',  darkLightBg: 'rgba(239,68,68,0.08)'   };
 }
 
 const fmt    = (n: number) => `₪${n.toLocaleString('he-IL')}`;
@@ -137,6 +137,7 @@ interface WgInsight { title: string; idea: string; emoji: string; }
 function OverviewTab({ lead, project, onSave, currentUser }: {
   lead: Lead; project: Project; onSave: (p: Project) => void; currentUser: string;
 }) {
+  const { c } = useTheme();
   const { t } = useLang();
   const [editingContract, setEditingContract] = useState(false);
   const [form, setForm] = useState(project);
@@ -190,8 +191,6 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
 
   // EQ Layer — analyze sentiment of recent activity
   const runEqAnalysis = useCallback(async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) return;
     const recentTexts = [
       ...(project.activityLog ?? []).slice(0, 10).map(e => `[${e.type}] ${e.text}`),
       ...lead.notes.slice(0, 5).map(n => n.text),
@@ -199,7 +198,7 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
     if (!recentTexts.trim()) return;
     setEqLoading(true); setEqResult(null); setEqOpen(true);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
         model: 'claude-opus-4-6', max_tokens: 512,
@@ -215,12 +214,10 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
 
   // White Glove — scan for personal touches
   const runWhiteGlove = useCallback(async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) return;
     const allText = [...(project.activityLog ?? []).map(e => e.text), ...lead.notes.map(n => n.text), lead.company, lead.contactName].join('\n');
     setWgLoading(true); setWgInsights(null); setWgOpen(true);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
         model: 'claude-opus-4-6', max_tokens: 800,
@@ -244,44 +241,49 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
 
   const recentLog = [...(project.activityLog ?? []), ...lead.notes.map(n => ({ id: n.id, type: 'note' as ActivityType, text: n.text, author: n.author, timestamp: n.timestamp }))].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 6);
 
+  const glassCard = { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, backdropFilter: 'blur(8px)' };
+  const darkInput = { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textPrimary };
+  const primaryBtn = { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: c.textPrimary, boxShadow: '0 0 12px rgba(99,102,241,0.3)', border: 'none' };
+  const secondaryBtn = { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary };
+
   return (
     <div className="space-y-5">
       {/* Health card */}
-      <div className={`${hm.lightBg} rounded-2xl p-5 ring-1 ${hm.ring}`}>
+      <div style={{ background: hm.darkLightBg, border: `1px solid ${hm.darkRing}`, borderRadius: '1rem', padding: '1.25rem' }}>
         <div className="flex items-center justify-between mb-3">
-          <span className={`text-2xl font-black ${hm.text}`}>{score}%</span>
-          <div className="text-right"><p className="font-bold text-slate-800">{t('deals.healthScore')}</p><p className={`text-sm font-semibold ${hm.text}`}>{t(hm.labelKey)}</p></div>
+          <span style={{ color: hm.darkText }} className="text-2xl font-black">{score}%</span>
+          <div className="text-right"><p className="font-bold" style={{ color: c.textPrimary }}>{t('deals.healthScore')}</p><p className="text-sm font-semibold" style={{ color: hm.darkText }}>{t(hm.labelKey)}</p></div>
         </div>
-        <div className="h-2 bg-white/60 rounded-full"><div className={`h-2 rounded-full ${hm.bg} transition-all duration-700`} style={{ width: `${score}%` }} /></div>
+        <div className="h-2 rounded-full" style={{ background: c.subtleBg }}><div className={`h-2 rounded-full ${hm.bg} transition-all duration-700`} style={{ width: `${score}%` }} /></div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          {overdueT.length > 0 && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">⚠ {overdueT.length} {t('deals.overdueTasksCount')}</span>}
-          {project.contractEnd && daysTo(project.contractEnd) <= 30 && daysTo(project.contractEnd) >= 0 && <span className="bg-amber-100 text-amber-700 font-semibold px-2 py-1 rounded-lg">📅 {t('deals.renewalInDays').replace('{n}', String(daysTo(project.contractEnd)))}</span>}
-          {(project.payments ?? []).some(p => p.status === 'overdue') && <span className="bg-red-100 text-red-600 font-semibold px-2 py-1 rounded-lg">💳 {t('deals.paymentOverdue')}</span>}
+          {overdueT.length > 0 && <span style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }} className="font-semibold px-2 py-1 rounded-lg">⚠ {overdueT.length} {t('deals.overdueTasksCount')}</span>}
+          {project.contractEnd && daysTo(project.contractEnd) <= 30 && daysTo(project.contractEnd) >= 0 && <span style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }} className="font-semibold px-2 py-1 rounded-lg">📅 {t('deals.renewalInDays').replace('{n}', String(daysTo(project.contractEnd)))}</span>}
+          {(project.payments ?? []).some(p => p.status === 'overdue') && <span style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }} className="font-semibold px-2 py-1 rounded-lg">💳 {t('deals.paymentOverdue')}</span>}
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: t('deals.totalRevenue'), value: fmtK(totalPaid), icon: <DollarSign size={15} className="text-emerald-600" />, bg: 'bg-emerald-50' },
-          { label: t('deals.openTasksLabel'), value: lead.tasks.filter(task => !task.completed).length, icon: <Clock size={15} className="text-blue-600" />, bg: 'bg-blue-50' },
-          { label: t('deals.solutions'), value: `${(project.solutions ?? []).filter(s => s.status === 'approved').length}/${(project.solutions ?? []).length}`, icon: <Package size={15} className="text-violet-600" />, bg: 'bg-violet-50' },
+          { label: t('deals.totalRevenue'), value: fmtK(totalPaid), iconEl: <DollarSign size={15} style={{ color: '#34d399' }} />, iconBg: 'rgba(16,185,129,0.15)' },
+          { label: t('deals.openTasksLabel'), value: lead.tasks.filter(task => !task.completed).length, iconEl: <Clock size={15} style={{ color: '#60a5fa' }} />, iconBg: 'rgba(59,130,246,0.15)' },
+          { label: t('deals.solutions'), value: `${(project.solutions ?? []).filter(s => s.status === 'approved').length}/${(project.solutions ?? []).length}`, iconEl: <Package size={15} style={{ color: '#a78bfa' }} />, iconBg: 'rgba(139,92,246,0.15)' },
         ].map(s => (
-          <div key={s.label} className="bg-white border border-slate-200 rounded-xl p-3 text-center shadow-sm">
-            <div className={`w-8 h-8 ${s.bg} rounded-xl flex items-center justify-center mx-auto mb-1.5`}>{s.icon}</div>
-            <div className="text-lg font-black text-slate-900">{s.value}</div>
-            <div className="text-xs text-slate-500">{s.label}</div>
+          <div key={s.label} style={glassCard} className="rounded-xl p-3 text-center">
+            <div style={{ background: s.iconBg, width: 32, height: 32, borderRadius: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 6px' }}>{s.iconEl}</div>
+            <div className="text-lg font-black" style={{ color: c.textPrimary }}>{s.value}</div>
+            <div className="text-xs" style={{ color: c.textSecondary }}>{s.label}</div>
           </div>
         ))}
       </div>
 
       {/* Monthly goals */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-        <h3 className="font-bold text-slate-800 mb-4 text-right flex items-center justify-end gap-2"><Target size={15} className="text-indigo-500" /> {t('deals.monthlyGoals')} {fmtMonth(cm)}</h3>
+      <div style={glassCard} className="rounded-2xl p-5">
+        <h3 className="font-bold mb-4 text-right flex items-center justify-end gap-2" style={{ color: c.textPrimary }}><Target size={15} className="text-indigo-400" /> {t('deals.monthlyGoals')} {fmtMonth(cm)}</h3>
         <div className="space-y-4">
           {[
-            { key: 'leadsTarget' as keyof ClientGoal, label: t('deals.leadsLabel'), actual: cmLeads, target: goal?.leadsTarget ?? 0, color: 'bg-indigo-500' },
-            { key: 'spendBudget' as keyof ClientGoal, label: t('deals.mediaBudget'), actual: cmSpend, target: goal?.spendBudget ?? 0, color: 'bg-amber-500', isCurrency: true },
+            { key: 'leadsTarget' as keyof ClientGoal, label: t('deals.leadsLabel'), actual: cmLeads, target: goal?.leadsTarget ?? 0, color: '#6366f1' },
+            { key: 'spendBudget' as keyof ClientGoal, label: t('deals.mediaBudget'), actual: cmSpend, target: goal?.spendBudget ?? 0, color: '#f59e0b', isCurrency: true },
           ].map(g => {
             const pct = g.target > 0 ? Math.min((g.actual / g.target) * 100, 100) : 0;
             return (
@@ -290,16 +292,16 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
                   <div className="flex items-center gap-2">
                     <input type="number" min={0} defaultValue={g.target || ''}
                       onBlur={e => saveGoal(g.key, Number(e.target.value))}
-                      className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-xs text-left focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="יעד" />
-                    <span className="text-xs text-slate-400">יעד</span>
+                      style={darkInput} className="w-20 rounded-lg px-2 py-1 text-xs text-left focus:outline-none" placeholder="יעד" />
+                    <span className="text-xs" style={{ color: c.textMuted }}>יעד</span>
                   </div>
                   <div className="text-right">
-                    <span className="text-sm font-bold text-slate-800">{g.isCurrency ? fmtK(g.actual) : g.actual}</span>
-                    <span className="text-xs text-slate-400 mr-1">/ {g.isCurrency ? fmtK(g.target) : g.target} {g.label}</span>
+                    <span className="text-sm font-bold" style={{ color: c.textPrimary }}>{g.isCurrency ? fmtK(g.actual) : g.actual}</span>
+                    <span className="text-xs mr-1" style={{ color: c.textMuted }}>/ {g.isCurrency ? fmtK(g.target) : g.target} {g.label}</span>
                   </div>
                 </div>
-                <div className="h-2 bg-slate-100 rounded-full">
-                  <div className={`h-2 rounded-full ${g.color} transition-all duration-700`} style={{ width: `${pct}%` }} />
+                <div className="h-2 rounded-full" style={{ background: c.subtleBg }}>
+                  <div className="h-2 rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: g.color }} />
                 </div>
               </div>
             );
@@ -308,24 +310,26 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
       </div>
 
       {/* Contract */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div style={glassCard} className="rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
-          <button onClick={() => editingContract ? saveContract() : setEditingContract(true)} className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors ${editingContract ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+          <button onClick={() => editingContract ? saveContract() : setEditingContract(true)}
+            style={editingContract ? primaryBtn : secondaryBtn}
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors">
             {editingContract ? <><Check size={12} /> {t('common.save')}</> : <><Edit2 size={12} /> {t('common.edit')}</>}
           </button>
-          <h3 className="font-bold text-slate-800">{t('deals.contractDetails')}</h3>
+          <h3 className="font-bold" style={{ color: c.textPrimary }}>{t('deals.contractDetails')}</h3>
         </div>
         {editingContract ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.contractStart')}</label><input type="date" value={form.contractStart || ''} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-              <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.contractEnd')}</label><input type="date" value={form.contractEnd || ''} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
+              <div><label className="text-xs mb-1 block" style={{ color: c.textSecondary }}>{t('deals.contractStart')}</label><input type="date" value={form.contractStart || ''} onChange={e => setForm(p => ({ ...p, contractStart: e.target.value }))} style={darkInput} className="w-full rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+              <div><label className="text-xs mb-1 block" style={{ color: c.textSecondary }}>{t('deals.contractEnd')}</label><input type="date" value={form.contractEnd || ''} onChange={e => setForm(p => ({ ...p, contractEnd: e.target.value }))} style={darkInput} className="w-full rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
             </div>
-            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.monthlyRetainer')}</label><input type="number" min={0} value={form.monthlyRetainer || ''} onChange={e => setForm(p => ({ ...p, monthlyRetainer: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.nextStep')}</label><input type="text" value={form.nextStep || ''} onChange={e => setForm(p => ({ ...p, nextStep: e.target.value }))} placeholder={t('deals.nextStepPlaceholder')} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-1 block">{t('deals.upsell')}</label><textarea value={form.upsellNote || ''} onChange={e => setForm(p => ({ ...p, upsellNote: e.target.value }))} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
-            <div><label className="text-xs text-slate-500 mb-2 block">{t('deals.satisfaction')}</label>
-              <div className="flex gap-1 justify-end">{[1,2,3,4,5].map(n => <button key={n} onClick={() => setForm(p => ({ ...p, satisfactionScore: n }))} className={`text-xl transition-all ${(form.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</button>)}</div>
+            <div><label className="text-xs mb-1 block" style={{ color: c.textSecondary }}>{t('deals.monthlyRetainer')}</label><input type="number" min={0} value={form.monthlyRetainer || ''} onChange={e => setForm(p => ({ ...p, monthlyRetainer: Number(e.target.value) }))} style={darkInput} className="w-full rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: c.textSecondary }}>{t('deals.nextStep')}</label><input type="text" value={form.nextStep || ''} onChange={e => setForm(p => ({ ...p, nextStep: e.target.value }))} placeholder={t('deals.nextStepPlaceholder')} style={darkInput} className="w-full rounded-xl px-3 py-2 text-sm focus:outline-none" /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: c.textSecondary }}>{t('deals.upsell')}</label><textarea value={form.upsellNote || ''} onChange={e => setForm(p => ({ ...p, upsellNote: e.target.value }))} rows={2} style={darkInput} className="w-full rounded-xl px-3 py-2 text-sm resize-none focus:outline-none" /></div>
+            <div><label className="text-xs mb-2 block" style={{ color: c.textSecondary }}>{t('deals.satisfaction')}</label>
+              <div className="flex gap-1 justify-end">{[1,2,3,4,5].map(n => <button key={n} onClick={() => setForm(p => ({ ...p, satisfactionScore: n }))} className={`text-xl transition-all ${(form.satisfactionScore ?? 0) >= n ? 'text-amber-400' : ''}`} style={(form.satisfactionScore ?? 0) >= n ? {} : { color: c.textMuted }}>★</button>)}</div>
             </div>
           </div>
         ) : (
@@ -335,38 +339,41 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
               { label: t('deals.contractEnd'), value: project.contractEnd ? `${fmtD(project.contractEnd)} (${daysTo(project.contractEnd)} ${t('overview.days')})` : '—' },
               { label: t('deals.retainerLabel'), value: project.monthlyRetainer ? fmt(project.monthlyRetainer) : '—' },
             ].map(r => (
-              <div key={r.label} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
-                <span className="text-slate-700 font-medium">{r.value}</span>
-                <span className="text-slate-400 text-xs">{r.label}</span>
+              <div key={r.label} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${c.divider}` }}>
+                <span style={{ color: c.textSecondary }} className="font-medium">{r.value}</span>
+                <span style={{ color: c.textMuted }} className="text-xs">{r.label}</span>
               </div>
             ))}
-            {project.nextStep && <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-indigo-600 mb-1">→ {t('deals.nextStep')}</p><p className="text-sm text-indigo-800">{project.nextStep}</p></div>}
-            {project.upsellNote && <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 mt-2"><p className="text-xs font-bold text-violet-600 mb-1">🚀 {t('deals.upsell')}</p><p className="text-sm text-violet-800">{project.upsellNote}</p></div>}
-            {(project.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(project.satisfactionScore ?? 0) >= n ? 'text-amber-400' : 'text-slate-200'}`}>★</span>)}</div><span className="text-xs text-slate-400">{t('deals.satisfaction')}</span></div>}
+            {project.nextStep && <div style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '0.75rem', padding: '0.75rem', marginTop: '0.5rem' }}><p className="text-xs font-bold mb-1" style={{ color: c.accentText }}>→ {t('deals.nextStep')}</p><p className="text-sm" style={{ color: c.textSecondary }}>{project.nextStep}</p></div>}
+            {project.upsellNote && <div style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: '0.75rem', padding: '0.75rem', marginTop: '0.5rem' }}><p className="text-xs font-bold mb-1" style={{ color: '#a78bfa' }}>🚀 {t('deals.upsell')}</p><p className="text-sm" style={{ color: c.textSecondary }}>{project.upsellNote}</p></div>}
+            {(project.satisfactionScore ?? 0) > 0 && <div className="flex items-center justify-between pt-1"><div className="flex gap-0.5">{[1,2,3,4,5].map(n => <span key={n} className={`text-lg ${(project.satisfactionScore ?? 0) >= n ? 'text-amber-400' : ''}`} style={(project.satisfactionScore ?? 0) >= n ? {} : { color: c.textMuted }}>★</span>)}</div><span className="text-xs" style={{ color: c.textMuted }}>{t('deals.satisfaction')}</span></div>}
           </div>
         )}
       </div>
 
       {/* Quick Links */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div style={glassCard} className="rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
-          <button onClick={() => setAddingLink(true)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-xl transition-colors"><Plus size={12} /> {t('common.add')}</button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Link2 size={14} className="text-slate-400" /> {t('deals.quickLinks')}</h3>
+          <button onClick={() => setAddingLink(true)} style={secondaryBtn} className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors"><Plus size={12} /> {t('common.add')}</button>
+          <h3 className="font-bold flex items-center gap-2" style={{ color: c.textPrimary }}><Link2 size={14} style={{ color: c.textMuted }} /> {t('deals.quickLinks')}</h3>
         </div>
         {addingLink && (
-          <div className="bg-slate-50 rounded-xl p-3 mb-3 space-y-2">
-            <input value={linkForm.title} onChange={e => setLinkForm(p => ({ ...p, title: e.target.value }))} placeholder="כותרת (Google Drive, Notion...)" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
-            <input value={linkForm.url} onChange={e => setLinkForm(p => ({ ...p, url: e.target.value }))} placeholder="https://..." className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-left" dir="ltr" />
-            <div className="flex gap-2 justify-end"><button onClick={() => setAddingLink(false)} className="text-xs text-slate-500 px-3 py-1.5 rounded-lg hover:bg-slate-200">{t('common.cancel')}</button><button onClick={addLink} className="text-xs font-bold text-white bg-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-500">{t('common.add')}</button></div>
+          <div style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, borderRadius: '0.75rem', padding: '0.75rem', marginBottom: '0.75rem' }} className="space-y-2">
+            <input value={linkForm.title} onChange={e => setLinkForm(p => ({ ...p, title: e.target.value }))} placeholder="כותרת (Google Drive, Notion...)" style={darkInput} className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none text-right" />
+            <input value={linkForm.url} onChange={e => setLinkForm(p => ({ ...p, url: e.target.value }))} placeholder="https://..." style={darkInput} className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none text-left" dir="ltr" />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setAddingLink(false)} style={secondaryBtn} className="text-xs px-3 py-1.5 rounded-lg">{t('common.cancel')}</button>
+              <button onClick={addLink} style={primaryBtn} className="text-xs font-bold px-3 py-1.5 rounded-lg">{t('common.add')}</button>
+            </div>
           </div>
         )}
-        {(project.links ?? []).length === 0 && !addingLink && <p className="text-center text-slate-300 text-sm py-4">{t('deals.addLinksHint')}</p>}
+        {(project.links ?? []).length === 0 && !addingLink && <p className="text-center text-sm py-4" style={{ color: c.textMuted }}>{t('deals.addLinksHint')}</p>}
         <div className="space-y-2">
           {(project.links ?? []).map(link => (
-            <div key={link.id} className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5 group">
+            <div key={link.id} className="flex items-center justify-between rounded-xl px-3 py-2.5 group" style={{ background: c.subtleBg }}>
               <div className="flex items-center gap-2">
-                <button onClick={() => removeLink(link.id)} className="w-5 h-5 rounded-md bg-red-100 flex items-center justify-center text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={10} /></button>
-                <a href={link.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 text-sm font-medium"><ExternalLink size={12} />{link.title}</a>
+                <button onClick={() => removeLink(link.id)} style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }} className="w-5 h-5 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={10} /></button>
+                <a href={link.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sm font-medium" style={{ color: c.accentText }}><ExternalLink size={12} />{link.title}</a>
               </div>
             </div>
           ))}
@@ -374,33 +381,34 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
       </div>
 
       {/* Activity log */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div style={glassCard} className="rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={runEqAnalysis}
             disabled={eqLoading}
-            className="flex items-center gap-1.5 text-xs font-bold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
+            style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', color: '#a78bfa' }}
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
           >
             {eqLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full" /> : <Brain size={12} />}
             {t('deals.eqAnalysis')}
           </button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2">{t('deals.activityLog')}</h3>
+          <h3 className="font-bold flex items-center gap-2" style={{ color: c.textPrimary }}>{t('deals.activityLog')}</h3>
         </div>
 
         {/* EQ Result */}
         {eqOpen && (
-          <div className={`mb-4 rounded-xl border p-3.5 ${eqResult?.sentiment === 'positive' ? 'bg-emerald-50 border-emerald-200' : eqResult?.sentiment === 'at-risk' ? 'bg-red-50 border-red-200' : eqResult?.sentiment === 'negative' ? 'bg-orange-50 border-orange-200' : 'bg-amber-50 border-amber-200'}`}>
+          <div style={{ marginBottom: '1rem', borderRadius: '0.75rem', border: `1px solid ${eqResult?.sentiment === 'positive' ? 'rgba(16,185,129,0.3)' : eqResult?.sentiment === 'at-risk' ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)'}`, background: eqResult?.sentiment === 'positive' ? 'rgba(16,185,129,0.08)' : eqResult?.sentiment === 'at-risk' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)', padding: '0.875rem' }}>
             {eqLoading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-500"><span className="animate-spin w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full inline-block" /> {t('deals.analyzingSentiment')}</div>
+              <div className="flex items-center gap-2 text-sm" style={{ color: c.textSecondary }}><span className="animate-spin w-3 h-3 border-2 border-violet-400 border-t-transparent rounded-full inline-block" /> {t('deals.analyzingSentiment')}</div>
             ) : eqResult ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <button onClick={() => setEqOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={12} /></button>
-                  <div className="flex items-center gap-2 text-right"><span className="text-xl">{eqResult.emoji}</span><span className="font-bold text-slate-800 text-sm">{eqResult.summary}</span></div>
+                  <button onClick={() => setEqOpen(false)} style={{ color: c.textMuted }}><X size={12} /></button>
+                  <div className="flex items-center gap-2 text-right"><span className="text-xl">{eqResult.emoji}</span><span className="font-bold text-sm" style={{ color: c.textPrimary }}>{eqResult.summary}</span></div>
                 </div>
-                <div className="bg-white/70 rounded-lg p-2.5 text-right">
-                  <p className="text-xs font-bold text-violet-700 mb-1">→ {t('deals.recommendation')}</p>
-                  <p className="text-sm text-slate-700">{eqResult.action}</p>
+                <div style={{ background: c.subtleBg, borderRadius: '0.5rem', padding: '0.625rem' }} className="text-right">
+                  <p className="text-xs font-bold mb-1" style={{ color: '#a78bfa' }}>→ {t('deals.recommendation')}</p>
+                  <p className="text-sm" style={{ color: c.textSecondary }}>{eqResult.action}</p>
                 </div>
               </div>
             ) : null}
@@ -408,56 +416,57 @@ function OverviewTab({ lead, project, onSave, currentUser }: {
         )}
 
         <div className="flex gap-2 mb-4">
-          <button onClick={addLog} disabled={!newLog.trim()} className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-2 rounded-xl text-xs font-bold">{t('common.add')}</button>
-          <input value={newLog} onChange={e => setNewLog(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLog()} placeholder={t('deals.activityPlaceholder')} className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 text-right" />
-          <select value={logType} onChange={e => setLogType(e.target.value as ActivityType)} className="border border-slate-200 rounded-xl px-2 py-2 text-xs text-slate-600 bg-white focus:outline-none">
+          <button onClick={addLog} disabled={!newLog.trim()} style={primaryBtn} className="flex-shrink-0 disabled:opacity-40 px-3 py-2 rounded-xl text-xs font-bold">{t('common.add')}</button>
+          <input value={newLog} onChange={e => setNewLog(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLog()} placeholder={t('deals.activityPlaceholder')} style={darkInput} className="flex-1 rounded-xl px-3 py-2 text-sm focus:outline-none text-right" />
+          <select value={logType} onChange={e => setLogType(e.target.value as ActivityType)} style={darkInput} className="rounded-xl px-2 py-2 text-xs focus:outline-none">
             {(Object.keys(ACT_TYPE) as ActivityType[]).map(actKey => <option key={actKey} value={actKey}>{ACT_TYPE[actKey].label}</option>)}
           </select>
         </div>
         <div className="space-y-2">
-          {recentLog.length === 0 && <p className="text-center text-slate-300 py-4 text-sm">{t('deals.noActivity')}</p>}
+          {recentLog.length === 0 && <p className="text-center py-4 text-sm" style={{ color: c.textMuted }}>{t('deals.noActivity')}</p>}
           {recentLog.map(e => { const at = ACT_TYPE[e.type]; const Icon = at.icon; return (
-            <div key={e.id} className="flex gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition-colors">
-              <div className="text-right flex-1 min-w-0"><p className="text-sm text-slate-700 leading-snug">{e.text}</p><div className="flex items-center justify-end gap-2 mt-1"><span className="text-xs text-slate-300">{ago(e.timestamp)}</span><span className="text-xs text-slate-400">{e.author}</span></div></div>
-              <div className={`w-7 h-7 rounded-xl flex items-center justify-center flex-shrink-0 bg-slate-100 ${at.color}`}><Icon size={13} /></div>
+            <div key={e.id} className="flex gap-3 p-2.5 rounded-xl transition-colors" style={{ borderLeft: `3px solid ${at.color.includes('blue') ? '#60a5fa' : at.color.includes('violet') ? '#a78bfa' : at.color.includes('indigo') ? '#818cf8' : at.color.includes('emerald') ? '#34d399' : 'rgba(255,255,255,0.2)'}` }}>
+              <div className="text-right flex-1 min-w-0"><p className="text-sm leading-snug" style={{ color: c.textSecondary }}>{e.text}</p><div className="flex items-center justify-end gap-2 mt-1"><span className="text-xs" style={{ color: c.textMuted }}>{ago(e.timestamp)}</span><span className="text-xs" style={{ color: c.textMuted }}>{e.author}</span></div></div>
+              <div style={{ width: 28, height: 28, borderRadius: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: c.subtleBg }} className={at.color}><Icon size={13} /></div>
             </div>
           ); })}
         </div>
       </div>
 
       {/* White Glove Panel */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div style={glassCard} className="rounded-2xl p-5">
         <div className="flex items-center justify-between mb-3">
           <button
             onClick={runWhiteGlove}
             disabled={wgLoading}
-            className="flex items-center gap-1.5 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
+            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors disabled:opacity-50"
           >
             {wgLoading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full" /> : <Heart size={12} />}
             White Glove
           </button>
-          <h3 className="font-bold text-slate-800 flex items-center gap-2"><Sparkles size={14} className="text-rose-400" /> {t('deals.personalTouch')}</h3>
+          <h3 className="font-bold flex items-center gap-2" style={{ color: c.textPrimary }}><Sparkles size={14} style={{ color: '#f87171' }} /> {t('deals.personalTouch')}</h3>
         </div>
-        <p className="text-xs text-slate-400 text-right mb-3">{t('deals.personalTouchDesc')}</p>
+        <p className="text-xs text-right mb-3" style={{ color: c.textMuted }}>{t('deals.personalTouchDesc')}</p>
         {wgOpen && (
           wgLoading ? (
-            <div className="flex items-center gap-2 text-sm text-slate-500 justify-end py-3"><span className="animate-spin w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full inline-block" /> {t('deals.searchingOpportunities')}</div>
+            <div className="flex items-center gap-2 text-sm justify-end py-3" style={{ color: c.textSecondary }}><span className="animate-spin w-3 h-3 border-2 border-rose-400 border-t-transparent rounded-full inline-block" /> {t('deals.searchingOpportunities')}</div>
           ) : wgInsights && wgInsights.length > 0 ? (
             <div className="space-y-2">
               {wgInsights.map((ins, i) => (
-                <div key={i} className="bg-rose-50 border border-rose-100 rounded-xl p-3.5 text-right">
+                <div key={i} style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)', borderRadius: '0.75rem', padding: '0.875rem' }} className="text-right">
                   <div className="flex items-center justify-end gap-2 mb-1.5">
-                    <p className="font-bold text-rose-700 text-sm">{ins.title}</p>
+                    <p className="font-bold text-sm" style={{ color: '#f87171' }}>{ins.title}</p>
                     <span className="text-xl">{ins.emoji}</span>
                   </div>
-                  <p className="text-sm text-slate-700 leading-relaxed">{ins.idea}</p>
+                  <p className="text-sm leading-relaxed" style={{ color: c.textSecondary }}>{ins.idea}</p>
                 </div>
               ))}
-              <button onClick={() => setWgOpen(false)} className="text-xs text-slate-400 hover:text-slate-600 w-full text-center pt-1">{t('common.close')}</button>
+              <button onClick={() => setWgOpen(false)} className="text-xs w-full text-center pt-1" style={{ color: c.textMuted }}>{t('common.close')}</button>
             </div>
           ) : null
         )}
-        {!wgOpen && <div className="text-center py-2 text-slate-300 text-xs">{t('deals.whiteGloveHint')}</div>}
+        {!wgOpen && <div className="text-center py-2 text-xs" style={{ color: c.textMuted }}>{t('deals.whiteGloveHint')}</div>}
       </div>
     </div>
   );
@@ -722,7 +731,7 @@ function MediaTab({ project, onSave }: { project: Project; onSave: (p: Project) 
             <div><label className="text-xs text-slate-500 mb-1 block">חודש</label><input type="month" value={form.month || ''} onChange={e => setForm(p => ({ ...p, month: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             <div><label className="text-xs text-slate-500 mb-1 block">פלטפורמה</label><select value={form.platform || 'meta'} onChange={e => setForm(p => ({ ...p, platform: e.target.value as MediaPlatform }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none">{(Object.keys(PLATFORM_CFG) as MediaPlatform[]).map(k => <option key={k} value={k}>{PLATFORM_CFG[k].label}</option>)}</select></div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div><label className="text-xs text-slate-500 mb-1 block">הוצאה (₪)</label><input type="number" min={0} value={form.spend || ''} onChange={e => setForm(p => ({ ...p, spend: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             <div><label className="text-xs text-slate-500 mb-1 block">לידים</label><input type="number" min={0} value={form.leads || ''} onChange={e => setForm(p => ({ ...p, leads: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
             <div><label className="text-xs text-slate-500 mb-1 block">המרות</label><input type="number" min={0} value={form.conversions || ''} onChange={e => setForm(p => ({ ...p, conversions: Number(e.target.value) }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300" /></div>
@@ -807,7 +816,7 @@ function ActivityTab({ project, onSave, currentUser, lead }: {
     setAiSuggestion(null);
     setAiLoading(true);
     try {
-      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const recent = (updated.activityLog ?? []).slice(0, 5).map(e => `${e.type}: ${e.text}`).join('\n');
       const res = await client.messages.create({
         model: 'claude-opus-4-5', max_tokens: 150,
@@ -820,7 +829,7 @@ function ActivityTab({ project, onSave, currentUser, lead }: {
   async function generateMeetingPrep() {
     setMeetingLoading(true); setMeetingPrep(null);
     try {
-      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const recent   = log.slice(0, 10).map(e => `[${e.type}] ${e.text}`).join('\n');
       const openTasks = (project.tasks ?? []).filter(t => !t.completed).map(t => t.title).join(', ');
       const sols      = (project.solutions ?? []).map(s => `${s.title}(${s.status})`).join(', ');
@@ -1012,7 +1021,7 @@ function ClientTasksTab({ project, onSave, lead, currentUser, team }: {
   async function suggestTasks() {
     setAiLoading(true); setAiTasks(null);
     try {
-      const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const openT  = tasks.filter(t => !t.completed).map(t => t.title).join(', ');
       const sols   = (project.solutions ?? []).map(s => `${s.title}(${s.status})`).join(', ');
       const lastAct = (project.activityLog ?? [])[0];
@@ -1570,7 +1579,7 @@ function ProjectDetailView({ lead, account, project, onSaveProject, onBack, onLe
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-2xl overflow-x-auto">
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-2xl overflow-x-auto" dir="ltr">
         {PROJ_TABS.map(t => { const Icon = t.icon; return (
           <button key={t.key} onClick={() => setTab(t.key)} className={`flex-1 min-w-fit flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${tab === t.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
             <Icon size={13} />{t.label}
@@ -2207,6 +2216,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
   onBack: () => void; onLeadClick: (l: Lead) => void;
   currentUser: string; team: string[];
 }) {
+  const { c } = useTheme();
   const projects = account.projects ?? [];
 
   // Auto-select: if 0 projects → create one silently; if 1 project → go straight in; if many → show list
@@ -2271,27 +2281,44 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
 
   // Multi-project list view
   return (
-    <div className="space-y-5">
+    <div className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6"
+      style={{ background: c.pageBg, backgroundImage: c.pageBgImage, backgroundSize: c.pageBgSize, minHeight: 'calc(100vh - 56px)' }}>
+    <div className="space-y-5" dir="rtl">
       {/* Back + open lead */}
       <div className="flex items-center justify-between">
-        <button onClick={() => onLeadClick(lead)} className="flex items-center gap-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl transition-colors"><Zap size={12} className="text-indigo-500" /> פתח כרטיס ליד</button>
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors">חזרה לרשימה <ArrowRight size={16} /></button>
+        <button onClick={() => onLeadClick(lead)}
+          className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl transition-colors"
+          style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: c.accentText }}>
+          <Zap size={12} /> פתח כרטיס ליד
+        </button>
+        <button onClick={onBack}
+          className="flex items-center gap-1.5 text-sm font-bold transition-colors"
+          style={{ color: c.textSecondary }}>
+          חזרה לרשימה <ArrowRight size={16} />
+        </button>
       </div>
 
       {/* Client header card */}
-      <div className={`bg-white rounded-2xl border-2 ${hm.ring} shadow-sm p-5`}>
+      <div className="rounded-2xl p-5" style={{ background: 'rgba(10,15,30,0.9)', border: `2px solid ${hm.darkRing}`, backdropFilter: 'blur(12px)' }}>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
-            <div className={`px-3 py-1.5 rounded-xl text-sm font-black ${hm.lightBg} ${hm.text}`}>{score}% {hm.label}</div>
+            <div className="px-3 py-1.5 rounded-xl text-sm font-black"
+              style={{ background: hm.darkLightBg, color: hm.darkText }}>{score}%</div>
             <div className="flex gap-1.5">
-              {lead.phone && <a href={`tel:${lead.phone}`} className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 transition-colors"><Phone size={14} /></a>}
-              {lead.email && <a href={`mailto:${lead.email}`} className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 transition-colors"><Mail size={14} /></a>}
-              {lead.phone && <a href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="w-8 h-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 flex items-center justify-center text-emerald-500 transition-colors"><MessageCircle size={14} /></a>}
+              {lead.phone && <a href={`tel:${lead.phone}`}
+                className="w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
+                style={{ background: c.subtleBg, color: c.textSecondary }}><Phone size={14} /></a>}
+              {lead.email && <a href={`mailto:${lead.email}`}
+                className="w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
+                style={{ background: c.subtleBg, color: c.textSecondary }}><Mail size={14} /></a>}
+              {lead.phone && <a href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
+                className="w-8 h-8 rounded-xl flex items-center justify-center transition-colors"
+                style={{ background: 'rgba(16,185,129,0.15)', color: '#34d399' }}><MessageCircle size={14} /></a>}
             </div>
           </div>
           <div className="text-right">
-            <h2 className="text-xl font-black text-slate-900">{lead.company}</h2>
-            <p className="text-slate-500 text-sm">{lead.contactName} · {lead.assignedTo}</p>
+            <h2 className="text-xl font-black text-white">{lead.company}</h2>
+            <p className="text-sm" style={{ color: c.textSecondary }}>{lead.contactName} · {lead.assignedTo}</p>
           </div>
         </div>
       </div>
@@ -2304,6 +2331,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
         onSaveAccount={onSave}
       />
     </div>
+    </div>
   );
 }
 
@@ -2311,6 +2339,7 @@ function ClientDetail({ lead, account, onSave, onBack, onLeadClick, currentUser,
    CLIENT CARD (grid)
 ═══════════════════════════════════════════════════════════════════════════ */
 function ClientCard({ lead, account, onClick }: { lead: Lead; account: AccountData | undefined; onClick: () => void }) {
+  const { c } = useTheme();
   const score = calcHealth(lead, undefined, account?.contractEnd);
   const hm = healthMeta(score);
   const allPayments = (account?.projects ?? []).flatMap(p => p.payments ?? []);
@@ -2324,23 +2353,38 @@ function ClientCard({ lead, account, onClick }: { lead: Lead; account: AccountDa
   const allUpsell = (account?.projects ?? []).some(p => p.upsellNote);
 
   return (
-    <button onClick={onClick} className={`w-full text-right bg-white rounded-2xl border-2 ${hm.ring} shadow-sm hover:shadow-lg transition-all p-5 group`}>
+    <button onClick={onClick} className="w-full text-right rounded-2xl transition-all p-5 group"
+      style={{ background: 'rgba(10,15,30,0.85)', border: `2px solid ${hm.darkRing}`, backdropFilter: 'blur(12px)' }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 8px 32px ${hm.darkRing}`; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = ''; }}>
       <div className="flex items-start justify-between gap-2 mb-3">
-        <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${hm.lightBg} ${hm.text} flex-shrink-0`}>{score}%</span>
-        <div className="min-w-0"><h3 className="font-black text-slate-900 truncate">{lead.company}</h3><p className="text-xs text-slate-500 truncate">{lead.contactName}</p></div>
+        <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+          style={{ background: hm.darkLightBg, color: hm.darkText }}>{score}%</span>
+        <div className="min-w-0">
+          <h3 className="font-black text-white truncate">{lead.company}</h3>
+          <p className="text-xs truncate" style={{ color: c.textMuted }}>{lead.contactName}</p>
+        </div>
       </div>
-      <div className="h-1.5 bg-slate-100 rounded-full mb-3"><div className={`h-1.5 rounded-full ${hm.bg} transition-all`} style={{ width: `${score}%` }} /></div>
+      <div className="h-1.5 rounded-full mb-3" style={{ background: c.subtleBg }}>
+        <div className="h-1.5 rounded-full transition-all" style={{ width: `${score}%`, background: hm.darkText }} />
+      </div>
       <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-        <div className="bg-slate-50 rounded-xl p-2 text-right"><p className="text-slate-400 mb-0.5">ריטיינר</p><p className="font-bold text-slate-800">{account?.monthlyRetainer ? fmtK(account.monthlyRetainer) : '—'}</p></div>
-        <div className="bg-slate-50 rounded-xl p-2 text-right"><p className="text-slate-400 mb-0.5">לידים החודש</p><p className="font-bold text-indigo-600">{cmLeads || '—'}</p></div>
+        <div className="rounded-xl p-2 text-right" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+          <p className="mb-0.5" style={{ color: c.textMuted }}>ריטיינר</p>
+          <p className="font-bold text-white">{account?.monthlyRetainer ? fmtK(account.monthlyRetainer) : '—'}</p>
+        </div>
+        <div className="rounded-xl p-2 text-right" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+          <p className="mb-0.5" style={{ color: c.textMuted }}>לידים החודש</p>
+          <p className="font-bold" style={{ color: c.accentText }}>{cmLeads || '—'}</p>
+        </div>
       </div>
-      {projectCount > 0 && <div className="mb-3 text-xs text-slate-500 text-right">{projectCount} פרויקטים</div>}
+      {projectCount > 0 && <div className="mb-3 text-xs" style={{ color: c.textMuted }}>{projectCount} פרויקטים</div>}
       <div className="flex gap-1.5 flex-wrap">
         {score < 40 && <span className="text-xs bg-red-600 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><Shield size={9} /> Deal Shield</span>}
-        {overdueT.length > 0 && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">⚠ {overdueT.length} משימות</span>}
-        {overduePay && <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">💳 תשלום</span>}
-        {daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && <span className="text-xs bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">📅 חידוש {daysLeft}י</span>}
-        {allUpsell && <span className="text-xs bg-violet-100 text-violet-700 font-semibold px-2 py-0.5 rounded-full">🚀 אפסל</span>}
+        {overdueT.length > 0 && <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>⚠ {overdueT.length} משימות</span>}
+        {overduePay && <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>💳 תשלום</span>}
+        {daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'rgba(245,158,11,0.2)', color: '#fbbf24' }}>📅 חידוש {daysLeft}י</span>}
+        {allUpsell && <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.2)', color: '#a78bfa' }}>🚀 אפסל</span>}
       </div>
     </button>
   );
@@ -2362,6 +2406,7 @@ type FilterKey = 'all' | 'healthy' | 'warning' | 'critical' | 'renewal';
 interface ShieldAlert { company: string; risk: string; recommendation: string; priority: 'high' | 'medium'; }
 
 export default function Deals({ leads, team = [], currentUser, onLeadClick, onToast }: DealsProps) {
+  const { isDark, c } = useTheme();
   const [accounts, setAccounts] = useState<AccountData[]>([]);
   const [filter, setFilter]     = useState<FilterKey>('all');
   const [selected, setSelected] = useState<Lead | null>(null);
@@ -2411,8 +2456,6 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
   }
 
   async function runDealShield() {
-    const apiKey = getApiKey();
-    if (!apiKey) return;
     setShieldLoading(true); setShieldAlerts(null); setShieldOpen(true);
     const atRisk = activeClients
       .map(l => ({ l, a: getAcc(l.id), score: calcHealth(l, undefined, getAcc(l.id)?.contractEnd) }))
@@ -2430,7 +2473,7 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
       return `${l.company} (${score}%) - ${issues.join(', ') || 'ללא קשר אחרון'}`;
     }).join('\n');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
         model: 'claude-opus-4-6', max_tokens: 1200,
@@ -2476,76 +2519,112 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
   }
 
   return (
-    <div className="space-y-6">
+    <div className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6"
+      style={{ background: c.pageBg, backgroundImage: c.pageBgImage, backgroundSize: c.pageBgSize, minHeight: 'calc(100vh - 56px)' }}>
+    <div className="space-y-5" dir="rtl">
+
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <div />
-        <div><h1 className="text-xl font-black text-slate-900">ניהול לקוחות פעילים</h1><p className="text-slate-500 text-sm">{activeClients.length} לקוחות פעילים</p></div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full"
+            style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-bold" style={{ color: '#34d399' }}>{activeClients.length} פעילים</span>
+          </div>
+        </div>
+        <div className="text-right">
+          <h1 className="text-xl font-black text-white">ניהול לקוחות פעילים</h1>
+          <p className="text-xs mt-0.5" style={{ color: c.textMuted }}>Active Client Management</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: 'לקוחות פעילים', value: activeClients.length, icon: <Users size={18} className="text-indigo-600" />, bg: 'bg-indigo-50', sub: 'סה״כ' },
-          { label: 'MRR', value: fmtK(mrr), icon: <DollarSign size={18} className="text-emerald-600" />, bg: 'bg-emerald-50', sub: 'הכנסה חודשית' },
-          { label: 'תקציב מדיה', value: fmtK(totalManagedMedia), icon: <BarChart2 size={18} className="text-blue-600" />, bg: 'bg-blue-50', sub: 'כולל מנוהל' },
-          { label: 'דורשים טיפול', value: attention, icon: <AlertTriangle size={18} className={attention > 0 ? 'text-amber-500' : 'text-slate-400'} />, bg: attention > 0 ? 'bg-amber-50' : 'bg-slate-50', sub: 'health < 60%' },
+          { label: 'לקוחות פעילים', value: activeClients.length, icon: <Users size={17} style={{ color: c.accentText }} />, color: c.accentText, sub: 'סה״כ' },
+          { label: 'MRR', value: fmtK(mrr), icon: <DollarSign size={17} style={{ color: '#34d399' }} />, color: '#34d399', sub: 'הכנסה חודשית' },
+          { label: 'תקציב מדיה', value: fmtK(totalManagedMedia), icon: <BarChart2 size={17} style={{ color: '#38bdf8' }} />, color: '#38bdf8', sub: 'כולל מנוהל' },
+          { label: 'דורשים טיפול', value: attention, icon: <AlertTriangle size={17} style={{ color: attention > 0 ? '#fbbf24' : '#64748b' }} />, color: attention > 0 ? '#fbbf24' : '#64748b', sub: 'health < 60%' },
         ].map(k => (
-          <div key={k.label} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className={`w-10 h-10 ${k.bg} rounded-xl flex items-center justify-center mb-3`}>{k.icon}</div>
-            <div className="text-2xl font-black text-slate-900 mb-0.5">{k.value}</div>
-            <div className="text-sm font-semibold text-slate-700">{k.label}</div>
-            <div className="text-xs text-slate-400 mt-0.5">{k.sub}</div>
+          <div key={k.label} className="rounded-2xl p-4 text-right"
+            style={{ background: `${k.color}10`, border: `1px solid ${k.color}28`, backdropFilter: 'blur(8px)' }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3" style={{ background: `${k.color}15` }}>{k.icon}</div>
+            <div className="text-2xl font-black mb-0.5" style={{ color: c.textPrimary }}>{k.value}</div>
+            <div className="text-sm font-semibold" style={{ color: c.textSecondary }}>{k.label}</div>
+            <div className="text-xs mt-0.5" style={{ color: c.textMuted }}>{k.sub}</div>
           </div>
         ))}
       </div>
 
+      {/* Filters + Deal Shield */}
       <div className="flex gap-2 flex-wrap items-center">
         {FILTERS.map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${filter === f.key ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+          <button key={f.key} onClick={() => setFilter(f.key)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+            style={filter === f.key
+              ? { background: '#4f46e5', color: c.textPrimary }
+              : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary }}>
             {f.label}
-            {f.count > 0 && <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${filter === f.key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>{f.count}</span>}
+            {f.count > 0 && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full font-bold"
+                style={filter === f.key
+                  ? { background: 'rgba(255,255,255,0.2)', color: c.textPrimary }
+                  : { background: c.subtleBg, color: c.textSecondary }}>
+                {f.count}
+              </span>
+            )}
           </button>
         ))}
         <button
           onClick={runDealShield}
           disabled={shieldLoading}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-red-600 hover:bg-red-500 text-white shadow-sm transition-all disabled:opacity-60 mr-auto"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-60 mr-auto"
+          style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.35)', color: '#f87171' }}
         >
-          {shieldLoading ? <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full" /> : <Shield size={14} />}
+          {shieldLoading ? <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-red-400/40 border-t-red-400 rounded-full" /> : <Shield size={14} />}
           Deal Shield
         </button>
       </div>
 
       {/* Deal Shield Panel */}
       {shieldOpen && (
-        <div className="bg-white border-2 border-red-200 rounded-2xl p-5 shadow-sm">
+        <div className="rounded-2xl p-5" style={{ background: 'rgba(10,15,30,0.95)', border: '2px solid rgba(239,68,68,0.3)', backdropFilter: 'blur(16px)' }}>
           <div className="flex items-center justify-between mb-4">
-            <button onClick={() => setShieldOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={14} /></button>
-            <h3 className="font-bold text-slate-800 flex items-center gap-2"><Shield size={15} className="text-red-500" /> Deal Shield — לקוחות בסיכון</h3>
+            <button onClick={() => setShieldOpen(false)} style={{ color: c.textMuted }} className="hover:text-white transition-colors"><X size={14} /></button>
+            <h3 className="font-bold text-white flex items-center gap-2"><Shield size={15} className="text-red-400" /> Deal Shield — לקוחות בסיכון</h3>
           </div>
           {shieldLoading ? (
-            <div className="flex items-center justify-center gap-3 py-6 text-slate-500">
+            <div className="flex items-center justify-center gap-3 py-6" style={{ color: c.textSecondary }}>
               <span className="animate-spin w-5 h-5 border-2 border-red-400 border-t-transparent rounded-full inline-block" />
               מנתח לקוחות בסיכון...
             </div>
           ) : shieldAlerts && shieldAlerts.length === 0 ? (
             <div className="text-center py-6">
-              <p className="text-emerald-600 font-bold text-lg">🛡 כל הלקוחות תקינים!</p>
-              <p className="text-slate-400 text-sm mt-1">אין לקוחות בסיכון כרגע</p>
+              <p className="text-emerald-400 font-bold text-lg">🛡 כל הלקוחות תקינים!</p>
+              <p className="text-sm mt-1" style={{ color: c.textMuted }}>אין לקוחות בסיכון כרגע</p>
             </div>
           ) : shieldAlerts ? (
             <div className="space-y-3">
               {shieldAlerts.map((alert, i) => (
-                <div key={i} className={`rounded-xl border p-4 text-right ${alert.priority === 'high' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                <div key={i} className="rounded-xl p-4 text-right"
+                  style={alert.priority === 'high'
+                    ? { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)' }
+                    : { background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)' }}>
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${alert.priority === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{alert.priority === 'high' ? '🔴 קריטי' : '🟡 בינוני'}</span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                      style={alert.priority === 'high'
+                        ? { background: 'rgba(239,68,68,0.25)', color: '#f87171' }
+                        : { background: 'rgba(245,158,11,0.25)', color: '#fbbf24' }}>
+                      {alert.priority === 'high' ? '🔴 קריטי' : '🟡 בינוני'}
+                    </span>
                     <div>
-                      <p className="font-black text-slate-900">{alert.company}</p>
-                      <p className="text-xs text-slate-500">{alert.risk}</p>
+                      <p className="font-black text-white">{alert.company}</p>
+                      <p className="text-xs" style={{ color: c.textSecondary }}>{alert.risk}</p>
                     </div>
                   </div>
-                  <div className="bg-white/70 rounded-lg p-2.5">
-                    <p className="text-xs font-bold text-red-700 mb-1">→ פעולה מיידית</p>
-                    <p className="text-sm text-slate-800">{alert.recommendation}</p>
+                  <div className="rounded-lg p-2.5" style={{ background: c.subtleBg }}>
+                    <p className="text-xs font-bold text-red-400 mb-1">→ פעולה מיידית</p>
+                    <p className="text-sm" style={{ color: c.textSecondary }}>{alert.recommendation}</p>
                   </div>
                 </div>
               ))}
@@ -2554,15 +2633,23 @@ export default function Deals({ leads, team = [], currentUser, onLeadClick, onTo
         </div>
       )}
 
+      {/* Clients grid */}
       {activeClients.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-16 text-center"><div className="text-5xl mb-4">👥</div><h3 className="font-bold text-slate-700 text-lg mb-2">אין לקוחות פעילים</h3><p className="text-slate-400 text-sm">שנה סטטוס ליד ל״לקוח פעיל״ כדי שיופיע כאן</p></div>
+        <div className="rounded-2xl p-16 text-center" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+          <div className="text-5xl mb-4">👥</div>
+          <h3 className="font-bold text-white text-lg mb-2">אין לקוחות פעילים</h3>
+          <p className="text-sm" style={{ color: c.textMuted }}>שנה סטטוס ליד ל״לקוח פעיל״ כדי שיופיע כאן</p>
+        </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center"><p className="text-slate-400">אין לקוחות בקטגוריה זו</p></div>
+        <div className="rounded-2xl p-12 text-center" style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+          <p style={{ color: c.textMuted }}>אין לקוחות בקטגוריה זו</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(lead => <ClientCard key={lead.id} lead={lead} account={getAcc(lead.id)} onClick={() => openClient(lead)} />)}
         </div>
       )}
+    </div>
     </div>
   );
 }

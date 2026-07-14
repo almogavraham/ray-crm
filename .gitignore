@@ -2,6 +2,9 @@
 .env
 .env.local
 .env.*.local
+functions/.env
+functions/.env.local
+functions/.env.*.local
 
 # Logs
 logs

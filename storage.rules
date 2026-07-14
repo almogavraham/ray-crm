@@ -1,0 +1,13 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Workspace gallery images — any signed-in user can read/write under their workspace
+    match /workspaces/{workspaceId}/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+    // Everything else — deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

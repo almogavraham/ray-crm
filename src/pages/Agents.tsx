@@ -7,18 +7,18 @@ import {
   Users, Calendar, Target, Zap,
   FileText, Search, Plus, Trash2, Globe, Award,
   ExternalLink, Play, Settings, ToggleLeft, ChevronRight,
-  Link,
+  Link, Dna, X, ChevronDown,
 } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, TeamMember, StandaloneTask, TaskPriority } from '../types';
-import { getApiKey } from '../lib/apiKey';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 import { doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
-type AgentTab = 'followup' | 'forecast' | 'alerts' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach';
+type AgentTab = 'followup' | 'forecast' | 'alerts' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach' | 'mirror' | 'dna';
 
 interface AgentsProps {
   leads: Lead[];
@@ -34,7 +34,19 @@ interface AgentsProps {
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
 function parseDateHE(dateStr: string): Date | null {
   if (!dateStr) return null;
-  const parts = dateStr.split('/');
+  // ISO format: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+    const d = new Date(dateStr.slice(0, 10) + 'T00:00:00');
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // Numeric timestamp string
+  if (/^\d{10,}$/.test(dateStr)) {
+    const d = new Date(Number(dateStr));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // Support both '/' (DD/MM/YYYY) and '.' (DD.MM.YYYY — he-IL locale) separators
+  const sep = dateStr.includes('/') ? '/' : '.';
+  const parts = dateStr.split(sep);
   if (parts.length !== 3) return null;
   const [day, month, year] = parts.map(Number);
   if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
@@ -43,9 +55,21 @@ function parseDateHE(dateStr: string): Date | null {
 
 function daysSinceUpdate(lead: Lead): number {
   const date = parseDateHE(lead.lastUpdate);
-  if (!date) return 999;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return Math.max(0, Math.floor((today.getTime() - date.getTime()) / 86_400_000));
+  if (date) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return Math.max(0, Math.floor((today.getTime() - date.getTime()) / 86_400_000));
+  }
+  // Fallback: use createdAt (number timestamp or ISO string)
+  const cat = lead.createdAt;
+  if (cat) {
+    const created = new Date(typeof cat === 'number' ? cat : String(cat));
+    if (!isNaN(created.getTime())) {
+      created.setHours(0, 0, 0, 0);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      return Math.max(0, Math.floor((today.getTime() - created.getTime()) / 86_400_000));
+    }
+  }
+  return 0; // Unknown date — treat as brand new
 }
 
 function closeProbability(lead: Lead): number {
@@ -94,8 +118,6 @@ function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast
     .sort((a, b) => daysSinceUpdate(b) - daysSinceUpdate(a));
 
   const generateMessage = useCallback(async (lead: Lead) => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     // Check token balance before calling AI
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
@@ -103,7 +125,7 @@ function FollowupAgent({ leads, currentUser, onCreateTask, onUpdateLead, onToast
     }
     setGeneratingFor(lead.id);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const lastNote = lead.notes[lead.notes.length - 1]?.text ?? 'אין הערות';
       const services = lead.solutions.map(s => s.name).join(', ') || 'טרם הוגדרו';
       const styleSection = mirrorStyles.length > 0
@@ -178,24 +200,35 @@ ${styleSection}
     return              { border: 'border-amber-700/30',  bg: 'bg-amber-900/10',  dot: 'bg-amber-400',  label: '🟡 ' + t('agents.needsAttention'), color: 'text-amber-400' };
   };
 
+  const urgencyStyle = (days: number) => {
+    if (days >= 21) return { border: '#ef444460', bg: 'rgba(30,8,8,0.85)',   dot: '#ef4444', labelBg: 'rgba(239,68,68,0.25)',  labelColor: '#fca5a5', barColor: '#ef4444' };
+    if (days >= 14) return { border: '#f9731660', bg: 'rgba(30,15,5,0.85)',  dot: '#f97316', labelBg: 'rgba(249,115,22,0.25)', labelColor: '#fdba74', barColor: '#f97316' };
+    return               { border: '#eab30860', bg: 'rgba(25,20,5,0.85)',   dot: '#eab308', labelBg: 'rgba(234,179,8,0.25)',  labelColor: '#fde047', barColor: '#eab308' };
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" dir="rtl">
       {/* Config bar */}
-      <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3"
+        style={{ background: 'rgba(10,15,30,0.7)', border: '1px solid rgba(99,102,241,0.2)', backdropFilter: 'blur(12px)' }}>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg"
+            style={{ background: 'linear-gradient(135deg,#f97316,#ef4444)', boxShadow: '0 0 16px rgba(249,115,22,0.35)' }}>
             <Clock size={18} className="text-white" />
           </div>
-          <div>
+          <div className="text-right">
             <p className="text-white font-bold text-sm">{t('agents.tab.followup')}</p>
-            <p className="text-zinc-500 text-xs">{t('agents.followupDesc')}</p>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{t('agents.followupDesc')}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-zinc-500 text-xs">{t('agents.daysThreshold')}</span>
+          <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{t('agents.daysThreshold')}</span>
           {[3, 7, 14, 21].map(d => (
             <button key={d} onClick={() => setThreshold(d)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${threshold === d ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-white'}`}>
+              className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+              style={threshold === d
+                ? { background: 'linear-gradient(135deg,#f97316,#ef4444)', color: 'white', boxShadow: '0 0 10px rgba(249,115,22,0.3)' }
+                : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.1)' }}>
               {d}י׳
             </button>
           ))}
@@ -205,109 +238,133 @@ ${styleSection}
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: t('agents.needsAttention'),  value: staleLeads.length,                                         color: 'text-red-400' },
-          { label: t('agents.urgent'),          value: staleLeads.filter(l => daysSinceUpdate(l) >= 21).length,  color: 'text-orange-400' },
-          { label: t('agents.mirrorStyle'),     value: mirrorStyles.length,                                       color: 'text-violet-400' },
+          { label: t('agents.needsAttention'),  value: staleLeads.length,                                         color: '#f87171', bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.2)' },
+          { label: t('agents.urgent'),          value: staleLeads.filter(l => daysSinceUpdate(l) >= 21).length,  color: '#fb923c', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.2)' },
+          { label: t('agents.mirrorStyle'),     value: mirrorStyles.length,                                       color: '#a78bfa', bg: 'rgba(139,92,246,0.1)', border: 'rgba(139,92,246,0.2)' },
         ].map(s => (
-          <div key={s.label} className="bg-zinc-900/80 border border-white/[0.07] rounded-xl p-3 text-center">
-            <div className={`text-2xl font-black ${s.color}`}>{s.value}</div>
-            <div className="text-slate-500 text-[10px] mt-0.5">{s.label}</div>
+          <div key={s.label} className="rounded-xl p-3 text-center"
+            style={{ background: s.bg, border: `1px solid ${s.border}`, backdropFilter: 'blur(8px)' }}>
+            <div className="text-2xl font-black" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-[10px] mt-0.5" style={{ color: 'rgba(255,255,255,0.4)' }}>{s.label}</div>
           </div>
         ))}
       </div>
 
       {/* Lead cards */}
       {staleLeads.length === 0 ? (
-        <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
+        <div className="text-center py-16 rounded-2xl"
+          style={{ background: 'rgba(10,15,30,0.5)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <CheckCircle2 size={40} className="text-emerald-400 mx-auto mb-3" />
           <p className="text-white font-bold">{t('agents.allUpdated')}</p>
-          <p className="text-zinc-400 text-sm mt-1">{t('agents.noLeadsThreshold')} {threshold} {t('agents.daysLabel')}</p>
+          <p className="text-sm mt-1" style={{ color: 'rgba(255,255,255,0.4)' }}>{t('agents.noLeadsThreshold')} {threshold} {t('agents.daysLabel')}</p>
         </div>
       ) : (
         <div className="space-y-3">
           {staleLeads.map(lead => {
-            const days = daysSinceUpdate(lead);
-            const u   = urgency(days);
-            const msg = messages[lead.id];
+            const days  = daysSinceUpdate(lead);
+            const u     = urgency(days);
+            const us    = urgencyStyle(days);
+            const msg   = messages[lead.id];
             const isGen = generatingFor === lead.id;
             const waNumber = lead.phone ? `972${lead.phone.replace(/^0/, '').replace(/\D/g, '')}` : '';
             return (
-              <div key={lead.id} className={`border rounded-2xl overflow-hidden ${u.border} ${u.bg}`}>
+              <div key={lead.id} className="rounded-2xl overflow-hidden transition-all hover:scale-[1.005]"
+                style={{ background: us.bg, border: `1px solid ${us.border}`, backdropFilter: 'blur(12px)', boxShadow: `0 4px 20px ${us.border}` }}>
+                {/* Top accent bar */}
+                <div className="h-0.5" style={{ background: `linear-gradient(90deg, ${us.barColor}, transparent)` }} />
                 <div className="p-4">
-                  <div className="flex items-start gap-3">
-                    {/* Days badge */}
-                    <div className="flex flex-col items-center gap-1 flex-shrink-0 pt-0.5">
-                      <div className={`w-2.5 h-2.5 rounded-full ${u.dot}`} />
-                      <span className={`text-[10px] font-black ${u.color}`}>{days}י׳</span>
-                    </div>
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white font-bold">{lead.company}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold ${u.color} border-current`}>{u.label}</span>
-                        <span className="text-[10px] text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded-full">{lead.status}</span>
+                  {/* Row: [actions LEFT] [info RIGHT] — explicit LTR layout */}
+                  <div className="flex items-start gap-3" dir="ltr">
+                    {/* Quick actions — LEFT side */}
+                    <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                      <div className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl mb-0.5"
+                        style={{ background: us.labelBg }}>
+                        <div className="w-2 h-2 rounded-full" style={{ background: us.dot }} />
+                        <span className="text-[10px] font-black" style={{ color: us.labelColor }}>{days}י׳</span>
                       </div>
-                      <div className="flex items-center gap-3 mt-1 flex-wrap text-xs text-slate-400">
+                      <button onClick={() => markContacted(lead)} title="סמן כטיפלתי"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                        style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399' }}>
+                        <CheckCircle2 size={12}/>
+                      </button>
+                      <button onClick={() => createTask(lead)} title="צור משימה"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                        style={{ background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa' }}>
+                        <Calendar size={12}/>
+                      </button>
+                      {waNumber && (
+                        <a href={`https://wa.me/${waNumber}${msg ? `?text=${encodeURIComponent(msg)}` : ''}`}
+                          target="_blank" rel="noreferrer" title="פתח ווטסאפ"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                          style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)', color: '#4ade80' }}>
+                          <MessageCircle size={12}/>
+                        </a>
+                      )}
+                    </div>
+                    {/* Info — RIGHT side, RTL text */}
+                    <div className="flex-1 min-w-0 text-right" dir="rtl">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-white text-sm">{lead.company}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                          style={{ background: us.labelBg, color: us.labelColor }}>{u.label}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full"
+                          style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }}>{lead.status}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 flex-wrap text-xs"
+                        style={{ color: 'rgba(255,255,255,0.5)' }}>
                         <span className="flex items-center gap-1"><Users size={10}/> {lead.contactName}</span>
                         {lead.phone && <span className="flex items-center gap-1"><Phone size={10}/> {lead.phone}</span>}
                         {lead.budget > 0 && <span className="flex items-center gap-1"><DollarSign size={10}/> ₪{lead.budget.toLocaleString()}/חודש</span>}
                       </div>
                       {lead.notes.length > 0 && (
-                        <p className="text-slate-500 text-xs mt-1.5 line-clamp-1 italic">
-                          "{lead.notes[lead.notes.length - 1].text}"
+                        <p className="text-[11px] mt-1.5 line-clamp-2 italic"
+                          style={{ color: 'rgba(255,255,255,0.35)' }}>
+                          &quot;{lead.notes[lead.notes.length - 1].text}&quot;
                         </p>
                       )}
-                    </div>
-                    {/* Quick actions */}
-                    <div className="flex gap-1.5 flex-shrink-0">
-                      <button onClick={() => markContacted(lead)} title="סמן כטיפלתי"
-                        className="w-8 h-8 rounded-lg bg-emerald-900/50 hover:bg-emerald-700/60 border border-emerald-700/40 flex items-center justify-center text-emerald-400 transition-colors">
-                        <CheckCircle2 size={13}/>
-                      </button>
-                      <button onClick={() => createTask(lead)} title="צור משימה"
-                        className="w-8 h-8 rounded-lg bg-blue-900/50 hover:bg-blue-700/60 border border-blue-700/40 flex items-center justify-center text-blue-400 transition-colors">
-                        <Calendar size={13}/>
-                      </button>
-                      {waNumber && (
-                        <a href={`https://wa.me/${waNumber}${msg ? `?text=${encodeURIComponent(msg)}` : ''}`}
-                          target="_blank" rel="noreferrer" title="פתח ווטסאפ"
-                          className="w-8 h-8 rounded-lg bg-green-900/50 hover:bg-green-700/60 border border-green-700/40 flex items-center justify-center text-green-400 transition-colors">
-                          <MessageCircle size={13}/>
-                        </a>
+                      {/* Generate button — compact, inline */}
+                      {!msg && (
+                        <button onClick={() => generateMessage(lead)} disabled={isGen}
+                          className="mt-2.5 flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
+                          style={{ background: 'rgba(99,102,241,0.18)', border: '1px solid rgba(99,102,241,0.35)', color: '#a5b4fc' }}>
+                          {isGen
+                            ? <><Loader2 size={11} className="animate-spin"/> {t('agents.generating')}</>
+                            : <><Brain size={11}/> {t('agents.generateFollowup')}</>}
+                        </button>
                       )}
                     </div>
                   </div>
-                  {/* Generate button */}
-                  {!msg && (
-                    <button onClick={() => generateMessage(lead)} disabled={isGen}
-                      className="mt-3 w-full flex items-center justify-center gap-2 text-xs font-bold py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-600/40 text-indigo-300 transition-all disabled:opacity-50">
-                      {isGen ? <><Loader2 size={12} className="animate-spin"/> {t('agents.generating')}</> : <><Brain size={12}/> {t('agents.generateFollowup')}</>}
-                    </button>
-                  )}
                 </div>
                 {/* Generated message */}
                 {msg && (
-                  <div className="border-t border-white/[0.07] bg-slate-900/60 p-4 space-y-2">
+                  <div className="p-4 pt-0 space-y-2">
+                    <div className="h-px mb-3" style={{ background: 'rgba(255,255,255,0.07)' }} />
                     <textarea value={msg} onChange={e => setMessages(p => ({ ...p, [lead.id]: e.target.value }))}
-                      rows={3} className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-200 resize-none focus:outline-none focus:ring-1 focus:ring-white/30 text-right"/>
+                      rows={3} dir="rtl"
+                      className="w-full rounded-xl px-3 py-2.5 text-sm resize-none focus:outline-none text-right"
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.85)' }}/>
                     <div className="flex items-center gap-2 flex-wrap">
                       <button onClick={() => copyMsg(lead.id, msg)}
-                        className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors font-medium">
-                        <Copy size={10}/> {copiedId === lead.id ? '✓ ' + t('agents.copied') : t('agents.copyMessage')}
+                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors font-medium"
+                        style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.6)' }}>
+                        <Copy size={10}/> {copiedId === lead.id ? '✓ הועתק' : t('agents.copyMessage')}
                       </button>
                       {waNumber && (
                         <a href={`https://wa.me/${waNumber}?text=${encodeURIComponent(msg)}`}
                           target="_blank" rel="noreferrer"
-                          className="flex items-center gap-1.5 text-xs bg-green-800/60 hover:bg-green-700/60 text-green-300 border border-green-700/40 px-3 py-1.5 rounded-lg transition-colors font-medium">
+                          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors font-medium"
+                          style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.25)', color: '#4ade80' }}>
                           <MessageCircle size={10}/> {t('agents.sendWhatsapp')}
                         </a>
                       )}
                       <button onClick={() => generateMessage(lead)} disabled={isGen}
-                        className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors">
+                        className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg transition-colors"
+                        style={{ color: 'rgba(255,255,255,0.35)' }}>
                         <RefreshCw size={10}/> {t('agents.change')}
                       </button>
-                      <span className="mr-auto text-[10px] text-slate-600 flex items-center gap-1">
-                        <Sparkles size={9} className="text-violet-500"/> {mirrorStyles.length > 0 ? t('agents.mirrorStyle') : 'Default'}
+                      <span className="mr-auto text-[10px] flex items-center gap-1"
+                        style={{ color: 'rgba(139,92,246,0.6)' }}>
+                        <Sparkles size={9}/> {mirrorStyles.length > 0 ? t('agents.mirrorStyle') : 'Default'}
                       </span>
                     </div>
                   </div>
@@ -378,7 +435,7 @@ export function RevenueForecast({ leads }: { leads: Lead[] }) {
       </div>
 
       {/* Big 3 numbers */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           { label: t('agents.confirmed'), sub: `${activeLeads.length} ${t('agents.stat.activeClients')}`, val: confirmed, color: 'emerald' },
           { label: t('agents.fromPipeline'), sub: `${pipelineLeads.length} ${t('agents.stat.leads')} | ₪${pipelineTotal.toLocaleString()}`, val: fromPipeline, color: 'blue' },
@@ -473,8 +530,6 @@ function ProposalGenerator({ leads, currentUser, onToast, workspaceId }: {
   const lead = leads.find(l => l.id === selectedLead);
 
   const generate = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (!services.length) { onToast?.('בחר שירות אחד לפחות', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
@@ -482,7 +537,7 @@ function ProposalGenerator({ leads, currentUser, onToast, workspaceId }: {
     }
     setLoading(true); setResult('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const leadCtx = lead
         ? `לקוח: ${lead.company} | ${lead.contactName} | תקציב מוכר: ₪${lead.budget.toLocaleString()}/חודש`
         : 'לקוח חדש ללא פרטים מוגדרים';
@@ -849,7 +904,8 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
       </div>
 
       {/* Table */}
-      <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl overflow-hidden">
+      <div className="overflow-x-auto rounded-2xl">
+      <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl overflow-hidden min-w-[380px]">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-slate-700/50">
@@ -874,6 +930,7 @@ export function SourceROI({ leads }: { leads: Lead[] }) {
             ))}
           </tbody>
         </table>
+      </div>
       </div>
     </div>
   );
@@ -901,15 +958,13 @@ function LeadEnrichment({ leads, onUpdateLead, onToast, workspaceId }: {
 
   const enrich = async () => {
     if (!lead) return;
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setResult(null);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
         model: 'claude-opus-4-5',
@@ -1160,11 +1215,9 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
   /* AI: build workflow from natural language */
   const buildWithAi = async () => {
     if (!aiPrompt.trim()) return;
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     setGenAi(true);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
         model: 'claude-opus-4-5', max_tokens: 800,
@@ -1261,9 +1314,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
             actionResults.push({ actionId: action.id, type: action.type, success: true });
 
           } else if (action.type === 'send_whatsapp_ai' || action.type === 'send_email_ai') {
-            const apiKey = getApiKey();
-            if (!apiKey) { actionResults.push({ actionId: action.id, type: action.type, success: false }); continue; }
-            const client   = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+            const client   = getAnthropicProxy();
             const tone     = action.config.tone || 'ידידותי';
             const hint     = action.config.prompt || '';
             const lastNote = lead.notes[lead.notes.length - 1]?.text ?? '';
@@ -1306,64 +1357,67 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
     }
   };
 
+  /* shared input class for light theme */
+  const inp = "bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-400 transition-all";
+
   /* ── Condition row ── */
   const CondRow = ({ c, idx }: { c: WorkflowCondition; idx: number }) => (
-    <div className="flex items-center gap-2 flex-wrap bg-slate-900/60 border border-slate-700/50 rounded-xl px-3 py-2.5">
+    <div className="flex items-center gap-2 flex-wrap bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
       {idx > 0 && (
-        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${fLogic === 'and' ? 'bg-blue-900/50 text-blue-300' : 'bg-violet-900/50 text-violet-300'}`}>
+        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${fLogic === 'and' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-violet-100 text-violet-700 border border-violet-200'}`}>
           {fLogic === 'and' ? 'AND' : 'OR'}
         </span>
       )}
       <select value={c.type} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, type: e.target.value as TriggerType, value: '' } : x))}
-        className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none flex-1 min-w-32">
+        className={`${inp} flex-1 min-w-32`}>
         {(Object.keys(TRIGGER_LABELS) as TriggerType[]).map(k => <option key={k} value={k}>{TRIGGER_LABELS[k]}</option>)}
       </select>
       {c.type === 'status_is' ? (
         <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
-          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          className={inp}>
           {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       ) : c.type === 'source_is' ? (
         <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
-          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          className={inp}>
           {WF_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       ) : c.type !== 'has_overdue_task' ? (
         <input type="number" value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
-          placeholder="ערך" className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none w-20"/>
-      ) : <span className="text-slate-500 text-xs">(כל ליד עם משימה באיחור)</span>}
+          placeholder="ערך" className={`${inp} w-20`}/>
+      ) : <span className="text-slate-400 text-xs">(כל ליד עם משימה באיחור)</span>}
       {fConds.length > 1 && (
-        <button onClick={() => setFConds(cs => cs.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={12}/></button>
+        <button onClick={() => setFConds(cs => cs.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12}/></button>
       )}
     </div>
   );
 
   /* ── Action row ── */
   const ActionRow = ({ a, idx }: { a: WorkflowAction; idx: number }) => (
-    <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl px-3 py-3 space-y-2">
+    <div className="bg-white border border-slate-200 rounded-xl px-3 py-3 space-y-2 shadow-sm">
       <div className="flex items-center gap-2">
-        <span className="text-[10px] bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2 py-0.5 rounded-full font-bold flex-shrink-0">#{idx+1}</span>
+        <span className="text-[10px] bg-indigo-100 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full font-bold flex-shrink-0">#{idx+1}</span>
         <select value={a.type} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, type: e.target.value as WFActionType, config: {} } : x))}
-          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none flex-1">
+          className={`${inp} flex-1`}>
           {(Object.keys(ACTION_LABELS) as WFActionType[]).map(k => <option key={k} value={k}>{ACTION_LABELS[k]}</option>)}
         </select>
         {fActions.length > 1 && (
-          <button onClick={() => setFActions(as => as.filter(x => x.id !== a.id))} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={12}/></button>
+          <button onClick={() => setFActions(as => as.filter(x => x.id !== a.id))} className="text-red-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12}/></button>
         )}
       </div>
       {a.type === 'create_task' && (
         <div className="space-y-1.5">
           <input value={a.config.description || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, description: e.target.value } } : x))}
-            placeholder="תיאור משימה — {company} {name}" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+            placeholder="תיאור משימה — {company} {name}" className={`w-full ${inp} text-right`}/>
           <select value={a.config.priority || 'medium'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, priority: e.target.value } } : x))}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            className={inp}>
             <option value="high">🔴 דחוף</option><option value="medium">🟡 בינוני</option><option value="low">🟢 נמוך</option>
           </select>
         </div>
       )}
       {a.type === 'change_status' && (
         <select value={a.config.status || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, status: e.target.value } } : x))}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+          className={`w-full ${inp}`}>
           <option value="">— בחר סטטוס —</option>
           {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -1371,31 +1425,31 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
       {(a.type === 'send_whatsapp_ai' || a.type === 'send_email_ai') && (
         <div className="space-y-1.5">
           <select value={a.config.tone || 'ידידותי'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, tone: e.target.value } } : x))}
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            className={`w-full ${inp}`}>
             <option value="ידידותי">ידידותי</option><option value="מקצועי">מקצועי</option>
             <option value="חמים">חמים</option><option value="תכליתי">תכליתי</option>
           </select>
           <input value={a.config.prompt || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, prompt: e.target.value } } : x))}
             placeholder={a.type === 'send_whatsapp_ai' ? 'הנחיה (אופציונלי) — "הזכר את הפגישה"' : 'נושא / הנחיה (אופציונלי)'}
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+            className={`w-full ${inp} text-right`}/>
         </div>
       )}
       {a.type === 'add_note' && (
         <textarea value={a.config.noteText || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, noteText: e.target.value } } : x))}
           placeholder="טקסט ההערה — {company} {name}" rows={2}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right resize-none"/>
+          className={`w-full ${inp} text-right resize-none`}/>
       )}
       {a.type === 'assign_to' && (
         <input value={a.config.assignee || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, assignee: e.target.value } } : x))}
-          placeholder="שם איש צוות" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none text-right"/>
+          placeholder="שם איש צוות" className={`w-full ${inp} text-right`}/>
       )}
       {a.type === 'send_webhook' && (
         <div className="space-y-1.5">
           <input value={a.config.url || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, url: e.target.value } } : x))}
             placeholder="https://hooks.zapier.com/..." type="url"
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none"/>
+            className={`w-full ${inp}`}/>
           <select value={a.config.method || 'POST'} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, method: e.target.value } } : x))}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
+            className={inp}>
             <option>POST</option><option>GET</option>
           </select>
         </div>
@@ -1406,64 +1460,70 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
   /* ══ RENDER ══ */
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="bg-zinc-900/80 border border-white/[0.07] rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
+      {/* ── Header ── */}
+      <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap"
+        style={{ background:'linear-gradient(135deg,#f5f3ff,#eef2ff)', border:'1px solid #ddd6fe', boxShadow:'0 2px 12px rgba(139,92,246,0.08)' }}>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center"><Zap size={18} className="text-black"/></div>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md"
+            style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow:'0 4px 12px #8b5cf640' }}>
+            <Zap size={18} className="text-white"/>
+          </div>
           <div>
-            <p className="text-white font-bold text-sm">בונה אוטומציות מתקדם</p>
-            <p className="text-zinc-500 text-xs">AI WhatsApp · מייל · Webhook · תנאים מרובים · AND/OR</p>
+            <p className="text-slate-800 font-bold text-sm">בונה אוטומציות מתקדם</p>
+            <p className="text-violet-500 text-xs">AI WhatsApp · מייל · Webhook · תנאים מרובים · AND/OR</p>
           </div>
         </div>
         <button onClick={() => { setShowForm(v => !v); if (showForm) resetForm(); }}
-          className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">
+          className="flex items-center gap-2 text-white text-sm font-bold px-4 py-2 rounded-xl transition-all shadow-md"
+          style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow:'0 4px 12px #8b5cf640' }}>
           <Plus size={14}/> אוטומציה חדשה
         </button>
       </div>
 
       {/* ── FORM ── */}
       {showForm && (
-        <div className="bg-slate-800/60 border border-amber-700/40 rounded-2xl p-5 space-y-5">
+        <div className="bg-white border border-violet-200 rounded-2xl p-5 space-y-4 shadow-md">
           <div className="flex items-center justify-between">
-            <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-500 hover:text-white text-xs transition-colors">✕ ביטול</button>
-            <h3 className="text-white font-bold text-sm">⚡ בנה אוטומציה חדשה</h3>
+            <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-400 hover:text-slate-600 text-xs transition-colors">✕ ביטול</button>
+            <h3 className="text-slate-800 font-bold text-sm">⚡ בנה אוטומציה חדשה</h3>
           </div>
 
-          {/* AI builder from natural language */}
-          <div className="bg-violet-900/20 border border-violet-700/40 rounded-xl p-3 space-y-2">
-            <p className="text-violet-300 text-xs font-bold text-right">✨ תאר מה אתה רוצה — AI יבנה בשבילך</p>
+          {/* AI builder */}
+          <div className="rounded-xl p-3 space-y-2" style={{ background:'linear-gradient(135deg,#f5f3ff,#eef2ff)', border:'1px solid #ddd6fe' }}>
+            <p className="text-violet-600 text-xs font-bold text-right">✨ תאר מה אתה רוצה — AI יבנה בשבילך</p>
             <div className="flex gap-2">
               <button onClick={buildWithAi} disabled={genAi || !aiPrompt.trim()}
-                className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex-shrink-0">
+                className="flex items-center gap-1.5 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40"
+                style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
                 {genAi ? <><Loader2 size={11} className="animate-spin"/> בונה...</> : <><Brain size={11}/> בנה</>}
               </button>
               <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
                 placeholder='למשל: "שלח וואטסאפ ידידותי לכל ליד שלא עדכנתי 10 ימים"'
-                className="flex-1 bg-slate-900 border border-violet-700/40 rounded-lg px-3 py-2 text-xs text-white focus:outline-none text-right"/>
+                className="flex-1 bg-white border border-violet-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 text-right"/>
             </div>
           </div>
 
           <input value={fName} onChange={e => setFName(e.target.value)} placeholder="שם האוטומציה *"
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none text-right"/>
+            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-200 text-right"/>
           <input value={fDesc} onChange={e => setFDesc(e.target.value)} placeholder="תיאור (אופציונלי)"
-            className="w-full bg-slate-900 border border-slate-600/60 rounded-xl px-3 py-2 text-xs text-slate-400 focus:outline-none text-right"/>
+            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-200 text-right"/>
 
           {/* Conditions */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex gap-2">
                 <button onClick={() => setFConds(cs => [...cs, mkCond()])}
-                  className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 px-2 py-1 rounded-lg hover:bg-amber-900/20 transition-colors">
+                  className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-800 px-2 py-1 rounded-lg hover:bg-violet-50 transition-colors">
                   <Plus size={11}/> הוסף תנאי
                 </button>
                 {fConds.length > 1 && (
                   <button onClick={() => setFLogic(l => l === 'and' ? 'or' : 'and')}
-                    className={`text-[10px] font-black px-2.5 py-1 rounded-full border transition-colors ${fLogic === 'and' ? 'bg-blue-900/50 text-blue-300 border-blue-700/40' : 'bg-violet-900/50 text-violet-300 border-violet-700/40'}`}>
+                    className={`text-[10px] font-black px-2.5 py-1 rounded-full border transition-colors ${fLogic === 'and' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-violet-50 text-violet-700 border-violet-200'}`}>
                     {fLogic === 'and' ? '🔗 AND — כל התנאים' : '⚡ OR — אחד מהתנאים'}
                   </button>
                 )}
               </div>
-              <p className="text-amber-400 text-xs font-bold">🔀 תנאים</p>
+              <p className="text-slate-600 text-xs font-bold">🔀 תנאים</p>
             </div>
             {fConds.map((c, i) => <CondRow key={c.id} c={c} idx={i}/>)}
           </div>
@@ -1472,31 +1532,34 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <button onClick={() => setFActions(as => [...as, mkAct()])}
-                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded-lg hover:bg-blue-900/20 transition-colors">
+                className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors">
                 <Plus size={11}/> הוסף פעולה
               </button>
-              <p className="text-blue-400 text-xs font-bold">⚡ פעולות</p>
+              <p className="text-slate-600 text-xs font-bold">⚡ פעולות</p>
             </div>
             {fActions.map((a, i) => <ActionRow key={a.id} a={a} idx={i}/>)}
           </div>
 
           <div className="flex justify-start">
             <button onClick={saveWorkflow}
-              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-6 py-2 rounded-xl transition-colors flex items-center gap-2">
+              className="text-white font-bold text-sm px-6 py-2 rounded-xl transition-all flex items-center gap-2 shadow-md"
+              style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow:'0 4px 12px #8b5cf640' }}>
               <CheckCircle2 size={14}/> שמור אוטומציה
             </button>
           </div>
         </div>
       )}
 
-      {/* Workflows list */}
+      {/* ── Workflows list ── */}
       {loadingWf ? (
-        <div className="text-center py-8"><Loader2 size={20} className="animate-spin text-slate-500 mx-auto"/></div>
+        <div className="text-center py-8"><Loader2 size={20} className="animate-spin text-violet-400 mx-auto"/></div>
       ) : workflows.length === 0 ? (
-        <div className="text-center py-16 bg-zinc-900/50 border border-white/[0.06] rounded-2xl">
-          <Zap size={36} className="text-slate-700 mx-auto mb-3"/>
-          <p className="text-white font-bold">אין אוטומציות עדיין</p>
-          <p className="text-zinc-400 text-sm mt-1">צור את האוטומציה הראשונה שלך ↑</p>
+        <div className="text-center py-16 rounded-2xl" style={{ background:'linear-gradient(135deg,#f5f3ff,#eef2ff)', border:'1px solid #ddd6fe' }}>
+          <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background:'linear-gradient(135deg,#8b5cf620,#6366f120)', border:'1px solid #8b5cf630' }}>
+            <Zap size={28} className="text-violet-400"/>
+          </div>
+          <p className="text-slate-700 font-bold">אין אוטומציות עדיין</p>
+          <p className="text-slate-400 text-sm mt-1">צור את האוטומציה הראשונה שלך ↑</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -1505,65 +1568,66 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
             const hasAi  = (wf.actions ?? []).some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
             const isPrev = previewWf === wf.id;
             return (
-              <div key={wf.id} className={`border rounded-2xl p-4 transition-all ${wf.active ? 'bg-slate-800/60 border-slate-700/50' : 'bg-black/40 border-slate-800/50 opacity-60'}`}>
+              <div key={wf.id} className={`rounded-2xl p-4 transition-all ${wf.active ? '' : 'opacity-60'}`}
+                style={{ background:'#fff', border:`1px solid ${wf.active ? '#e0e7ff' : '#e2e8f0'}`, boxShadow:'0 2px 8px rgba(99,102,241,0.06)' }}>
+                {/* active indicator bar */}
+                {wf.active && <div className="h-0.5 -mx-4 -mt-4 mb-4 rounded-t-2xl" style={{ background:'linear-gradient(90deg,#8b5cf6,#6366f1,#06b6d4)' }}/>}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0 text-right">
                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                      {hasAi && <span className="text-[9px] bg-violet-900/40 text-violet-300 border border-violet-700/30 px-1.5 py-0.5 rounded-full font-bold">AI</span>}
-                      {mc > 0 && wf.active && <span className="text-[10px] bg-amber-600/30 text-amber-300 border border-amber-600/40 px-2 py-0.5 rounded-full font-bold">{mc} לידים</span>}
-                      <span className="text-white font-bold text-sm">{wf.name}</span>
+                      {hasAi && <span className="text-[9px] bg-violet-100 text-violet-700 border border-violet-200 px-1.5 py-0.5 rounded-full font-bold">AI</span>}
+                      {mc > 0 && wf.active && <span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-bold">{mc} לידים</span>}
+                      <span className="text-slate-800 font-bold text-sm">{wf.name}</span>
                     </div>
-                    {wf.description && <p className="text-slate-500 text-xs mt-0.5">{wf.description}</p>}
-                    {/* Conditions + actions summary */}
+                    {wf.description && <p className="text-slate-400 text-xs mt-0.5">{wf.description}</p>}
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap justify-end">
                       {(wf.conditions ?? []).map((c, i) => (
                         <span key={c.id} className="flex items-center gap-1">
-                          {i > 0 && <span className={`text-[9px] font-black px-1 rounded ${wf.conditionLogic === 'and' ? 'text-blue-400' : 'text-violet-400'}`}>{wf.conditionLogic.toUpperCase()}</span>}
-                          <span className="bg-slate-700/60 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{TRIGGER_LABELS[c.type]} {c.value}</span>
+                          {i > 0 && <span className={`text-[9px] font-black px-1 rounded ${wf.conditionLogic === 'and' ? 'text-blue-600' : 'text-violet-600'}`}>{wf.conditionLogic.toUpperCase()}</span>}
+                          <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-[10px]">{TRIGGER_LABELS[c.type]} {c.value}</span>
                         </span>
                       ))}
-                      <span className="text-slate-600 text-[10px]">→</span>
+                      <span className="text-slate-300 text-[10px]">→</span>
                       {(wf.actions ?? []).map(a => (
-                        <span key={a.id} className="bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30 text-[10px]">
+                        <span key={a.id} className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100 text-[10px]">
                           {ACTION_ICON[a.type]} {ACTION_LABELS[a.type].replace(/^.\s/,'')}
                         </span>
                       ))}
                     </div>
                     {wf.runCount > 0 && (
-                      <p className="text-slate-600 text-[10px] mt-1">
+                      <p className="text-slate-400 text-[10px] mt-1">
                         הופעל {wf.runCount} פעמים{wf.lastRunAt ? ` · אחרון: ${new Date(wf.lastRunAt).toLocaleDateString('he-IL')}` : ''}
                       </p>
                     )}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
                     <button onClick={() => setPreviewWf(isPrev ? null : wf.id)} title="תצוגה מקדימה"
-                      className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors ${isPrev ? 'bg-slate-600 border-slate-500 text-white' : 'bg-slate-700/40 border-slate-600/40 text-slate-400 hover:text-white'}`}>
+                      className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors ${isPrev ? 'bg-indigo-100 border-indigo-200 text-indigo-600' : 'bg-slate-50 border-slate-200 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}>
                       <Search size={12}/>
                     </button>
                     <button onClick={() => runWf(wf)} disabled={running === wf.id || !wf.active || mc === 0} title="הפעל עכשיו"
-                      className="w-8 h-8 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 border border-amber-600/40 flex items-center justify-center text-amber-400 transition-colors disabled:opacity-30">
+                      className="w-8 h-8 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-600 transition-colors disabled:opacity-30">
                       {running === wf.id ? <Loader2 size={12} className="animate-spin"/> : <Play size={12}/>}
                     </button>
                     <button onClick={() => toggleWf(wf)} title={wf.active ? 'כבה' : 'הפעל'}
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors border ${wf.active ? 'bg-emerald-900/40 border-emerald-700/40 text-emerald-400' : 'bg-slate-700/40 border-slate-600/40 text-slate-500'}`}>
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors border ${wf.active ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
                       <ToggleLeft size={14}/>
                     </button>
                     <button onClick={() => deleteWf(wf.id)} title="מחק"
-                      className="w-8 h-8 rounded-lg bg-red-900/30 hover:bg-red-800/40 border border-red-800/40 flex items-center justify-center text-red-400 transition-colors">
+                      className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 border border-red-200 flex items-center justify-center text-red-500 transition-colors">
                       <Trash2 size={12}/>
                     </button>
                   </div>
                 </div>
-                {/* Preview panel */}
                 {isPrev && (
-                  <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-1">
-                    <p className="text-slate-400 text-xs text-right font-bold mb-2">לידים שיושפעו ({mc}):</p>
+                  <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
+                    <p className="text-slate-500 text-xs text-right font-bold mb-2">לידים שיושפעו ({mc}):</p>
                     {mc === 0 ? (
-                      <p className="text-slate-600 text-xs text-center py-2">אין לידים תואמים כרגע</p>
+                      <p className="text-slate-400 text-xs text-center py-2">אין לידים תואמים כרגע</p>
                     ) : matchLeads(wf).map(l => (
-                      <div key={l.id} className="flex items-center justify-between bg-slate-900/60 rounded-lg px-3 py-1.5">
-                        <span className="text-slate-500 text-[10px]">{l.status} · {daysSinceUpdate(l)}י׳</span>
-                        <span className="text-white text-xs font-medium">{l.company}</span>
+                      <div key={l.id} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-lg px-3 py-1.5">
+                        <span className="text-slate-400 text-[10px]">{l.status} · {daysSinceUpdate(l)}י׳</span>
+                        <span className="text-slate-700 text-xs font-medium">{l.company}</span>
                       </div>
                     ))}
                   </div>
@@ -1576,16 +1640,17 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
 
       {/* ── RUN RESULTS MODAL ── */}
       {runResults && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setRunResults(null)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-              <button onClick={() => setRunResults(null)} className="text-slate-400 hover:text-white text-sm transition-colors">✕ סגור</button>
-              <h3 className="text-white font-bold">✅ תוצאות — {runResults.length} לידים</h3>
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setRunResults(null)}>
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="h-1" style={{ background:'linear-gradient(90deg,#8b5cf6,#6366f1,#06b6d4)' }}/>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <button onClick={() => setRunResults(null)} className="text-slate-400 hover:text-slate-600 text-sm transition-colors">✕ סגור</button>
+              <h3 className="text-slate-800 font-bold">✅ תוצאות — {runResults.length} לידים</h3>
             </div>
             <div className="overflow-y-auto max-h-[60vh] p-4 space-y-4">
               {runResults.map(({ lead, actionResults }) => (
-                <div key={lead.id} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 space-y-3">
-                  <p className="text-white font-bold text-sm text-right">
+                <div key={lead.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                  <p className="text-slate-800 font-bold text-sm text-right">
                     {lead.company} <span className="text-slate-400 font-normal text-xs">· {lead.contactName}</span>
                   </p>
                   {actionResults.map(ar => {
@@ -1593,24 +1658,24 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
                     const waNum = lead.phone ? `972${lead.phone.replace(/^0/,'').replace(/\D/g,'')}` : '';
                     return (
                       <div key={ar.actionId} className="space-y-2">
-                        <p className="text-[10px] text-slate-400 font-bold text-right">{ACTION_LABELS[ar.type]}</p>
-                        {ar.subject && <p className="text-slate-300 text-xs font-semibold text-right">נושא: {ar.subject}</p>}
-                        <div className="bg-slate-900 rounded-lg px-3 py-2.5 text-sm text-slate-200 text-right whitespace-pre-wrap leading-relaxed">{ar.message}</div>
+                        <p className="text-[10px] text-slate-500 font-bold text-right">{ACTION_LABELS[ar.type]}</p>
+                        {ar.subject && <p className="text-slate-600 text-xs font-semibold text-right">נושא: {ar.subject}</p>}
+                        <div className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-700 text-right whitespace-pre-wrap leading-relaxed">{ar.message}</div>
                         <div className="flex gap-2 flex-wrap">
                           <button onClick={() => { navigator.clipboard.writeText(ar.message!); onToast?.('הועתק ✓','success'); }}
-                            className="flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-lg transition-colors">
+                            className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1 rounded-lg transition-colors">
                             <Copy size={9}/> העתק
                           </button>
                           {ar.type === 'send_whatsapp_ai' && waNum && (
                             <a href={`https://wa.me/${waNum}?text=${encodeURIComponent(ar.message!)}`} target="_blank" rel="noreferrer"
-                              className="flex items-center gap-1 text-xs bg-green-800/60 hover:bg-green-700/60 text-green-300 border border-green-700/40 px-2.5 py-1 rounded-lg transition-colors">
+                              className="flex items-center gap-1 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg transition-colors">
                               <MessageCircle size={9}/> שלח WhatsApp
                             </a>
                           )}
                           {ar.type === 'send_email_ai' && lead.email && (
                             <a href={`mailto:${lead.email}?subject=${encodeURIComponent(ar.subject||'')}&body=${encodeURIComponent(ar.message!)}`}
                               target="_blank" rel="noreferrer"
-                              className="flex items-center gap-1 text-xs bg-blue-900/50 hover:bg-blue-800/50 text-blue-300 border border-blue-700/40 px-2.5 py-1 rounded-lg transition-colors">
+                              className="flex items-center gap-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg transition-colors">
                               📧 פתח מייל
                             </a>
                           )}
@@ -1798,7 +1863,7 @@ export function AgentPerformance({ leads, team, standaloneTask }: {
                       <span className="text-white font-bold">{s.member.name}</span>
                       <span className="text-[10px] text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded-full">{s.member.role}</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 mt-2 text-center">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 text-center">
                       {[
                         { label: t('agents.revenue'),   val: `₪${Math.round(s.revenue/1000)}K`, color: 'text-emerald-400' },
                         { label: t('agents.close'),     val: `${Math.round(s.closeRate)}%`,      color: 'text-blue-400' },
@@ -1859,15 +1924,13 @@ function MeetingBrief({ leads, currentUser, onToast, workspaceId }: {
 
   const generate = async () => {
     if (!lead) return;
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setBrief('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const services  = lead.solutions.map(s => s.name).join(', ') || 'טרם הוגדרו';
       const notes     = lead.notes.slice(-5).map(n => `• ${n.text}`).join('\n') || 'אין הערות';
       const openTasks = lead.tasks.filter(t => !t.completed).slice(0, 3).map(t => `• ${t.description}`).join('\n') || 'אין';
@@ -2020,15 +2083,13 @@ function MarketingAI({ leads, currentUser, onToast, workspaceId }: {
   const lead = leads.find(l => l.id === selectedId);
 
   const generate = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setContent('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const pl = platforms.find(p => p.key === platform)?.label ?? platform;
       const gl = goals.find(g => g.key === goal)?.label ?? goal;
       const toneMap: Record<string, string> = { professional: 'מקצועי ורציני', casual: 'קל ונגיש', urgent: 'דחוף ומניע לפעולה', friendly: 'חברותי ואישי' };
@@ -2164,15 +2225,13 @@ function CampaignOptimizer({ leads, onToast, workspaceId }: {
   })[0];
 
   const analyze = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setAnalysis('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const statsText = Object.entries(sourceStats).map(([src, s]) =>
         `${src}: ${s.leads} לידים → ${s.clients} לקוחות (${s.leads > 0 ? Math.round(s.clients / s.leads * 100) : 0}% המרה) → ₪${s.revenue.toLocaleString()}/חודש הכנסה`
       ).join('\n');
@@ -2317,15 +2376,13 @@ export function ChurnShield({ leads, onToast, workspaceId }: {
     :               { label: 'יציב',          color: 'text-emerald-400', bg: 'bg-emerald-900/10 border-emerald-700/30' };
 
   const generatePlan = async (lead: Lead) => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoadingId(lead.id);
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const days = daysSinceUpdate(lead);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
@@ -2468,15 +2525,13 @@ function SmartTemplates({ leads, currentUser, onToast, workspaceId }: {
 
   const personalize = async () => {
     if (!selectedTemplate) return;
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setPersonalized('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const leadCtx = lead
         ? `לקוח: ${lead.company} | ${lead.contactName} | שירותים: ${lead.solutions.map(s => s.name).join(', ')} | תקציב: ₪${lead.budget.toLocaleString()}/חודש | הערה אחרונה: ${lead.notes[lead.notes.length - 1]?.text ?? 'אין'}`
         : 'ללא לקוח ספציפי';
@@ -2644,15 +2699,13 @@ function SalesCoach({ leads, team, standaloneTask, currentUser, onToast, workspa
   })[0];
 
   const analyze = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     if (workspaceId) {
       const hasBal = await hasBalance(workspaceId);
       if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
     }
     setLoading(true); setCoaching('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const periodLabel = period === 'week' ? 'שבועי' : period === 'month' ? 'חודשי' : 'רבעוני';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
@@ -2765,6 +2818,361 @@ function SalesCoach({ leads, team, standaloneTask, currentUser, onToast, workspa
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   MIRROR MODE AGENT
+══════════════════════════════════════════════════════════════════════════════ */
+function MirrorModeAgent({ currentUser, workspaceId, onToast }: {
+  currentUser: string;
+  workspaceId?: string;
+  onToast?: AgentsProps['onToast'];
+}) {
+  const [styleExample, setStyleExample] = useState('');
+  const [savedStyles,  setSavedStyles]  = useState<string[]>([]);
+  const [context,      setContext]      = useState('');
+  const [generated,    setGenerated]    = useState('');
+  const [genLoading,   setGenLoading]   = useState(false);
+  const [initLoading,  setInitLoading]  = useState(true);
+  const [copied,       setCopied]       = useState(false);
+
+  useEffect(() => {
+    getDoc(doc(db, 'mirror-mode', 'styles')).then(snap => {
+      if (snap.exists()) {
+        const data = snap.data() as { examples?: string[] };
+        setSavedStyles(data.examples ?? []);
+      }
+    }).finally(() => setInitLoading(false));
+  }, []);
+
+  async function saveStyle() {
+    if (!styleExample.trim()) return;
+    const updated = [...savedStyles, styleExample.trim()].slice(-5);
+    setSavedStyles(updated);
+    setStyleExample('');
+    await setDoc(doc(db, 'mirror-mode', 'styles'), { examples: updated, updatedAt: new Date().toISOString() });
+    onToast?.('דוגמת סגנון נשמרה ✓', 'success');
+  }
+
+  async function deleteStyle(i: number) {
+    const updated = savedStyles.filter((_, idx) => idx !== i);
+    setSavedStyles(updated);
+    await setDoc(doc(db, 'mirror-mode', 'styles'), { examples: updated, updatedAt: new Date().toISOString() });
+  }
+
+  async function generateMessage() {
+    if (!context.trim() || savedStyles.length === 0) return;
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
+    setGenLoading(true);
+    setGenerated('');
+    try {
+      const client = getAnthropicProxy();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6',
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: `אתה מומחה Ghostwriting. המשתמש שמך הוא ${currentUser}.\n\nהנה דוגמאות לסגנון הכתיבה שלו:\n${savedStyles.map((s, i) => `דוגמה ${i + 1}:\n${s}`).join('\n\n')}\n\nכעת כתוב הודעה בדיוק בסגנון זה על הנושא הבא:\n"${context}"\n\nחשוב: כתוב רק את ההודעה עצמה, ללא הסברים. שמור על הסגנון, הטון, האורך ואפילו שגיאות כתיב אם קיימות.`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = response.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      setGenerated(text);
+      try {
+        const cost = calculateCost('claude-opus-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
+        if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-6', 'Mirror Mode agent');
+      } catch { /* token tracking non-fatal */ }
+    } catch { setGenerated('שגיאה ביצירת הודעה. נסה שנית.'); }
+    finally { setGenLoading(false); }
+  }
+
+  function copyGenerated() {
+    navigator.clipboard.writeText(generated).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      onToast?.('הועתק ✓', 'success');
+    });
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-4">
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg"
+          style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow: '0 0 20px rgba(139,92,246,0.35)' }}>
+          <Brain size={20} className="text-white" />
+        </div>
+        <div>
+          <h2 className="font-black text-base text-white leading-tight">Mirror Mode</h2>
+          <p className="text-xs mt-0.5" style={{ color: 'rgba(165,180,252,0.7)' }}>למד את סגנון הכתיבה שלך וייצר הודעות בדיוק בטון שלך</p>
+        </div>
+      </div>
+
+      {/* Style examples section */}
+      <div className="rounded-2xl p-4 space-y-3"
+        style={{ background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)' }}>
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-black uppercase tracking-widest" style={{ color: 'rgba(165,180,252,0.6)' }}>דוגמאות סגנון</span>
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+            style={{ background: 'rgba(139,92,246,0.2)', color: '#c4b5fd' }}>
+            {savedStyles.length}/5
+          </span>
+        </div>
+        {initLoading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 size={18} className="animate-spin" style={{ color: 'rgba(255,255,255,0.35)' }} />
+          </div>
+        ) : savedStyles.length === 0 ? (
+          <div className="text-center py-4 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)' }}>
+            <Brain size={24} className="mx-auto mb-2" style={{ color: 'rgba(139,92,246,0.5)' }} />
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>הוסף דוגמאות של הכתיבה שלך כדי שה-AI ילמד את הסגנון</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {savedStyles.map((s, i) => (
+              <div key={i} className="flex items-start gap-2 rounded-xl p-3 group"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <button onClick={() => deleteStyle(i)}
+                  className="flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
+                  style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5' }}>
+                  <X size={10} />
+                </button>
+                <p className="text-xs leading-relaxed flex-1 text-right" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                  {s.slice(0, 120)}{s.length > 120 ? '...' : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-2 pt-1">
+          <textarea
+            value={styleExample}
+            onChange={e => setStyleExample(e.target.value)}
+            placeholder="הדבק כאן דוגמה של הכתיבה שלך (הודעת ווטסאפ, מייל, פוסט...)..."
+            rows={3}
+            className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none resize-none text-right"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+          />
+          <button onClick={saveStyle}
+            disabled={!styleExample.trim() || savedStyles.length >= 5}
+            className="w-full text-white text-sm font-bold py-2.5 rounded-xl transition-colors disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
+            {savedStyles.length >= 5 ? 'הגעת למקסימום דוגמאות (5)' : '+ שמור דוגמת סגנון'}
+          </button>
+        </div>
+      </div>
+
+      {/* Generator section */}
+      <div className="rounded-2xl p-4 space-y-3"
+        style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)' }}>
+        <div className="flex items-center gap-2">
+          <Zap size={13} className="text-indigo-400" />
+          <span className="text-xs font-black uppercase tracking-widest" style={{ color: 'rgba(165,180,252,0.6)' }}>יצירת הודעה בסגנונך</span>
+        </div>
+        <textarea
+          value={context}
+          onChange={e => setContext(e.target.value)}
+          placeholder="על מה לכתוב? (לדוגמה: מעקב אחרי לקוח שלא ענה, הצעת שירות חדש, תיאום פגישה...)"
+          rows={3}
+          className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none resize-none text-right"
+          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
+        />
+        <button onClick={generateMessage}
+          disabled={genLoading || !context.trim() || savedStyles.length === 0}
+          className="w-full text-white text-sm font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+          style={{ background: 'linear-gradient(135deg,#6366f1,#4f46e5)', boxShadow: genLoading ? 'none' : '0 0 16px rgba(99,102,241,0.3)' }}>
+          {genLoading ? <><Loader2 size={14} className="animate-spin" /> מייצר...</> : <><Brain size={14} /> {savedStyles.length === 0 ? 'הוסף דוגמאות סגנון תחילה' : 'צור הודעה בסגנוני'}</>}
+        </button>
+        {generated && (
+          <div className="rounded-xl p-4 space-y-3"
+            style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)' }}>
+            <p className="text-sm leading-relaxed text-right whitespace-pre-wrap" style={{ color: 'rgba(255,255,255,0.9)' }}>{generated}</p>
+            <div className="flex gap-2">
+              <button onClick={copyGenerated}
+                className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+                style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.7)' }}>
+                <Copy size={11} /> {copied ? 'הועתק!' : 'העתק'}
+              </button>
+              <button onClick={() => { setGenerated(''); setContext(''); }}
+                className="text-xs px-2 py-1.5 rounded-lg transition-colors"
+                style={{ color: 'rgba(255,255,255,0.35)' }}>
+                נקה
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DNA MATCH AGENT
+══════════════════════════════════════════════════════════════════════════════ */
+function DnaMatchAgent({ leads, workspaceId, onToast }: {
+  leads: Lead[];
+  workspaceId?: string;
+  onToast?: AgentsProps['onToast'];
+}) {
+  const [matching, setMatching] = useState(false);
+  const [results,  setResults]  = useState<{ leadId: string; score: number; reasons: string }[]>([]);
+  const [errMsg,   setErrMsg]   = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const wonLeads    = leads.filter(l => l.status === 'לקוח פעיל');
+  const targetLeads = leads.filter(l => l.status === 'חדש' || l.status === 'בתהליך');
+
+  async function runDnaMatch() {
+    if (workspaceId) {
+      const hasBal = await hasBalance(workspaceId);
+      if (!hasBal) { onToast?.('⚠️ אין מספיק טוקנים. רכוש טוקנים נוספים בדף החיוב.', 'error'); return; }
+    }
+    setMatching(true);
+    setErrMsg(null);
+    setResults([]);
+    try {
+      const client = getAnthropicProxy();
+      const wonSummary    = wonLeads.map(l => `[${l.id}] ${l.company} | מקור:${l.source} | תקציב:₪${l.budget} | שירותים:${l.solutions.map(s => s.name).join(',') || 'אין'} | ציון:${l.aiScore}`).join('\n');
+      const targetSummary = targetLeads.map(l => `[${l.id}] ${l.company} | ${l.contactName} | מקור:${l.source} | תקציב:₪${l.budget} | שירותים:${l.solutions.map(s => s.name).join(',') || 'אין'} | ציון:${l.aiScore} | סטטוס:${l.status}`).join('\n');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response: any = await (client.messages as any).create({
+        model: 'claude-opus-4-6',
+        max_tokens: 2048,
+        messages: [{
+          role: 'user',
+          content: `אתה מנהל CRM מומחה. נתח לידים ובצע DNA Match.\n\nלקוחות פעילים (DNA מוצלח):\n${wonSummary}\n\nלידים לניתוח:\n${targetSummary}\n\nעבור כל ליד, תן ציון דמיון (0-100) ומשפט קצר בעברית.\nענה רק בפורמט JSON:\n[{"leadId":"xxx","score":85,"reasons":"דומה ל-[חברה] - אותו מקור ותקציב דומה"}]\nללא הסברים נוספים.`,
+        }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = response.content?.find((b: any) => b.type === 'text')?.text ?? '';
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as { leadId: string; score: number; reasons: string }[];
+        setResults(parsed.sort((a, b) => b.score - a.score));
+        try {
+          const cost = calculateCost('claude-opus-4-6', response.usage?.input_tokens ?? 0, response.usage?.output_tokens ?? 0);
+          if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-6', 'DNA Match agent');
+        } catch { /* token tracking non-fatal */ }
+      } else {
+        setErrMsg('לא הצלחתי לנתח. נסה שנית.');
+      }
+    } catch { setErrMsg('שגיאה בניתוח DNA. נסה שנית.'); }
+    finally { setMatching(false); }
+  }
+
+  const scoreColor = (s: number) => s >= 75 ? '#34d399' : s >= 50 ? '#fbbf24' : '#f87171';
+  const scoreBg    = (s: number) => s >= 75 ? 'rgba(52,211,153,0.1)' : s >= 50 ? 'rgba(251,191,36,0.1)' : 'rgba(248,113,113,0.1)';
+  const scoreBorder = (s: number) => s >= 75 ? 'rgba(52,211,153,0.25)' : s >= 50 ? 'rgba(251,191,36,0.25)' : 'rgba(248,113,113,0.25)';
+  const scoreBar   = (s: number) => s >= 75 ? '#34d399' : s >= 50 ? '#fbbf24' : '#f87171';
+  const scoreLabel = (s: number) => s >= 75 ? 'התאמה גבוהה' : s >= 50 ? 'התאמה בינונית' : 'התאמה נמוכה';
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-4">
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-lg"
+          style={{ background: 'linear-gradient(135deg,#10b981,#059669)', boxShadow: '0 0 20px rgba(16,185,129,0.35)' }}>
+          <Dna size={20} className="text-white" />
+        </div>
+        <div>
+          <h2 className="font-black text-base text-white leading-tight">DNA Match</h2>
+          <p className="text-xs mt-0.5" style={{ color: 'rgba(165,180,252,0.7)' }}>מדד דמיון בין לידים בצינור לבין לקוחות פעילים מוצלחים</p>
+        </div>
+      </div>
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)' }}>
+          <div className="text-xl font-black" style={{ color: '#34d399' }}>{wonLeads.length}</div>
+          <div className="text-[10px] font-semibold mt-0.5" style={{ color: 'rgba(52,211,153,0.7)' }}>לקוחות פעילים (DNA)</div>
+        </div>
+        <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
+          <div className="text-xl font-black" style={{ color: '#a5b4fc' }}>{targetLeads.length}</div>
+          <div className="text-[10px] font-semibold mt-0.5" style={{ color: 'rgba(165,180,252,0.7)' }}>לידים לניתוח</div>
+        </div>
+      </div>
+
+      {wonLeads.length === 0 ? (
+        <div className="rounded-2xl p-6 text-center" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <Dna size={32} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.2)' }} />
+          <p className="text-sm font-semibold" style={{ color: 'rgba(255,255,255,0.4)' }}>אין לקוחות פעילים עדיין</p>
+          <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.25)' }}>כשיהיו לקוחות פעילים, DNA Match ינתח אילו לידים דומים להם</p>
+        </div>
+      ) : (
+        <button onClick={runDnaMatch}
+          disabled={matching || targetLeads.length === 0}
+          className="w-full text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+          style={{ background: 'linear-gradient(135deg,#10b981,#059669)', boxShadow: matching ? 'none' : '0 0 16px rgba(16,185,129,0.3)' }}>
+          {matching ? <><Loader2 size={14} className="animate-spin" /> מנתח DNA...</> : <><Dna size={14} /> {targetLeads.length === 0 ? 'אין לידים לניתוח' : 'הרץ DNA Match'}</>}
+        </button>
+      )}
+
+      {errMsg && (
+        <div className="rounded-xl p-3 text-center text-xs" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
+          {errMsg}
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: 'rgba(165,180,252,0.5)' }}>תוצאות ניתוח — {results.length} לידים</span>
+            <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>ממוין לפי התאמה</span>
+          </div>
+          {results.map(r => {
+            const lead = leads.find(l => l.id === r.leadId);
+            if (!lead) return null;
+            const isOpen = expanded === r.leadId;
+            return (
+              <div key={r.leadId} className="rounded-2xl overflow-hidden transition-all"
+                style={{ background: scoreBg(r.score), border: `1px solid ${scoreBorder(r.score)}` }}>
+                <button onClick={() => setExpanded(isOpen ? null : r.leadId)} className="w-full text-right p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl font-black" style={{ color: scoreColor(r.score) }}>{r.score}%</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: 'rgba(255,255,255,0.08)', color: scoreColor(r.score) }}>
+                        {scoreLabel(r.score)}
+                      </span>
+                      <ChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                        style={{ color: 'rgba(255,255,255,0.4)' }} />
+                    </div>
+                    <div>
+                      <p className="font-black text-sm text-white">{lead.company}</p>
+                      <p className="text-[11px]" style={{ color: 'rgba(255,255,255,0.45)' }}>{lead.contactName} · {lead.status}</p>
+                    </div>
+                  </div>
+                  <div className="h-1.5 rounded-full" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                    <div className="h-1.5 rounded-full transition-all duration-700"
+                      style={{ width: `${r.score}%`, background: scoreBar(r.score), boxShadow: `0 0 8px ${scoreBar(r.score)}80` }} />
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="px-4 pb-4 pt-0" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                    <p className="text-xs leading-relaxed text-right mt-3" style={{ color: 'rgba(255,255,255,0.7)' }}>{r.reasons}</p>
+                    <div className="mt-3 flex gap-2 flex-wrap justify-end">
+                      {[
+                        `תקציב: ₪${lead.budget.toLocaleString()}`,
+                        `מקור: ${lead.source}`,
+                        `AI Score: ${lead.aiScore}%`,
+                      ].map(label => (
+                        <span key={label} className="text-[11px] px-2 py-0.5 rounded-full"
+                          style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.5)' }}>
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    MAIN — AGENTS HUB
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function Agents({
@@ -2772,6 +3180,7 @@ export default function Agents({
   onCreateTask, onUpdateLead, onToast, workspaceId,
 }: AgentsProps) {
   const { t } = useLang();
+  const { isDark, c } = useTheme();
   const [tab, setTab] = useState<AgentTab>('followup');
 
   const staleCount   = leads.filter(l => ['חדש','בתהליך','רימרקטינג'].includes(l.status) && daysSinceUpdate(l) >= 7).length;
@@ -2810,105 +3219,170 @@ export default function Agents({
     { key: 'churn',       emoji: '🛡️', label: t('agents.tab.churn'),    badge: clients_at_risk > 0 ? clients_at_risk : undefined },
     { key: 'templates',   emoji: '📄', label: t('agents.tab.templates'),  badge: undefined },
     { key: 'coach',       emoji: '🧠', label: t('agents.tab.coach'),     badge: undefined },
+    { key: 'mirror',      emoji: '🪞', label: 'Mirror Mode',              badge: undefined },
+    { key: 'dna',         emoji: '🧬', label: 'DNA Match',               badge: undefined },
   ];
 
   const activeClients = leads.filter(l => l.status === 'לקוח פעיל').length;
 
   const tabGroups: { label: string; desc: string; keys: AgentTab[] }[] = [
-    { label: t('agents.group.sales'),     desc: '5', keys: ['followup','forecast','proposal','alerts','roi'] },
+    { label: t('agents.group.sales'),     desc: '4', keys: ['followup','forecast','proposal','alerts'] },
     { label: t('agents.group.leads'),     desc: '3', keys: ['enrich','workflow','brief'] },
     { label: t('agents.group.clients'),   desc: '2', keys: ['churn','templates'] },
     { label: t('agents.group.marketing'), desc: '3', keys: ['marketing','campaign','coach'] },
+    { label: 'AI Tools',                  desc: '2', keys: ['mirror','dna'] },
   ];
 
   const currentTab = tabs.find(t => t.key === tab)!;
   const currentGroup = tabGroups.find(g => g.keys.includes(tab))!;
 
-  return (
-    <div className="-mx-4 md:mx-0 flex flex-col gap-0">
+  /* accent colour per group */
+  const GROUP_ACCENT = ['#6366f1','#06b6d4','#10b981','#f59e0b','#8b5cf6'] as const;
 
-      {/* ── HERO — BLACK & WHITE ─────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-black px-4 md:px-6 pt-5 pb-5 md:rounded-2xl md:mb-4">
-        {/* Fine grid */}
-        <div className="absolute inset-0 pointer-events-none"
-          style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)', backgroundSize: '28px 28px' }}/>
-        {/* Top shimmer line */}
-        <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"/>
+  return (
+    <div className="flex flex-col gap-0 rounded-2xl overflow-hidden" dir="rtl"
+      style={{ background: c.pageBg, backgroundImage: c.pageBgImage, backgroundSize: c.pageBgSize }}>
+
+      {/* ══ HERO ════════════════════════════════════════════════════════════ */}
+      <div className="relative overflow-hidden px-4 md:px-6 pt-6 pb-5"
+        style={{
+          background: 'linear-gradient(135deg,rgba(99,102,241,0.22) 0%,rgba(139,92,246,0.15) 40%,rgba(6,182,212,0.1) 100%)',
+          borderBottom: '1px solid rgba(99,102,241,0.25)',
+          boxShadow: '0 4px 32px rgba(99,102,241,0.12)',
+        }}>
+
+        {/* dot grid */}
+        <div className="absolute inset-0 pointer-events-none" style={{
+          backgroundImage: 'radial-gradient(circle,rgba(99,102,241,0.18) 1px,transparent 1px)',
+          backgroundSize: '24px 24px',
+        }}/>
+        {/* glow orbs */}
+        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full pointer-events-none"
+          style={{ background: 'radial-gradient(circle,rgba(99,102,241,0.25),transparent 70%)' }}/>
+        <div className="absolute -bottom-10 left-10 w-32 h-32 rounded-full pointer-events-none"
+          style={{ background: 'radial-gradient(circle,rgba(6,182,212,0.2),transparent 70%)' }}/>
+        {/* shimmer line */}
+        <div className="absolute top-0 inset-x-0 h-px"
+          style={{ background: 'linear-gradient(90deg,transparent,rgba(165,180,252,0.6),transparent)' }}/>
 
         <div className="relative flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <div className="relative">
-              <div className="w-11 h-11 rounded-2xl bg-white flex items-center justify-center shadow-xl">
-                <Bot size={20} className="text-black"/>
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 8px 24px #6366f140' }}>
+                <Bot size={22} className="text-white"/>
               </div>
-              <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-white border-2 border-black animate-pulse"/>
+              <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white animate-pulse"/>
             </div>
             <div>
-              <h1 className="text-white font-black text-xl md:text-2xl leading-none tracking-tight">{t('agents.smartAgents')}</h1>
-              <p className="text-white/30 text-[10px] font-semibold tracking-widest uppercase mt-0.5">AI Agents · 24 / 7</p>
+              <h1 className="font-black text-xl md:text-2xl leading-none tracking-tight"
+                style={{ background: 'linear-gradient(135deg,#a5b4fc,#c4b5fd,#67e8f9)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                {t('agents.smartAgents')}
+              </h1>
+              <p className="text-[10px] font-semibold tracking-widest uppercase mt-0.5" style={{ color: 'rgba(165,180,252,0.7)' }}>AI Agents · 24 / 7</p>
             </div>
           </div>
-          <div className="text-left flex flex-col items-start gap-1">
-            <div className="flex items-center gap-1.5 border border-white/15 rounded-full px-2.5 py-1">
-              <Zap size={8} className="text-white/60"/>
-              <span className="text-white/60 text-[10px] font-black tracking-widest">15 AGENTS</span>
+
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5"
+              style={{ background: 'linear-gradient(135deg,#6366f115,#8b5cf615)', border: '1px solid #6366f130' }}>
+              <Zap size={10} style={{ color: c.accentText }}/>
+              <span className="text-[10px] font-black tracking-widest" style={{ color: c.accentText }}>15 AGENTS</span>
             </div>
-            <span className="text-white/40 text-[10px] flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-white/60 animate-pulse inline-block"/>online
+            <span className="text-[10px] flex items-center gap-1.5 font-medium" style={{ color: 'rgba(165,180,252,0.8)' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block"/>
+              online
             </span>
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-2">
+        {/* Stats row */}
+        <div className="relative grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
-            { label: t('agents.stat.leads'),         val: leads.length },
-            { label: t('agents.stat.activeClients'), val: activeClients },
-            { label: t('agents.stat.monthlyRevenue'), val: `₪${Math.round(confirmed/1000)}K` },
-            { label: t('agents.stat.alerts'),        val: alertCount },
-          ].map((s, i) => (
-            <div key={s.label} className="bg-white/[0.05] border border-white/[0.08] rounded-xl p-2.5 text-center">
-              <div className={`text-base md:text-lg font-black ${i === 3 && alertCount > 0 ? 'text-white' : 'text-white'}`}>{s.val}</div>
-              <div className="text-[9px] md:text-[10px] text-white/30 leading-tight mt-0.5">{s.label}</div>
+            { label: t('agents.stat.leads'),          val: leads.length,                          color:'#6366f1', bg:'#6366f110', border:'#6366f125' },
+            { label: t('agents.stat.activeClients'),  val: activeClients,                         color:'#10b981', bg:'#10b98110', border:'#10b98125' },
+            { label: t('agents.stat.monthlyRevenue'), val: `₪${Math.round(confirmed/1000)}K`,     color:'#06b6d4', bg:'#06b6d410', border:'#06b6d425' },
+            { label: t('agents.stat.alerts'),         val: alertCount,                            color: alertCount>0?'#ef4444':'#94a3b8', bg: alertCount>0?'#ef444410':'#94a3b810', border: alertCount>0?'#ef444425':'#94a3b825' },
+          ].map(s => (
+            <div key={s.label} className="rounded-xl p-2.5 text-center backdrop-blur-sm"
+              style={{ background: s.bg, border: `1px solid ${s.border}` }}>
+              <div className="text-base md:text-lg font-black" style={{ color: s.color }}>{s.val}</div>
+              <div className="text-[9px] md:text-[10px] leading-tight mt-0.5" style={{ color: c.textMuted }}>{s.label}</div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ── BODY: NAV SIDEBAR + CONTENT ──────────────────────────────────────── */}
-      <div className="flex flex-col md:flex-row gap-3 px-4 md:px-0 pb-6 md:items-start">
+      {/* ══ MOBILE TAB STRIP ════════════════════════════════════════════════ */}
+      <div className="md:hidden overflow-x-auto px-4 pb-2 pt-1 scrollbar-hide"
+        style={{ borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
+        <div className="flex gap-1.5 w-max">
+          {tabs.map(t => {
+            const gi = tabGroups.findIndex(g => g.keys.includes(t.key));
+            const accent = GROUP_ACCENT[Math.max(0, gi)] as string;
+            const isActive = tab === t.key;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex-shrink-0 transition-all"
+                style={isActive
+                  ? { background: `${accent}22`, border: `1px solid ${accent}55`, color: accent }
+                  : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.45)' }
+                }>
+                <span>{t.emoji}</span>
+                <span>{t.label}</span>
+                {t.badge !== undefined && (
+                  <span className="text-[9px] px-1 py-0.5 rounded-full font-black"
+                    style={isActive
+                      ? { background: accent, color:'#fff' }
+                      : typeof t.badge === 'number'
+                        ? { background:'rgba(239,68,68,0.2)', color:'#f87171' }
+                        : { background:'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)' }
+                    }>{t.badge}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-        {/* ── LEFT: Category nav ───────────────────────────────────────────── */}
-        <div className="md:w-52 md:flex-shrink-0 md:sticky md:top-[65px]">
-          <div className="bg-black border border-white/[0.08] rounded-2xl overflow-hidden">
+      {/* ══ BODY ════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-col md:flex-row gap-4 px-4 md:px-6 pb-6 md:items-start">
+
+        {/* ── NAV SIDEBAR (desktop only) ──────────────────────────────────── */}
+        <div className="hidden md:block md:w-52 md:flex-shrink-0 md:sticky md:top-[65px]">
+          <div className="rounded-2xl overflow-hidden"
+            style={{ background:'rgba(10,15,30,0.92)', border:'1px solid rgba(99,102,241,0.2)', backdropFilter:'blur(16px)', boxShadow:'0 4px 24px rgba(0,0,0,0.3)' }}>
             {tabGroups.map((group, gi) => (
-              <div key={group.label} className={gi > 0 ? 'border-t border-white/[0.06]' : ''}>
-                {/* Group header */}
-                <div className="px-4 py-2.5 flex items-center justify-between bg-white/[0.02]">
-                  <span className="text-[10px] font-black text-white/30 uppercase tracking-widest">{group.label}</span>
-                  <span className="text-[9px] text-white/20 font-medium">{group.desc}</span>
+              <div key={group.label} style={gi > 0 ? { borderTop: `1px solid ${c.divider}` } : {}}>
+                {/* group header */}
+                <div className="px-4 py-2 flex items-center gap-2" style={{ background: c.subtleBg }}>
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: GROUP_ACCENT[gi] }}/>
+                  <span className="text-[10px] font-black uppercase tracking-widest"
+                    style={{ color: GROUP_ACCENT[gi] }}>{group.label}</span>
                 </div>
-                {/* Agent buttons */}
+                {/* buttons */}
                 <div className="py-1">
                   {tabs.filter(t => group.keys.includes(t.key)).map(t => {
                     const isActive = tab === t.key;
+                    const accent   = GROUP_ACCENT[gi];
                     return (
                       <button key={t.key} onClick={() => setTab(t.key)}
-                        className={`w-full text-right px-3 py-2.5 flex items-center gap-2.5 transition-all text-sm ${
-                          isActive
-                            ? 'bg-white text-black font-bold'
-                            : 'text-white/40 hover:text-white hover:bg-white/[0.06]'
-                        }`}>
+                        className="w-full text-right px-3 py-2.5 flex items-center gap-2.5 transition-all text-sm"
+                        style={isActive
+                          ? { background:`${accent}18`, borderRight:`3px solid ${accent}`, color: c.textPrimary }
+                          : { color: c.textMuted, borderRight:'3px solid transparent' }}
+                        onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.05)'; }}
+                        onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background=''; }}>
                         <span className="text-base leading-none flex-shrink-0">{t.emoji}</span>
-                        <span className="flex-1 leading-none">{t.label}</span>
+                        <span className={`flex-1 leading-none text-xs ${isActive?'font-bold':'font-medium'}`}>{t.label}</span>
                         {t.badge !== undefined && (
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-black leading-none flex-shrink-0 ${
-                            isActive
-                              ? 'bg-black/15 text-black'
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full font-black leading-none flex-shrink-0"
+                            style={isActive
+                              ? { background: accent, color:'#fff' }
                               : typeof t.badge === 'number'
-                                ? 'bg-white text-black'
-                                : 'bg-white/10 text-white/50'
-                          }`}>{t.badge}</span>
+                                ? { background:'rgba(239,68,68,0.2)', color:'#f87171' }
+                                : { background:'rgba(255,255,255,0.1)', color: c.textSecondary }
+                            }>{t.badge}</span>
                         )}
                       </button>
                     );
@@ -2919,25 +3393,49 @@ export default function Agents({
           </div>
         </div>
 
-        {/* ── RIGHT: Content ────────────────────────────────────────────────── */}
+        {/* ── CONTENT ────────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0">
-          {/* Active agent header */}
-          <div className="bg-black border border-white/[0.08] rounded-2xl px-4 py-3 mb-3 flex items-center gap-3">
-            <span className="text-xl leading-none">{currentTab.emoji}</span>
+
+          {/* active agent header */}
+          <div className="rounded-2xl px-4 py-3 mb-3 flex items-center gap-3"
+            style={{
+              background: 'rgba(10,15,30,0.88)',
+              border: '1px solid rgba(99,102,241,0.25)',
+              backdropFilter: 'blur(16px)',
+              boxShadow: '0 2px 16px rgba(0,0,0,0.3)',
+            }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg leading-none flex-shrink-0"
+              style={{ background:'rgba(99,102,241,0.2)', border:'1px solid rgba(99,102,241,0.35)' }}>
+              {currentTab.emoji}
+            </div>
             <div className="flex-1 min-w-0">
-              <p className="text-white font-black text-sm leading-none">{currentTab.label}</p>
-              <p className="text-white/30 text-[10px] mt-0.5">{currentGroup.label}</p>
+              <p className="font-black text-sm text-white leading-none">{currentTab.label}</p>
+              <p className="text-[10px] font-medium mt-0.5 uppercase tracking-wide" style={{ color: 'rgba(165,180,252,0.7)' }}>{currentGroup.label}</p>
             </div>
             {currentTab.badge !== undefined && (
-              <span className={`text-[10px] px-2 py-1 rounded-full font-black ${
-                typeof currentTab.badge === 'number' ? 'bg-white text-black' : 'bg-white/10 text-white/60'
-              }`}>{currentTab.badge}</span>
+              <span className="text-[10px] px-2.5 py-1 rounded-full font-black"
+                style={typeof currentTab.badge === 'number'
+                  ? { background:'rgba(239,68,68,0.2)', color:'#f87171' }
+                  : { background:'rgba(139,92,246,0.2)', color:'#a78bfa' }
+                }>{currentTab.badge}</span>
             )}
+            {/* live indicator */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full"
+              style={{ background:'rgba(16,185,129,0.15)', border:'1px solid rgba(16,185,129,0.3)' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+              <span className="text-[10px] font-bold" style={{ color: '#34d399' }}>פעיל</span>
+            </div>
           </div>
 
-          {/* Content card */}
-          <div className="bg-zinc-950 border border-white/[0.07] rounded-2xl overflow-hidden">
-            <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"/>
+          {/* content card */}
+          <div className="rounded-2xl overflow-hidden"
+            style={{
+              background: c.subtleBg,
+              border: `1px solid ${c.cardBorder}`,
+              backdropFilter:'blur(8px)',
+            }}>
+            {/* top accent bar */}
+            <div className="h-1" style={{ background:'linear-gradient(90deg,#6366f1,#8b5cf6,#06b6d4)' }}/>
             <div className="p-4 md:p-5">
               {tab === 'followup' && (
                 <FollowupAgent leads={leads} currentUser={currentUser}
@@ -2957,6 +3455,8 @@ export default function Agents({
               {tab === 'churn'       && <ChurnShield leads={leads} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'templates'   && <SmartTemplates leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'coach'       && <SalesCoach leads={leads} team={team} standaloneTask={standaloneTask} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'mirror'      && <MirrorModeAgent currentUser={currentUser} workspaceId={workspaceId} onToast={onToast}/>}
+              {tab === 'dna'         && <DnaMatchAgent leads={leads} workspaceId={workspaceId} onToast={onToast}/>}
             </div>
           </div>
         </div>

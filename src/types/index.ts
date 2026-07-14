@@ -1,9 +1,6 @@
-export type LeadStatus =
-  | 'חדש'
-  | 'בתהליך'
-  | 'לקוח פעיל'
-  | 'רימרקטינג'
-  | 'לא רלוונטי';
+// LeadStatus is now an open string type — supports custom statuses defined in statusConfig.ts.
+// The legacy values ('חדש' | 'בתהליך' | 'לקוח פעיל' | 'רימרקטינג' | 'לא רלוונטי') remain fully valid.
+export type LeadStatus = string;
 
 export type LeadSource =
   | 'אורגני'
@@ -17,9 +14,12 @@ export type Solution = {
   name: string;
   inProgress: boolean;
   delivered: boolean;
+  price?: number;       // monthly / one-time price in ILS
+  priceType?: 'monthly' | 'one_time';  // default: monthly
 };
 
 export type TaskPriority = 'high' | 'medium' | 'low';
+export type KanbanStatus = 'todo' | 'inprogress' | 'done' | 'cancelled';
 
 export type Task = {
   id: string;
@@ -32,6 +32,7 @@ export type Task = {
   completedAt?: string;
   assignedTo?: string;
   assignedBy?: string;
+  kanbanStatus?: KanbanStatus;
 };
 
 export type StandaloneTask = {
@@ -47,6 +48,7 @@ export type StandaloneTask = {
   assignedBy: string;
   leadId?: string;
   createdAt: string;
+  kanbanStatus?: KanbanStatus;
 };
 
 export type Note = {
@@ -54,6 +56,14 @@ export type Note = {
   text: string;
   author: string;
   timestamp: string;
+};
+
+/** A single configurable field that appears on every lead card */
+export type CustomFieldDef = {
+  id: string;        // unique key, e.g. "accounting_software"
+  label: string;     // displayed title, e.g. "תוכנת הנהלת חשבונות"
+  options: string[]; // selectable chips, e.g. ["חשבשבת", "פריוריטי", "זאפ"]
+  multiSelect?: boolean; // allow picking more than one option
 };
 
 export type Lead = {
@@ -74,6 +84,14 @@ export type Lead = {
   tasks: Task[];
   futureNotes: string[];
   waitingContent: boolean;
+  activityLog?: LeadActivity[];       // chronological activity log
+  meetings?: LeadMeeting[];           // scheduled meetings
+  objection?: string;                 // objection type when "לא רלוונטי"
+  contactMethod?: ContactMethod;      // how last contact was made
+  lastContactDate?: string;           // ISO - when last contacted
+  nextFollowUpDate?: string;          // ISO - scheduled next follow-up
+  followUpNote?: string;              // note for next follow-up
+  customFields?: Record<string, string | string[]>; // values for workspace custom fields
 };
 
 export type TeamMember = {
@@ -85,7 +103,200 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'workflows' | 'admin' | 'billing';
+export type Page = 'home' | 'dashboard' | 'overview' | 'analytics' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'workflows' | 'admin' | 'billing' | 'integrations' | 'ai-studio' | 'email-agent' | 'marketing-agent';
+
+/* ── Email Agent types ──────────────────────────────────────────────────────── */
+export type EmailProvider = 'gmail' | 'outlook';
+
+export interface EmailAccount {
+  id: string;            // unique per account (email address)
+  provider: EmailProvider;
+  email: string;
+  displayName?: string;
+  clientId: string;      // Google Client ID  OR  Azure App (client) ID
+  tenantId?: string;     // Outlook only: Azure tenant / 'common'
+  connectedAt: number;
+  // Persisted token so the user stays connected across page refreshes
+  cachedToken?: string;
+  cachedTokenExpiry?: number;
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  question: string;
+  answer: string;
+  category: 'pricing' | 'product' | 'support' | 'meeting' | 'objection' | 'competitor' | 'general';
+  addedBy: 'user' | 'ai';
+  tags?: string[];
+  usageCount?: number;   // how many times the agent used this entry
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export interface EmailDraft {
+  id: string;
+  accountId: string;     // which connected account received this
+  provider: EmailProvider;
+  threadId: string;
+  messageId: string;
+  fromEmail: string;
+  fromName: string;
+  subject: string;
+  originalText: string;
+  aiDraft: string;
+  confidence: number;
+  uncertainties: string[];
+  status: 'pending' | 'approved' | 'sent' | 'rejected';
+  leadId?: string;
+  createdAt: number;
+  leadScore?: number;
+  sentiment?: 'positive' | 'neutral' | 'negative' | 'urgent';
+  opportunities?: string[];
+  attachmentSummary?: string;
+}
+
+export interface EmailAgentConfig {
+  // ── Core ──────────────────────────────────────────────────────────────────
+  enabled:              boolean;
+  accounts:             EmailAccount[];
+
+  // ── Identity ──────────────────────────────────────────────────────────────
+  agentName:            string;
+  agentRole:            string;            // e.g. "מנהל מכירות", "נציג שירות"
+  signature:            string;
+  language:             'he' | 'en' | 'auto';
+
+  // ── Context & Instructions ─────────────────────────────────────────────────
+  businessDescription:  string;            // synced from workspace.prompt
+  agentInstructions:    string;            // personal system-prompt
+  agentPersonality:     string;            // legacy one-liner style
+  salesGoals:           string[];          // ['מכירה','ליד חם','פגישה','הצעת מחיר',…]
+
+  // ── Reply behavior ─────────────────────────────────────────────────────────
+  autoSend:             boolean;           // legacy — keep for compat
+  requireApproval:      boolean;
+  confidenceThreshold:  number;            // 0-100 % for auto-send
+  replyTone:            'friendly' | 'professional' | 'formal' | 'assertive';
+
+  // ── Email style ────────────────────────────────────────────────────────────
+  emailLength:          'short' | 'medium' | 'long';
+  useEmoji:             boolean;
+  closingStyle:         'soft' | 'direct' | 'question';
+  ctaInEmail:           'call' | 'meeting' | 'demo' | 'reply' | 'link';
+
+  // ── Schedule & limits ──────────────────────────────────────────────────────
+  maxDailyEmails:       number;
+  followUpDays:         number;            // auto follow-up after N days
+  workingHoursStart:    string;            // '08:00'
+  workingHoursEnd:      string;            // '18:00'
+
+  // ── Brand safety ──────────────────────────────────────────────────────────
+  blacklistedWords:     string;
+  sensitiveTopics?:     string;
+
+  // ── Advanced auto-reply ───────────────────────────────────────────────────
+  maxEmailsPerDay?:         number;
+  maxFollowUps?:            number;
+  targetResponseTime?:      number;        // minutes
+  sendOnlyBusinessHours?:   boolean;
+  businessHoursStart?:      string;        // 'HH:mm'
+  businessHoursEnd?:        string;        // 'HH:mm'
+  skipWeekends?:            boolean;
+
+  // ── Sales focus ───────────────────────────────────────────────────────────
+  leadScoreThreshold?:      number;        // 0-100
+  priorityTopics?:          string[];
+  competitorMentionAction?: 'ignore' | 'compare' | 'flag';
+  requireApprovalForNewLeads?: boolean;
+
+  // ── Learning & performance ────────────────────────────────────────────────
+  abTestEnabled?:           boolean;
+  learnFromReplies?:        boolean;
+  weeklySummary?:           boolean;
+
+  // ── Legacy ────────────────────────────────────────────────────────────────
+  lastCheckedAt?:       number;
+  gmailConnected?:      boolean;
+  gmailEmail?:          string;
+  clientId?:            string;
+}
+
+/* ── Email Templates ──────────────────────────────────────────────────────── */
+export interface EmailTemplate {
+  id: string;
+  name: string;
+  category: 'first_contact' | 'followup' | 'proposal' | 'after_meeting' | 'objection' | 'closing';
+  subject: string;
+  body: string;
+  isDefault?: boolean;
+  usageCount: number;
+  createdAt: number;
+}
+
+/* ── Email Sequences ──────────────────────────────────────────────────────── */
+export interface SequenceStep {
+  dayOffset: number;
+  subject: string;
+  body: string;
+  sent: boolean;
+  sentAt?: number;
+}
+
+export interface EmailSequence {
+  id: string;
+  name: string;
+  leadEmail: string;
+  leadName: string;
+  accountId: string;
+  steps: SequenceStep[];
+  currentStep: number;
+  status: 'active' | 'paused' | 'completed' | 'stopped';
+  createdAt: number;
+  nextSendAt: number;
+}
+
+/* ── Lead Intelligence ────────────────────────────────────────────────────── */
+export interface LeadScore {
+  email: string;
+  name: string;
+  score: number;
+  tier: 'hot' | 'warm' | 'cold';
+  signals: string[];
+  sentiment: 'positive' | 'neutral' | 'negative' | 'urgent';
+  lastEmailSubject: string;
+  lastUpdated: number;
+}
+
+export interface EmailOpportunity {
+  id: string;
+  draftId: string;
+  fromEmail: string;
+  fromName: string;
+  subject: string;
+  signal: string;
+  suggestedAction: string;
+  detectedAt: number;
+  dismissed: boolean;
+}
+
+/* ── Email Analytics ──────────────────────────────────────────────────────── */
+export interface DailyEmailStat {
+  date: string;
+  sent: number;
+  received: number;
+  replied: number;
+}
+
+export interface EmailAnalytics {
+  totalSent: number;
+  totalReceived: number;
+  totalReplied: number;
+  avgResponseTimeHours: number;
+  responseRate: number;
+  topSenders: { email: string; name: string; count: number }[];
+  dailyStats: DailyEmailStat[];
+  lastCalculated: number;
+}
 
 export type CampaignPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'other';
 export type CampaignStatus   = 'active' | 'paused' | 'ended' | 'draft';
@@ -146,6 +357,35 @@ export type ActivityEntry = {
   author: string;
   timestamp: string;
 };
+
+export type LeadActivityType =
+  | 'call' | 'email' | 'whatsapp' | 'meeting' | 'task'
+  | 'note' | 'status_change' | 'objection' | 'in_person';
+
+export type LeadActivity = {
+  id: string;
+  type: LeadActivityType;
+  content: string;
+  author: string;
+  timestamp: string;          // ISO string
+  metadata?: Record<string, string>;  // extra info: objection type, meeting title, etc.
+};
+
+export type LeadMeeting = {
+  id: string;
+  title: string;
+  date: string;               // YYYY-MM-DD
+  time: string;               // HH:mm
+  duration: number;           // minutes: 30 | 60 | 90 | 120
+  location?: string;
+  notes?: string;
+  attendeeEmail?: string;
+  calendarLink?: string;      // generated Google Calendar URL
+  createdAt: string;
+  createdBy: string;
+};
+
+export type ContactMethod = 'phone' | 'email' | 'whatsapp' | 'in_person' | 'meeting' | 'quote' | 'custom';
 
 export type MediaPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'email' | 'other';
 
@@ -297,6 +537,8 @@ export type AppSettings = {
   showOverduePopup: boolean;
   defaultPage: Page;
   accentColor: 'indigo' | 'blue' | 'emerald' | 'rose' | 'violet';
+  theme?: 'dark' | 'light';
+  objectionTypes?: string[];          // custom objection types, defaults to 4 standard ones
 };
 
 // ─── Auth & Permissions ──────────────────────────────────────────────────────
@@ -339,6 +581,38 @@ export type TokenHistoryEntry = {
   timestamp:   string;   // ISO
 };
 
+// ─── Meta Integration ────────────────────────────────────────────────────────
+export type MetaAdAccount = {
+  id:              string;   // numeric ID without "act_" prefix
+  name:            string;
+  currency:        string;   // e.g. "ILS", "USD"
+  hasPaymentMethod: boolean;
+  status:          string;   // "ACTIVE" | "UNSETTLED" | etc.
+};
+
+export type MetaPage = {
+  id: string;
+  name: string;
+  category: string;
+  fanCount: number;
+  accessToken: string;   // page-level token (sensitive, stored server-side)
+  subscribed: boolean;   // whether leadgen webhook is active
+  leadCount: number;
+  instagramBusinessAccountId?: string | null;  // linked Instagram Business Account ID
+};
+
+export type MetaIntegration = {
+  connected: boolean;
+  pages: MetaPage[];
+  userAccessToken?: string;     // user-level long-lived token
+  adAccountId?: string;         // @deprecated — use adAccounts array instead
+  adAccounts?: MetaAdAccount[];  // fetched during OAuth
+  connectedAt: string;   // ISO
+  updatedAt: string;     // ISO
+  expiresAt: string;     // ISO — when user token expires (~60 days)
+  hasPostingPermission?: boolean;  // true when pages_manage_posts + instagram_content_publish granted
+};
+
 // ─── White Label / Multi-tenant ─────────────────────────────────────────────
 export type WorkspacePlan   = 'trial' | 'basic' | 'pro' | 'enterprise';
 export type WorkspaceStatus = 'pending' | 'trial' | 'active' | 'suspended';
@@ -353,6 +627,7 @@ export type WorkspaceProfile = {
   ownerId: string;               // Firebase Auth UID
   logoUrl?: string;              // base64 or storage URL
   prompt?: string;               // AI context — describe the business
+  aiInstructions?: string;       // Custom AI instructions — how the user wants RAY to behave
   industry?: string;             // סוג עסק
   teamSize?: string;
   isBusiness?: boolean;          // האם זה עסק (B2B/B2C מוצרים/שירותים)
@@ -369,12 +644,43 @@ export type WorkspaceProfile = {
     prefix?: string;
     quickOptions?: number[];
   };
+  solutionsLabel?: string;       // custom label for the solutions/services right panel
+  statusSectionLabel?: string;   // custom label for the status row in the lead card
+  sourceLabel?: string;          // custom label for the source row in the lead card
+  leadSources?: string[];        // custom source list (overrides the hardcoded LEAD_SOURCES)
+  customFieldDefs?: CustomFieldDef[]; // workspace-level custom field definitions
   memberCount?: number;          // denormalized counter
   allowedPages?: Page[];         // override: which pages this workspace can see (null = use plan defaults)
+  // ── Webhook / Lead Integrations ────────────────────────────────────────────
+  webhookSecret?: string;              // random secret for the incoming leads webhook
+  webhookDefaultSource?: string;       // LeadSource to assign when no source in payload
+  webhookDefaultAssignedTo?: string;   // team member name/id to auto-assign webhook leads
+  // ── Meta / Facebook integration ───────────────────────────────────────────
+  metaAppId?: string;                  // Facebook App ID (public — safe in frontend)
+  metaAppSecret?: string;              // Facebook App Secret (sensitive — write-only display)
+  metaIntegration?: MetaIntegration;   // live connection state
+  // ── Google Ads integration ────────────────────────────────────────────────
+  googleAdsWebhookKey?: string;         // optional secret key sent by Google in body.google_key
   // ── Token balance ──────────────────────────────────────────────────────────
   tokenBalance?: number;         // USD remaining (e.g. 8.42)
   tokenUsed?: number;            // USD consumed total (cumulative)
   tokenPlanAllocation?: number;  // USD granted by current plan
+  // System message — shown as a top banner to all workspace users
+  systemMessage?: string;
+  // Email config — multiple provider support
+  emailConfig?: {
+    provider?: 'gmail' | 'outlook' | 'emailjs'; // active email provider
+    // Gmail / Outlook (server-side via Cloud Function + Nodemailer)
+    gmailUser?: string;             // Gmail/Outlook address used for sending
+    fromName?: string;              // Display name (e.g. "Almog Agency")
+    gmailAppPasswordSet?: boolean;  // true = App Password is saved server-side
+    emailProvider?: 'gmail' | 'outlook'; // smtp variant for Cloud Function
+    // EmailJS (browser-side JS approach)
+    emailServiceId?: string;
+    emailTemplateId?: string;       // general emails template
+    emailInviteTmpl?: string;       // invite emails template
+    emailPublicKey?: string;
+  };
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {
     idealClient?: string;        // לקוח אידיאלי — מי הקהל היעד
@@ -385,4 +691,71 @@ export type WorkspaceProfile = {
     uniqueValue?: string;        // מה מייחד את העסק
     tone?: string;               // טון תקשורת: פורמלי / ידידותי / מקצועי
   };
+  stripePaymentLink?: string;       // Stripe payment link URL
+  metaAdAccountId?: string;          // Meta Ads ad account ID (act_XXXXX format)
+  campaignAgencyFeePercent?: number; // Agency fee % added on top of ad spend (e.g. 20)
+  cardLayout?: CardLayoutSettings;   // lead card / kanban card customization
+};
+
+// ─── Card Layout Customization ───────────────────────────────────────────────
+export interface CardSectionItem {
+  id: string;
+  visible: boolean;
+}
+
+export interface CardLayoutSettings {
+  sections: CardSectionItem[];           // order + visibility
+  statusColors: Record<string, string>;  // status label → hex color
+  highlightFields: string[];             // max 3 field keys to show prominently
+  viewMode: 'full' | 'compact';
+  columnLayout: '1col' | '2col';
+  kanbanFields: string[];                // which fields to show in KanbanCard
+  dashboardFields: string[];             // which columns to show in Dashboard table
+}
+
+export const DEFAULT_CARD_SECTIONS: CardSectionItem[] = [
+  { id: 'prices',       visible: true },
+  { id: 'status',       visible: true },
+  { id: 'source',       visible: true },
+  { id: 'assignee',     visible: true },
+  { id: 'customFields', visible: true },
+  { id: 'stats',        visible: true },
+];
+
+export const DEFAULT_CARD_LAYOUT: CardLayoutSettings = {
+  sections: DEFAULT_CARD_SECTIONS,
+  statusColors: {},
+  highlightFields: ['budget', 'status', 'source'],
+  viewMode: 'full',
+  columnLayout: '2col',
+  kanbanFields: ['aiScore', 'budget', 'source', 'solutions', 'tasks', 'conversion', 'temperature', 'nextTask', 'assignedTo'],
+  dashboardFields: ['company', 'contactName', 'status', 'budget', 'source', 'lastUpdate', 'aiScore'],
+};
+
+export type PlatformCampaign = {
+  id: string;
+  name: string;
+  platform: 'meta' | 'google';
+  objective: 'leads' | 'awareness' | 'sales' | 'traffic';
+  location: string;
+  ageMin: number;
+  ageMax: number;
+  gender: 'all' | 'male' | 'female';
+  interests: string[];
+  headline: string;
+  primaryText: string;
+  description?: string;
+  ctaButton: string;
+  imageUrl?: string;
+  dailyBudget: number;    // ILS per day
+  duration: number;       // days
+  agencyFeePercent: number;
+  status: 'draft' | 'pending_payment' | 'active' | 'paused' | 'ended' | 'failed';
+  impressions: number;
+  clicks: number;
+  leads: number;
+  spend: number;
+  metaCampaignId?: string;
+  createdAt: string;
+  paidAt?: string;
 };

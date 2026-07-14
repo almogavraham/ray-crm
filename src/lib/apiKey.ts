@@ -1,15 +1,14 @@
 /**
- * Returns the Anthropic API key if it looks valid (starts with sk-ant-).
- * Returns null if missing or still a placeholder.
+ * getApiKey — DEPRECATED (returns null; kept for legacy call-sites during migration).
+ * Anthropic calls now go through the secure Firebase Function proxy (anthropicClient.ts).
+ * Do NOT use this function — use getAnthropicProxy() from anthropicClient.ts instead.
  */
 export function getApiKey(): string | null {
-  const key = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined;
-  if (!key || !key.startsWith('sk-ant-')) return null;
-  return key;
+  return null; // Key is stored server-side — use getAnthropicProxy()
 }
 
-export const API_KEY_ERROR =
-  '⚠️ מפתח API חסר.\n\nכדי להפעיל את ה-AI:\n1. פתח את קובץ .env בתיקיית הפרויקט\n2. החלף את הערך של VITE_ANTHROPIC_API_KEY במפתח האמיתי שלך\n3. המפתח מתחיל ב: sk-ant-...\n4. הפעל מחדש: npm run dev';
+/** @deprecated - use getAnthropicProxy() */
+export const API_KEY_ERROR = '';
 
 /**
  * Returns the OpenAI API key if valid (starts with sk-).

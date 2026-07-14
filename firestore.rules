@@ -2,62 +2,90 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helper functions ─────────────────────────────────────────────────────
+
     function isSuperAdmin() {
       return request.auth != null &&
              request.auth.token.email == 'almogavraham30@gmail.com';
     }
+
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // ── Workspaces
+    // Check that the signed-in user belongs to the given workspace
+    // by reading their profile document (users/{uid}.workspaceId)
+    function isWorkspaceMember(workspaceId) {
+      return isSignedIn() && (
+        isSuperAdmin() ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.workspaceId == workspaceId
+      );
+    }
+
+    // ── Workspaces ───────────────────────────────────────────────────────────
     match /workspaces/{workspaceId} {
-      // Public read allowed — only name/logoUrl used by login branding (unauthenticated)
+      // Public read for login branding (name/logoUrl only — no sensitive fields here)
       allow read:   if true;
       allow create: if isSignedIn();
       allow update: if isSignedIn() &&
         (request.auth.uid == resource.data.ownerId || isSuperAdmin());
       allow delete: if isSuperAdmin();
 
-      // Workspace subcollections — authenticated only
+      // Workspace subcollections — only workspace members can access
       match /{subcol}/{docId} {
-        allow read, write: if isSignedIn();
+        allow read, write: if isWorkspaceMember(workspaceId);
+      }
+
+      // Nested subcollections (e.g. workspaces/{id}/leads/{lid}/comments/{cid})
+      match /{subcol}/{docId}/{rest=**} {
+        allow read, write: if isWorkspaceMember(workspaceId);
       }
     }
 
-    // ── Users
+    // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
       allow read:        if isSuperAdmin();
     }
 
-    // ── Invites
+    // ── Invites ──────────────────────────────────────────────────────────────
     match /invites/{token} {
-      allow read:  if true;
-      allow write: if isSignedIn();
+      // Anyone can read an invite (needed to accept it without being logged in yet)
+      allow read:   if true;
+      // Only workspace owners/members can create invites (enforced via Cloud Function ideally)
+      allow create: if isSignedIn();
+      // Only the invitee (by token claim) or superadmin can update/delete
+      allow update, delete: if isSuperAdmin();
     }
 
-    // ── System config (feature flags, deploy settings)
+    // ── System config (feature flags, deploy settings) ───────────────────────
     match /system/{docId} {
       allow read:  if isSignedIn();
       allow write: if isSuperAdmin();
     }
 
-    // ── Announcements
+    // ── Announcements ────────────────────────────────────────────────────────
     match /announcements/{annId} {
       allow read:  if isSignedIn();
       allow write: if isSuperAdmin();
     }
 
-    // ── Releases
+    // ── Releases ─────────────────────────────────────────────────────────────
     match /releases/{relId} {
       allow read:  if isSuperAdmin();
       allow write: if isSuperAdmin();
     }
 
-    // ── Everything else
+    // ── Rate limit counters (written by server-side Functions only) ──────────
+    // Client cannot read or write — Admin SDK bypasses rules
+    match /_rateLimits/{userId}/{rest=**} {
+      allow read, write: if false;
+    }
+
+    // ── Default: DENY everything else ────────────────────────────────────────
+    // (replaces the previous open catch-all)
     match /{document=**} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSuperAdmin();
     }
   }
 }

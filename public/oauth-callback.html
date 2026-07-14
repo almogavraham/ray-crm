@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><title>מחבר...</title></head>
+<body>
+<script>
+  // Extract code and state/platform from URL params
+  const params = new URLSearchParams(window.location.search);
+  const hash   = new URLSearchParams(window.location.hash.replace('#',''));
+  const code     = params.get('code')     || hash.get('code');
+  const state    = params.get('state')    || hash.get('state');
+  const error    = params.get('error')    || hash.get('error');
+  const platform = params.get('platform') || (state ? state.split(':')[0] : null);
+
+  if (window.opener) {
+    window.opener.postMessage(
+      { type: 'oauth_callback', code, state, error, platform },
+      window.location.origin
+    );
+    window.close();
+  } else {
+    // Fallback: redirect back with hash params
+    const returnUrl = sessionStorage.getItem('oauth_return') || '/';
+    window.location.href = returnUrl + '#oauth_code=' + (code||'') + '&oauth_platform=' + (platform||'') + '&oauth_state=' + (state||'');
+  }
+</script>
+<p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#666">
+  מחבר חשבון... החלון ייסגר אוטומטית.
+</p>
+</body>
+</html>

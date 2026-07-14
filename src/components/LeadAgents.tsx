@@ -10,9 +10,8 @@ import {
   Loader2, Copy, CheckCircle2, RefreshCw, ChevronDown,
   Sparkles,
 } from 'lucide-react';
-import Anthropic from '@anthropic-ai/sdk';
 import type { Lead, WorkspaceProfile } from '../types';
-import { getApiKey } from '../lib/apiKey';
+import { getAnthropicProxy } from '../lib/anthropicClient';
 
 /* ── shared types ─────────────────────────────────────────────────────────── */
 interface AgentProps {
@@ -68,11 +67,9 @@ export function ProposalAgent({ lead, workspace, currentUser, onToast }: AgentPr
   const tone       = workspace?.aiProfile?.tone ?? 'מקצועי';
 
   const generate = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     setLoading(true); setResult('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const msg = await client.messages.create({
         model: 'claude-opus-4-5',
         max_tokens: 900,
@@ -145,12 +142,10 @@ export function EnrichAgent({ lead, workspace, onUpdateLead, onToast }: AgentPro
   const bizServices = (workspace?.businessSolutions ?? []).join(', ');
 
   const enrich = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     setLoading(true); setResult(''); setUpdated(false);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true }) as any;
+      const client = getAnthropicProxy() as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const payload: any = {
         model: 'claude-opus-4-6',
@@ -229,11 +224,9 @@ export function BriefAgent({ lead, workspace, currentUser, onToast }: AgentProps
   const services   = lead.solutions.map(s => s.name).join(', ') || (workspace?.businessSolutions ?? []).slice(0, 3).join(', ') || '';
 
   const generate = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     setLoading(true); setResult('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const msg = await client.messages.create({
         model: 'claude-opus-4-5',
         max_tokens: 700,
@@ -293,11 +286,9 @@ export function FollowupMessageAgent({ lead, workspace, currentUser, onToast }: 
   const services = lead.solutions.map(s => s.name).join(', ') || (workspace?.businessSolutions ?? []).slice(0, 2).join(', ') || '';
 
   const generate = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) { onToast?.('מפתח API חסר', 'error'); return; }
     setLoading(true); setResult('');
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = getAnthropicProxy();
       const msg = await client.messages.create({
         model: 'claude-opus-4-5',
         max_tokens: 400,

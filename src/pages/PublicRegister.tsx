@@ -3,9 +3,10 @@ import {
   Zap, User, Lock, Eye, EyeOff, AlertCircle, CheckCircle2,
   Building2, Phone, Mail, Hash, ArrowLeft,
 } from 'lucide-react';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
+import { deductFromAdminQuota } from '../lib/tokenTracker';
 import type { UserProfile, WorkspaceProfile } from '../types';
 import { useLang } from '../contexts/LangContext';
 
@@ -47,6 +48,8 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!EMAIL_RE.test(email.trim())) { setError(t('register.errorInvalidEmail')); return; }
     if (password !== confirm) { setError(t('register.errorPasswordMatch')); return; }
     if (password.length < 6)  { setError(t('register.errorPasswordLength')); return; }
     setLoading(true);
@@ -81,18 +84,20 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
 
       await setDoc(doc(db, 'workspaces', wid), workspace);
 
-      /* Grant welcome tokens ($1 = 300,000 AI tokens) — NO dollar display */
+      /* Grant welcome tokens ($0.50 = ~150,000 AI tokens) — deducted from admin bank */
       await updateDoc(doc(db, 'workspaces', wid), {
-        tokenBalance:        1,
-        tokenPlanAllocation: 1,
+        tokenBalance:        0.5,
+        tokenPlanAllocation: 0.5,
         tokenHistory: [{
           id:          `plan_${Date.now()}`,
           type:        'plan',
-          amount:      1,
-          description: 'מתנת פתיחה — 300,000 טוקני AI',
+          amount:      0.5,
+          description: 'מתנת פתיחה — 150,000 טוקני AI',
           timestamp:   new Date().toISOString(),
         }],
       });
+      // Deduct $0.50 from admin's Anthropic budget (best-effort, non-blocking)
+      deductFromAdminQuota(0.5).catch(console.error);
 
       /* 3. Create user profile */
       const profile: UserProfile = {
@@ -106,6 +111,9 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
         workspaceId:  wid,
       };
       await setDoc(doc(db, 'users', uid), profile);
+
+      /* 4. Send email verification */
+      try { await sendEmailVerification(cred.user); } catch { /* non-fatal */ }
 
       localStorage.setItem('ray-login-at', Date.now().toString());
       setStep('done');
@@ -135,9 +143,20 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
   if (step === 'done') return (
     <Screen onSignIn={onSignIn} dir={dir}>
       <div className="text-center py-8">
-        <CheckCircle2 size={56} className="text-emerald-400 mx-auto mb-5" />
-        <h2 className="text-white font-black text-2xl mb-2">{t('register.success')}</h2>
-        <p className="text-slate-400 text-sm">{t('register.successDesc')}</p>
+        <div className="text-5xl mb-4">📧</div>
+        <h2 className="text-white font-black text-2xl mb-3">אימות האימייל שלך</h2>
+        <p className="text-slate-300 text-sm mb-2">
+          שלחנו מייל אימות לכתובת <span className="text-indigo-400 font-semibold">{email}</span>
+        </p>
+        <p className="text-slate-400 text-xs mb-6">
+          לחץ על הקישור במייל כדי לאמת את החשבון ולהמשיך למערכת
+        </p>
+        <div className="bg-slate-800/60 rounded-2xl p-4 text-xs text-slate-400 text-right space-y-1 mb-4">
+          <p>💡 לא קיבלת מייל? בדוק את תיקיית הספאם</p>
+          <p>⏱️ הקישור תקף ל-24 שעות</p>
+        </div>
+        <CheckCircle2 size={20} className="text-emerald-400 mx-auto mb-2" />
+        <p className="text-slate-500 text-xs">{t('register.successDesc')}</p>
       </div>
     </Screen>
   );
@@ -270,6 +289,7 @@ export default function PublicRegister({ onSuccess, onBack, onSignIn }: Props) {
 const INPUT = 'w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-600 rounded-xl pr-9 pl-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500';
 
 function Screen({ children, onSignIn, dir: dirProp }: { children: React.ReactNode; onSignIn?: () => void; dir?: string }) {
+  const { t } = useLang();
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" dir={dirProp ?? 'rtl'}>
       <div className="w-full max-w-md">

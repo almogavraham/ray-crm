@@ -71,6 +71,22 @@ export async function hasBalance(workspaceId: string): Promise<boolean> {
  * Uses a Firestore transaction to avoid race conditions.
  * Clamps balance at 0 (never goes negative).
  */
+/**
+ * Multiplier applied to real Anthropic cost when deducting from a client workspace.
+ * Client pays 2x the real cost → admin earns 50% margin on every AI call.
+ * Real cost is also deducted from the admin quota for accurate budget tracking.
+ */
+export const CLIENT_COST_MULTIPLIER = 2;
+
+/**
+ * Deduct cost from workspace token balance after a successful AI call.
+ * - Client balance  decreases by  cost × CLIENT_COST_MULTIPLIER  (virtual)
+ * - Admin quota     decreases by  cost                            (real)
+ * Uses a Firestore transaction to avoid race conditions.
+ */
+/** Threshold (% of plan allocation) below which we flag a workspace as low-balance */
+export const TOKEN_LOW_PCT = 20;
+
 export async function deductTokens(
   workspaceId: string,
   cost:        number,
@@ -79,10 +95,13 @@ export async function deductTokens(
 ): Promise<void> {
   if (cost <= 0) return;
 
+  // What the client "pays" in their virtual balance
+  const clientDeduction = parseFloat((cost * CLIENT_COST_MULTIPLIER).toFixed(6));
+
   const entry: TokenHistoryEntry = {
     id:          `use_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     type:        'usage',
-    amount:      -cost,
+    amount:      -clientDeduction,   // client sees 2× usage
     model,
     description,
     timestamp:   new Date().toISOString(),
@@ -91,14 +110,25 @@ export async function deductTokens(
   const ref = wsRef(workspaceId);
   await runTransaction(db, async tx => {
     const snap = await tx.get(ref);
-    const currentBalance: number = (snap.data()?.tokenBalance as number) ?? 0;
-    const newBalance = Math.max(0, currentBalance - cost);
+    const data = snap.data() ?? {};
+    const currentBalance: number = (data.tokenBalance as number) ?? 0;
+    const planAllocation: number = (data.tokenPlanAllocation as number) ?? 0;
+    const newBalance = Math.max(0, currentBalance - clientDeduction);
+
+    // Flag workspace as low-balance if below threshold
+    const pct = planAllocation > 0 ? (newBalance / planAllocation) * 100 : 0;
+    const isLow = newBalance <= 0.000001 || (planAllocation > 0 && pct < TOKEN_LOW_PCT);
+
     tx.update(ref, {
-      tokenBalance: newBalance,
-      tokenUsed:    increment(cost),
-      tokenHistory: arrayUnion(entry),
+      tokenBalance:   newBalance,
+      tokenUsed:      increment(cost),          // track REAL cost for analytics
+      tokenHistory:   arrayUnion(entry),
+      tokenLowAlert:  isLow,                    // workspace alert flag
     });
   });
+
+  // Deduct real cost from admin's Anthropic budget (best-effort)
+  deductFromAdminQuota(cost).catch(console.error);
 }
 
 /**
@@ -121,8 +151,9 @@ export async function addTokens(
   };
 
   await updateDoc(wsRef(workspaceId), {
-    tokenBalance: increment(dollars),
-    tokenHistory: arrayUnion(entry),
+    tokenBalance:  increment(dollars),
+    tokenHistory:  arrayUnion(entry),
+    tokenLowAlert: false,          // clear alert when tokens are added
     ...(type === 'plan' ? { tokenPlanAllocation: dollars } : {}),
   });
 }
@@ -166,10 +197,10 @@ export const TOPUP_PACKAGES = [
 export type PlanTokenConfig = Record<string, number>; // plan → USD amount
 
 export const DEFAULT_PLAN_TOKEN_AMOUNTS: PlanTokenConfig = {
-  trial:      1,
-  basic:      10,
-  pro:        50,
-  enterprise: 200,
+  trial:      0.5,   // מתנת פתיחה — $0.50 = ~150K טוקנים
+  basic:      10,    // Basic — $10 = ~3M טוקנים
+  pro:        20,    // Pro — $20 = ~6M טוקנים
+  enterprise: 40,    // Enterprise — $40 = ~12M טוקנים
 };
 
 export async function getPlanTokenConfig(): Promise<PlanTokenConfig> {

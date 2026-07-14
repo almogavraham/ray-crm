@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAY CRM — מערכת ניהול לידים חכמה</title>
+  <meta name="description" content="RAY CRM היא מערכת ניהול לידים חכמה לעסקים. חיבור ישיר לפייסבוק, גוגל ווטסאפ — כל הלידים במקום אחד."/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      background: #0a0f1e;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    .hero {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; text-align: center;
+      padding: 80px 24px 60px;
+      background: linear-gradient(135deg, #0a0f1e 0%, #0f172a 50%, #1e1b4b 100%);
+    }
+    .logo {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 40px;
+    }
+    .logo-icon {
+      width: 56px; height: 56px; border-radius: 16px;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; box-shadow: 0 8px 32px rgba(124,58,237,0.4);
+    }
+    .logo-text {
+      font-size: 36px; font-weight: 900;
+      background: linear-gradient(135deg, #a78bfa, #818cf8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    h1 {
+      font-size: clamp(28px, 5vw, 48px); font-weight: 800;
+      line-height: 1.2; margin-bottom: 20px; color: #f1f5f9;
+    }
+    .subtitle {
+      font-size: clamp(16px, 2.5vw, 20px); color: #94a3b8;
+      max-width: 600px; line-height: 1.6; margin-bottom: 40px;
+    }
+    .cta-row { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: white; font-size: 16px; font-weight: 700;
+      padding: 14px 32px; border-radius: 12px; text-decoration: none;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.4); transition: all 0.2s;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(124,58,237,0.5); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: transparent; color: #94a3b8; font-size: 16px; font-weight: 600;
+      padding: 14px 32px; border-radius: 12px; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.12); transition: all 0.2s;
+    }
+    .btn-secondary:hover { border-color: rgba(255,255,255,0.25); color: #e2e8f0; }
+
+    .features {
+      padding: 80px 24px;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .features h2 {
+      text-align: center; font-size: 32px; font-weight: 800;
+      color: #f1f5f9; margin-bottom: 48px;
+    }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px;
+    }
+    .feature-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px; padding: 28px;
+      transition: all 0.2s;
+    }
+    .feature-card:hover {
+      border-color: rgba(124,58,237,0.3);
+      box-shadow: 0 4px 32px rgba(124,58,237,0.1);
+      transform: translateY(-4px);
+    }
+    .feature-icon { font-size: 36px; margin-bottom: 16px; }
+    .feature-title { font-size: 18px; font-weight: 700; color: #f1f5f9; margin-bottom: 8px; }
+    .feature-desc { font-size: 14px; color: #94a3b8; line-height: 1.6; }
+
+    .integrations {
+      padding: 60px 24px;
+      background: rgba(255,255,255,0.02);
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .integrations-inner { max-width: 900px; margin: 0 auto; text-align: center; }
+    .integrations h2 { font-size: 28px; font-weight: 800; color: #f1f5f9; margin-bottom: 12px; }
+    .integrations p { color: #94a3b8; margin-bottom: 36px; font-size: 16px; }
+    .platforms {
+      display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+    }
+    .platform {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px; padding: 12px 20px;
+      font-size: 15px; font-weight: 600; color: #e2e8f0;
+    }
+
+    .google-section {
+      padding: 60px 24px;
+      max-width: 800px; margin: 0 auto;
+    }
+    .google-section h2 { font-size: 24px; font-weight: 800; color: #f1f5f9; margin-bottom: 16px; }
+    .google-card {
+      background: rgba(66,133,244,0.08); border: 1px solid rgba(66,133,244,0.2);
+      border-radius: 16px; padding: 28px;
+    }
+    .google-card p { color: #94a3b8; line-height: 1.7; font-size: 15px; margin-bottom: 16px; }
+    .google-scopes { display: flex; flex-direction: column; gap: 12px; }
+    .scope-item {
+      background: rgba(255,255,255,0.04); border-radius: 10px;
+      padding: 14px 18px; display: flex; align-items: flex-start; gap: 12px;
+    }
+    .scope-badge {
+      background: rgba(66,133,244,0.2); color: #60a5fa;
+      font-size: 11px; font-family: monospace; font-weight: 700;
+      padding: 3px 8px; border-radius: 6px; flex-shrink: 0; margin-top: 2px;
+    }
+    .scope-desc { font-size: 13px; color: #94a3b8; line-height: 1.5; }
+
+    footer {
+      padding: 40px 24px; text-align: center;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    footer p { color: #475569; font-size: 13px; line-height: 1.8; }
+    footer a { color: #818cf8; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <span class="logo-text">RAY CRM</span>
+    </div>
+    <h1>מערכת ניהול לידים חכמה לעסקים</h1>
+    <p class="subtitle">
+      RAY CRM מחברת את כל ערוצי השיווק שלך — פייסבוק, גוגל, אינסטגרם, ווטסאפ —
+      ומאגדת את כל הלידים במקום אחד. נהל, עקוב והגדל עם עזרת AI.
+    </p>
+    <div class="cta-row">
+      <a href="https://admin.ray-crm.com" class="btn-primary">⚡ כניסה למערכת</a>
+      <a href="https://admin.ray-crm.com/privacy-policy.html" class="btn-secondary">מדיניות פרטיות</a>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features">
+    <h2>כל מה שעסק מודרני צריך</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">📥</div>
+        <div class="feature-title">לידים אוטומטיים</div>
+        <div class="feature-desc">
+          חיבור ישיר ל-Facebook Lead Ads, Google Lead Forms ו-TikTok.
+          כל ליד נכנס אוטומטית למערכת תוך שניות מרגע מילוי הטופס.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <div class="feature-title">AI מובנה</div>
+        <div class="feature-desc">
+          עוזר AI שמנתח כל ליד, מציע תגובה מותאמת, ומזהה הזדמנויות
+          לסגירת עסקה. מבוסס על Claude AI של Anthropic.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <div class="feature-title">ניתוח ביצועים</div>
+        <div class="feature-desc">
+          דשבורד מלא עם גרפים, ניתוח מקורות, מעקב קמפיינים ו-KPIs
+          בזמן אמת. קבל החלטות מבוססות נתונים.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💬</div>
+        <div class="feature-title">WhatsApp Business</div>
+        <div class="feature-desc">
+          בוט WhatsApp אוטומטי שמגיב ללידים חדשים, שולח הצעות מחיר
+          ומנהל שיחות — הכל דרך ממשק אחד.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔵</div>
+        <div class="feature-title">פרסום חברתי</div>
+        <div class="feature-desc">
+          פרסם לפייסבוק, אינסטגרם, לינקדאין וטיקטוק ישירות מהמערכת.
+          AI מייצר תוכן, אתה מאשר ומפרסם בלחיצה אחת.
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔐</div>
+        <div class="feature-title">אבטחה מלאה</div>
+        <div class="feature-desc">
+          Firebase App Check, הצפנת נתונים, בידוד בין לקוחות,
+          ואימות דו-שלבי. הנתונים שלך מוגנים בכל עת.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Integrations -->
+  <section class="integrations">
+    <div class="integrations-inner">
+      <h2>אינטגרציות מובנות</h2>
+      <p>חיבור ישיר לפלטפורמות המובילות — ללא Zapier, ללא כלי ביניים</p>
+      <div class="platforms">
+        <div class="platform">📘 Facebook Ads</div>
+        <div class="platform">📸 Instagram</div>
+        <div class="platform">🔴 Google Ads</div>
+        <div class="platform">💬 WhatsApp Business</div>
+        <div class="platform">🎵 TikTok</div>
+        <div class="platform">💼 LinkedIn</div>
+        <div class="platform">📺 YouTube</div>
+        <div class="platform">📧 Gmail / Outlook</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Google OAuth explanation -->
+  <section class="google-section">
+    <h2>🔑 שימוש ב-Google API</h2>
+    <div class="google-card">
+      <p>
+        RAY CRM משתמשת ב-Google OAuth 2.0 כדי לאפשר למשתמשים לחבר את
+        חשבונות Google שלהם. הגישה לנתונים מוגבלת בהחלט לנדרש בלבד,
+        ואנחנו לא שומרים, לא מוכרים ולא משתפים נתוני Google של משתמשים עם צדדים שלישיים.
+      </p>
+      <div class="google-scopes">
+        <div class="scope-item">
+          <span class="scope-badge">adwords</span>
+          <div class="scope-desc">
+            <strong style="color:#e2e8f0">Google Ads</strong> — גישה לנתוני קמפיינים, הצגת ביצועים וקבלת המלצות אופטימיזציה בתוך ממשק ה-CRM.
+          </div>
+        </div>
+        <div class="scope-item">
+          <span class="scope-badge">analytics</span>
+          <div class="scope-desc">
+            <strong style="color:#e2e8f0">Google Analytics</strong> — קריאת נתוני תנועה לאתר בלבד (read-only) כדי לקשר בין קמפיינים ללידים.
+          </div>
+        </div>
+        <div class="scope-item">
+          <span class="scope-badge">business</span>
+          <div class="scope-desc">
+            <strong style="color:#e2e8f0">Google Business Profile</strong> — ניהול פרטי פרופיל העסק, שעות פתיחה ועדכוני מוצרים.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>
+      © 2025 RAY CRM · כל הזכויות שמורות<br/>
+      <a href="https://admin.ray-crm.com/privacy-policy.html">מדיניות פרטיות</a>
+      &nbsp;·&nbsp;
+      <a href="mailto:almogavraham30@gmail.com">צור קשר</a>
+      &nbsp;·&nbsp;
+      <a href="https://admin.ray-crm.com">כניסה למערכת</a>
+    </p>
+  </footer>
+
+</body>
+</html>

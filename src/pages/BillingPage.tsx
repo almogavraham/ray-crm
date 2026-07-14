@@ -1,42 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   CreditCard, Check, Zap, Building2, Crown, X, Lock,
-  RefreshCw, CheckCircle2, Star, AlertCircle, AlertTriangle,
+  RefreshCw, CheckCircle2, Star, AlertCircle, AlertTriangle, ExternalLink,
 } from 'lucide-react';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../lib/firebase';
 import type { WorkspaceProfile, WorkspacePlan } from '../types';
 import { useLang } from '../contexts/LangContext';
+import { useTheme } from '../contexts/ThemeContext';
 import {
-  TOPUP_PACKAGES, formatBalance, balancePercent, addTokens,
-  dollarsToTokens, formatTokenDisplay, formatTokenCount, adminQuotaHasRoom, deductFromAdminQuota,
+  TOPUP_PACKAGES, formatBalance, balancePercent,
+  dollarsToTokens, formatTokenDisplay, formatTokenCount,
 } from '../lib/tokenTracker';
 
 interface BillingPageProps {
   workspace: WorkspaceProfile;
   onPlanUpdate?: (plan: WorkspacePlan) => void;
-}
-
-// ─── Luhn check ─────────────────────────────────────────────────────────────
-function luhn(num: string): boolean {
-  const digits = num.replace(/\D/g, '');
-  let sum = 0;
-  let alt = false;
-  for (let i = digits.length - 1; i >= 0; i--) {
-    let n = parseInt(digits[i], 10);
-    if (alt) { n *= 2; if (n > 9) n -= 9; }
-    sum += n;
-    alt = !alt;
-  }
-  return sum % 10 === 0 && digits.length >= 13;
-}
-
-// ─── Card brand detection ─────────────────────────────────────────────────────
-function detectBrand(num: string): string {
-  const d = num.replace(/\D/g, '');
-  if (d.startsWith('4')) return 'Visa';
-  if (/^5[1-5]/.test(d) || /^2[2-7]/.test(d)) return 'Mastercard';
-  return '';
 }
 
 // ─── Days remaining helper ────────────────────────────────────────────────────
@@ -50,23 +29,23 @@ const VAT_RATE = 0.17;
 
 const PLANS = [
   {
-    key: 'trial' as WorkspacePlan,
-    nameKey: 'billing.plan.trial.name',
-    price: 0,
-    tokenDollars: 1,   // $1 = 300K tokens
-    periodKey: 'billing.trialLeft',
-    descKey: 'billing.plan.trial.desc',
+    key: 'basic' as WorkspacePlan,
+    nameKey: 'billing.plan.basic.name',
+    price: 89,          // ₪89 + מע"מ
+    tokenDollars: 10,   // $10 טוקנים אמיתיים (~3M טוקנים)
+    periodKey: 'billing.perMonth',
+    descKey: 'billing.plan.basic.desc',
     highlight: false,
     icon: Zap,
-    featureKeys: ['billing.feat.allFeatures', 'billing.feat.users3', 'billing.feat.basicSupport', 'billing.feat.storage1'],
-    ctaKey: 'billing.plan.trial.cta',
+    featureKeys: ['billing.feat.allFeatures', 'billing.feat.users5', 'billing.feat.basicSupport', 'billing.feat.storage5'],
+    ctaKey: 'billing.plan.basic.cta',
   },
   {
     key: 'pro' as WorkspacePlan,
     nameKey: null,
     name: 'Pro',
-    price: 89,
-    tokenDollars: 50,  // $50 = 15M tokens
+    price: 179,         // ₪179 + מע"מ
+    tokenDollars: 20,   // $20 טוקנים אמיתיים (~6M טוקנים)
     periodKey: 'billing.perMonth',
     descKey: 'billing.plan.pro.desc',
     highlight: true,
@@ -78,8 +57,8 @@ const PLANS = [
     key: 'enterprise' as WorkspacePlan,
     nameKey: null,
     name: 'Enterprise',
-    price: 199,
-    tokenDollars: 200, // $200 = 60M tokens
+    price: 329,         // ₪329 + מע"מ
+    tokenDollars: 40,   // $40 טוקנים אמיתיים (~12M טוקנים)
     periodKey: 'billing.perMonth',
     descKey: 'billing.plan.enterprise.desc',
     highlight: false,
@@ -91,183 +70,199 @@ const PLANS = [
 
 export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProps) {
   const { t, dir } = useLang();
-  const [selectedPlan, setSelectedPlan] = useState<'pro' | 'enterprise' | null>(null);
-  const [paymentStep, setPaymentStep] = useState<'form' | 'processing' | 'success'>('form');
+  const { c } = useTheme();
 
-  // Token topup state
-  const [topupPkg,    setTopupPkg]    = useState<typeof TOPUP_PACKAGES[number] | null>(null);
-  const [topupStep,   setTopupStep]   = useState<'form' | 'processing' | 'success'>('form');
-  const [topupError,  setTopupError]  = useState('');
-  const [tokensGranted, setTokensGranted] = useState(0);
+  // ── Plan modal ──────────────────────────────────────────────────────────
+  const [selectedPlan,    setSelectedPlan]    = useState<'basic' | 'pro' | 'enterprise' | null>(null);
+  const [planLoading,     setPlanLoading]     = useState(false);
+  const [planError,       setPlanError]       = useState('');
 
-  const closeTopup = () => {
-    setTopupPkg(null);
-    setTopupStep('form');
-    setTopupError('');
-    setCardNumber('');
-    setExpiry('');
-    setCvv('');
-    setCardName('');
-  };
+  // ── Token top-up modal ──────────────────────────────────────────────────
+  const [topupPkg,        setTopupPkg]        = useState<typeof TOPUP_PACKAGES[number] | null>(null);
+  const [topupLoading,    setTopupLoading]    = useState(false);
+  const [topupError,      setTopupError]      = useState('');
 
-  const handleTopupPay = async () => {
-    if (!topupPkg) return;
-    setTopupError('');
-    if (!cardName.trim()) { setTopupError(t('billing.err.cardName')); return; }
-    const rawDigits = cardNumber.replace(/\D/g, '');
-    if (rawDigits.length < 13 || !luhn(rawDigits)) { setTopupError(t('billing.err.cardInvalid')); return; }
-    const [mm, yy] = expiry.split('/');
-    if (!mm || !yy || mm.length !== 2 || yy.length !== 2) { setTopupError(t('billing.err.expiry')); return; }
-    if (cvv.length < 3) { setTopupError(t('billing.err.cvv')); return; }
+  // ── Global payment-success banner (return from Stripe) ──────────────────
+  const [paymentSuccess,  setPaymentSuccess]  = useState(false);
 
-    setTopupStep('processing');
-    await new Promise(r => setTimeout(r, 2000));
-
-    try {
-      // Check quota against half the amount (50% admin margin)
-      const hasRoom = await adminQuotaHasRoom(topupPkg.dollars / 2);
-      if (!hasRoom) {
-        setTopupStep('form');
-        setTopupError('אין מספיק קרדיטים זמינים כרגע. אנא פנה לתמיכה.');
-        return;
-      }
-      await addTokens(workspace.id, topupPkg.dollars, 'topup', `רכישת טוקנים: ${topupPkg.label}`);
-      // Admin earns 50% margin: deduct only half from admin quota
-      await deductFromAdminQuota(topupPkg.dollars / 2);
-      setTokensGranted(dollarsToTokens(topupPkg.dollars));
-      setTopupStep('success');
-    } catch {
-      setTopupStep('form');
-      setTopupError('שגיאה בעיבוד התשלום. נסה שוב.');
+  // Detect ?payment=success in URL (Stripe redirect-back)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment') === 'success') {
+      setPaymentSuccess(true);
+      // Clean URL without reload
+      params.delete('payment');
+      const qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
     }
-  };
+  }, []);
 
-  // Token balance helpers
-  const tokenBalance    = workspace?.tokenBalance ?? 0;
+  // ── Token balance helpers ───────────────────────────────────────────────
+  const tokenBalance    = workspace?.tokenBalance    ?? 0;
   const tokenAllocation = workspace?.tokenPlanAllocation ?? 0;
-  const tokenUsed       = workspace?.tokenUsed ?? 0;
+  const tokenUsed       = workspace?.tokenUsed       ?? 0;
   const tokenPct        = balancePercent(tokenBalance, tokenAllocation);
   const tokenBarColor   = tokenPct > 50 ? 'bg-emerald-500' : tokenPct > 20 ? 'bg-amber-400' : 'bg-red-500';
 
-  // Card form state
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvv, setCvv] = useState('');
-  const [cardName, setCardName] = useState('');
-  const [email, setEmail] = useState(workspace.email ?? '');
-  const [formError, setFormError] = useState('');
-
-  const trialDays = daysRemaining(workspace.trialEndsAt);
+  const trialDays      = daysRemaining(workspace.trialEndsAt);
   const currentPlanObj = PLANS.find(p => p.key === workspace.plan) ?? PLANS[0];
-  const chosenPlanObj = selectedPlan ? PLANS.find(p => p.key === selectedPlan) : null;
+  const chosenPlanObj  = selectedPlan ? PLANS.find(p => p.key === selectedPlan) : null;
 
-  // ─── Card number formatter ────────────────────────────────────────────────
-  const handleCardNumber = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 16);
-    const formatted = digits.replace(/(.{4})/g, '$1 ').trim();
-    setCardNumber(formatted);
+  // ── Build success/cancel URLs for Stripe ───────────────────────────────
+  function buildSuccessUrl() {
+    const u = new URL(window.location.href);
+    u.searchParams.set('payment', 'success');
+    return u.toString();
+  }
+  function buildCancelUrl() {
+    return window.location.href;
+  }
+
+  // ── Stripe: token top-up ───────────────────────────────────────────────
+  const handleTopupStripe = async () => {
+    if (!topupPkg) return;
+    setTopupError('');
+    setTopupLoading(true);
+    try {
+      const fn = httpsCallable<unknown, { url: string }>(functions, 'createCheckoutSession');
+      const result = await fn({
+        type:       'topup',
+        workspaceId: workspace.id,
+        dollars:    topupPkg.dollars,
+        label:      topupPkg.label,
+        successUrl: buildSuccessUrl(),
+        cancelUrl:  buildCancelUrl(),
+      });
+      window.location.href = result.data.url;
+    } catch (err: unknown) {
+      console.error('[handleTopupStripe]', err);
+      setTopupError('שגיאה ביצירת דף תשלום. נסה שוב.');
+      setTopupLoading(false);
+    }
   };
 
-  // ─── Expiry formatter ─────────────────────────────────────────────────────
-  const handleExpiry = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 4);
-    if (digits.length <= 2) { setExpiry(digits); return; }
-    setExpiry(digits.slice(0, 2) + '/' + digits.slice(2));
-  };
+  // ── Stripe: plan upgrade ───────────────────────────────────────────────
+  const handlePlanStripe = async () => {
+    if (!chosenPlanObj) return;
+    setPlanError('');
+    setPlanLoading(true);
 
-  // ─── Pay handler ──────────────────────────────────────────────────────────
-  const handlePay = async () => {
-    setFormError('');
-
-    if (!cardName.trim()) { setFormError(t('billing.err.cardName')); return; }
-    if (!email.trim()) { setFormError(t('billing.err.email')); return; }
-    const rawDigits = cardNumber.replace(/\D/g, '');
-    if (rawDigits.length < 13) { setFormError(t('billing.err.cardInvalid')); return; }
-    if (!luhn(rawDigits)) { setFormError(t('billing.err.cardLuhn')); return; }
-    const [mm, yy] = expiry.split('/');
-    if (!mm || !yy || mm.length !== 2 || yy.length !== 2) { setFormError(t('billing.err.expiry')); return; }
-    if (cvv.length < 3) { setFormError(t('billing.err.cvv')); return; }
-
-    setPaymentStep('processing');
-
-    // Simulate 2s processing
-    await new Promise(r => setTimeout(r, 2000));
+    // Optimistically update plan in parent (webhook will confirm in Firestore)
+    const optimisticPlan = selectedPlan as WorkspacePlan;
 
     try {
-      const plan = selectedPlan as WorkspacePlan;
-      await updateDoc(doc(db, 'workspaces', workspace.id), { plan, status: 'active' });
-      onPlanUpdate?.(plan);
-    } catch (err) {
-      console.error('Firestore update error:', err);
+      const fn = httpsCallable<unknown, { url: string }>(functions, 'createCheckoutSession');
+      const result = await fn({
+        type:       'plan',
+        workspaceId: workspace.id,
+        planKey:    selectedPlan,
+        priceIls:   chosenPlanObj.price,
+        label:      chosenPlanObj.name ?? '',
+        successUrl: buildSuccessUrl(),
+        cancelUrl:  buildCancelUrl(),
+      });
+      // Optimistic local update so the UI feels instant after return
+      onPlanUpdate?.(optimisticPlan);
+      window.location.href = result.data.url;
+    } catch (err: unknown) {
+      console.error('[handlePlanStripe]', err);
+      setPlanError('שגיאה ביצירת דף תשלום. נסה שוב.');
+      setPlanLoading(false);
     }
-
-    setPaymentStep('success');
   };
 
-  const closeModal = () => {
-    setSelectedPlan(null);
-    setPaymentStep('form');
-    setFormError('');
-    setCardNumber('');
-    setExpiry('');
-    setCvv('');
-    setCardName('');
-  };
+  // ── Close modals ────────────────────────────────────────────────────────
+  const closePlanModal  = () => { setSelectedPlan(null); setPlanError(''); setPlanLoading(false); };
+  const closeTopupModal = () => { setTopupPkg(null);     setTopupError(''); setTopupLoading(false); };
 
-  const vatAmount = chosenPlanObj ? chosenPlanObj.price * VAT_RATE : 0;
+  const vatAmount   = chosenPlanObj ? chosenPlanObj.price * VAT_RATE : 0;
   const totalAmount = chosenPlanObj ? chosenPlanObj.price + vatAmount : 0;
-  const brand = detectBrand(cardNumber);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white" dir={dir}>
-      <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+    <div
+      dir={dir}
+      className="-mx-4 md:-mx-6 -mt-4 md:-mt-6 -mb-4 md:-mb-6 p-4 md:p-6"
+      style={{
+        background: c.pageBg,
+        backgroundImage: c.pageBgImage,
+        backgroundSize: c.pageBgSize,
+        minHeight: 'calc(100vh - 56px)',
+      }}
+    >
+      <div className="max-w-5xl mx-auto space-y-8">
 
         {/* ── Page header ──────────────────────────────────────────────────── */}
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-white mb-1">{t('billing.title')}</h1>
-          <p className="text-slate-400 text-sm">{t('billing.subtitle')}</p>
+          <h1 className="text-xl md:text-2xl font-bold mb-1" style={{ color: 'white' }}>{t('billing.title')}</h1>
+          <p className="text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>{t('billing.subtitle')}</p>
         </div>
 
+        {/* ── Payment success banner ────────────────────────────────────── */}
+        {paymentSuccess && (
+          <div
+            className="flex items-center gap-3 rounded-2xl px-5 py-4"
+            style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)' }}
+          >
+            <CheckCircle2 size={22} className="text-emerald-400 flex-shrink-0" />
+            <div>
+              <p className="font-bold text-sm" style={{ color: '#34d399' }}>התשלום התקבל בהצלחה!</p>
+              <p className="text-xs mt-0.5" style={{ color: 'rgba(52,211,153,0.7)' }}>
+                הטוקנים יתווספו לחשבונך תוך מספר שניות.
+              </p>
+            </div>
+            <button
+              onClick={() => setPaymentSuccess(false)}
+              className="mr-auto p-1 rounded-lg transition-colors"
+              style={{ color: 'rgba(52,211,153,0.5)' }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* ── Token Balance Card ───────────────────────────────────────────── */}
-        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 space-y-4">
-          {/* Header */}
+        <div
+          className="rounded-2xl p-5 space-y-4"
+          style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', backdropFilter: 'blur(8px)' }}
+        >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-lg select-none">💎</div>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg select-none" style={{ background: 'rgba(16,185,129,0.15)' }}>💎</div>
               <div>
-                <p className="font-semibold text-white text-sm">{t('tokens.balance')}</p>
-                <p className="text-emerald-400 text-xs">{t('tokens.planAllocation')}: {formatTokenDisplay(tokenAllocation)} ({formatBalance(tokenAllocation)})</p>
+                <p className="font-semibold text-sm" style={{ color: 'rgba(255,255,255,0.85)' }}>{t('tokens.balance')}</p>
+                <p className="text-xs" style={{ color: 'rgba(52,211,153,0.8)' }}>{t('tokens.planAllocation')}: {formatTokenDisplay(tokenAllocation)}</p>
               </div>
             </div>
             <div className="text-right">
-              <p className="text-3xl font-black text-white">{formatTokenDisplay(tokenBalance)}</p>
-              <p className="text-xs text-emerald-400 mt-0.5">{formatBalance(tokenBalance)} · טוקני AI</p>
+              <p className="text-3xl font-black" style={{ color: '#34d399', textShadow: '0 0 20px rgba(52,211,153,0.5)' }}>{formatTokenDisplay(tokenBalance)}</p>
+              <p className="text-xs mt-0.5" style={{ color: 'rgba(52,211,153,0.65)' }}>טוקני AI</p>
             </div>
           </div>
 
-          {/* Progress bar */}
           <div>
-            <div className="flex justify-between text-xs text-emerald-300 mb-1.5">
-              <span>{t('tokens.used')}: {formatBalance(tokenUsed)}</span>
+            <div className="flex justify-between text-xs mb-1.5" style={{ color: 'rgba(52,211,153,0.65)' }}>
+              <span>{t('tokens.used')}: {formatTokenDisplay(tokenUsed)}</span>
               <span>{tokenPct}% {t('tokens.remaining')}</span>
             </div>
-            <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden">
-              <div className={`h-full rounded-full transition-all ${tokenBarColor}`} style={{ width: `${tokenPct}%` }} />
+            <div className="h-2.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <div
+                className={`h-full rounded-full transition-all ${tokenBarColor}`}
+                style={{ width: `${tokenPct}%`, boxShadow: tokenPct > 50 ? '0 0 8px rgba(52,211,153,0.5)' : tokenPct > 20 ? '0 0 8px rgba(251,191,36,0.5)' : '0 0 8px rgba(239,68,68,0.5)' }}
+              />
             </div>
-            <p className="text-xs text-slate-400 mt-1.5">
-              {t('tokens.used')}: {formatBalance(tokenUsed)} {t('tokens.of')} {formatBalance(tokenAllocation)}
+            <p className="text-xs mt-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              {t('tokens.used')}: {formatTokenDisplay(tokenUsed)} {t('tokens.of')} {formatTokenDisplay(tokenAllocation)}
             </p>
           </div>
 
-          {/* Warnings */}
           {tokenBalance <= 0 && (
-            <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 text-red-300 text-sm">
+            <div className="flex items-center gap-2 rounded-xl px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', color: '#fca5a5' }}>
               <AlertCircle size={15} className="flex-shrink-0" />
               {t('tokens.emptyWarning')}
             </div>
           )}
           {tokenBalance > 0 && tokenPct < 20 && (
-            <div className="flex items-center gap-2 bg-amber-500/20 border border-amber-500/40 rounded-xl px-4 py-3 text-amber-300 text-sm">
+            <div className="flex items-center gap-2 rounded-xl px-4 py-3 text-sm" style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#fcd34d' }}>
               <AlertTriangle size={15} className="flex-shrink-0" />
               {t('tokens.lowWarning')}
             </div>
@@ -275,25 +270,42 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
         </div>
 
         {/* ── Current plan banner ───────────────────────────────────────────── */}
-        <div className={`rounded-2xl p-5 border flex items-center justify-between gap-4 flex-wrap ${
-          workspace.plan === 'trial'
-            ? 'bg-amber-500/10 border-amber-500/30'
-            : workspace.plan === 'pro'
-              ? 'bg-indigo-500/10 border-indigo-500/30'
-              : 'bg-purple-500/10 border-purple-500/30'
-        }`}>
+        <div
+          className="rounded-2xl p-5 flex items-center justify-between gap-4 flex-wrap"
+          style={{
+            background: workspace.plan === 'trial'
+              ? 'rgba(245,158,11,0.08)'
+              : workspace.plan === 'basic'
+                ? 'rgba(99,102,241,0.08)'
+                : workspace.plan === 'pro'
+                  ? 'rgba(99,102,241,0.10)'
+                  : 'rgba(139,92,246,0.08)',
+            border: workspace.plan === 'trial'
+              ? '1px solid rgba(245,158,11,0.3)'
+              : workspace.plan === 'basic'
+                ? '1px solid rgba(99,102,241,0.3)'
+                : workspace.plan === 'pro'
+                  ? '1px solid rgba(99,102,241,0.4)'
+                  : '1px solid rgba(139,92,246,0.3)',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              workspace.plan === 'trial' ? 'bg-amber-500/20' :
-              workspace.plan === 'pro' ? 'bg-indigo-500/20' : 'bg-purple-500/20'
-            }`}>
-              {workspace.plan === 'trial' && <AlertCircle size={20} className="text-amber-400" />}
-              {workspace.plan === 'pro' && <Star size={20} className="text-indigo-400" />}
-              {workspace.plan === 'enterprise' && <Crown size={20} className="text-purple-400" />}
-              {(workspace.plan === 'basic') && <Zap size={20} className="text-slate-400" />}
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center"
+              style={{
+                background: workspace.plan === 'trial' ? 'rgba(245,158,11,0.15)'
+                  : workspace.plan === 'basic' ? 'rgba(99,102,241,0.15)'
+                  : workspace.plan === 'pro' ? 'rgba(99,102,241,0.15)' : 'rgba(139,92,246,0.15)',
+              }}
+            >
+              {workspace.plan === 'trial'      && <AlertCircle size={20} className="text-amber-400" />}
+              {workspace.plan === 'basic'      && <Zap         size={20} className="text-indigo-400" />}
+              {workspace.plan === 'pro'        && <Star        size={20} className="text-indigo-400" />}
+              {workspace.plan === 'enterprise' && <Crown       size={20} className="text-purple-400" />}
             </div>
             <div>
-              <p className="font-semibold text-white">
+              <p className="font-semibold" style={{ color: 'rgba(255,255,255,0.9)' }}>
                 {currentPlanObj.nameKey ? t(currentPlanObj.nameKey) : currentPlanObj.name}
               </p>
               {workspace.plan === 'trial' ? (
@@ -301,124 +313,121 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                   {trialDays > 0 ? `${trialDays} ${t('billing.trialLeft')}` : t('billing.trialEnded')}
                 </p>
               ) : (
-                <p className="text-sm text-slate-400">{t('billing.activePlan')}</p>
+                <p className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>{t('billing.activePlan')}</p>
               )}
             </div>
           </div>
-          {workspace.plan === 'trial' && (
-            <div className="text-amber-400 text-sm font-medium">
-              {t('billing.upgradeData')}
-            </div>
+          {(workspace.plan === 'trial') && (
+            <div className="text-amber-400 text-sm font-medium">{t('billing.upgradeData')}</div>
           )}
         </div>
 
         {/* ── Plan cards ───────────────────────────────────────────────────── */}
         <div>
-          <h2 className="text-lg font-semibold text-white mb-4">{t('billing.choosePlan')}</h2>
+          <h2 className="text-lg font-semibold mb-4" style={{ color: 'rgba(255,255,255,0.85)' }}>{t('billing.choosePlan')}</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {PLANS.map(plan => {
-              const Icon = plan.icon;
+              const Icon      = plan.icon;
               const isCurrent = workspace.plan === plan.key;
-              const planName = plan.nameKey ? t(plan.nameKey) : plan.name ?? '';
-              const planDesc = t(plan.descKey);
-              const planCta = t(plan.ctaKey);
-              const planPeriod = t(plan.periodKey);
+              const planName  = plan.nameKey ? t(plan.nameKey) : plan.name ?? '';
+              const cardStyle = plan.key === 'basic'
+                ? { background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)', backdropFilter: 'blur(8px)' }
+                : plan.key === 'pro'
+                  ? { background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.4)', backdropFilter: 'blur(8px)', boxShadow: '0 0 32px rgba(139,92,246,0.15)' }
+                  : { background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)', backdropFilter: 'blur(8px)' };
+
               return (
                 <div
                   key={plan.key}
-                  className={`relative rounded-2xl p-6 border flex flex-col transition-all duration-200 ${
-                    plan.highlight
-                      ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_30px_rgba(99,102,241,0.15)]'
-                      : 'border-slate-700 bg-slate-800'
-                  } ${isCurrent ? 'opacity-70' : 'hover:border-slate-500 cursor-pointer'}`}
+                  className={`relative rounded-2xl p-6 flex flex-col transition-all duration-200 ${isCurrent ? 'opacity-70' : 'cursor-pointer'}`}
+                  style={cardStyle}
                   onClick={() => {
-                    if (!isCurrent && plan.key !== 'trial') {
-                      setSelectedPlan(plan.key as 'pro' | 'enterprise');
-                      setPaymentStep('form');
+                    if (!isCurrent) {
+                      setSelectedPlan(plan.key as 'basic' | 'pro' | 'enterprise');
                     }
                   }}
                 >
                   {plan.highlight && (
                     <div className="absolute -top-3 right-1/2 translate-x-1/2">
-                      <span className="bg-indigo-600 text-white text-[11px] font-bold px-3 py-1 rounded-full">
+                      <span className="text-white text-[11px] font-bold px-3 py-1 rounded-full" style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
                         {t('billing.mostPopular')}
                       </span>
                     </div>
                   )}
 
                   <div className="flex items-center gap-2 mb-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      plan.highlight ? 'bg-indigo-500/30' : 'bg-slate-700'
-                    }`}>
-                      <Icon size={16} className={plan.highlight ? 'text-indigo-400' : 'text-slate-400'} />
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center"
+                      style={{ background: plan.key === 'pro' ? 'rgba(139,92,246,0.25)' : plan.key === 'enterprise' ? 'rgba(245,158,11,0.15)' : 'rgba(99,102,241,0.15)' }}
+                    >
+                      <Icon size={16} className={plan.key === 'pro' ? 'text-violet-400' : plan.key === 'enterprise' ? 'text-amber-400' : 'text-indigo-400'} />
+
                     </div>
-                    <span className="font-bold text-white">{planName}</span>
+                    <span className="font-bold" style={{ color: 'rgba(255,255,255,0.9)' }}>{planName}</span>
                     {isCurrent && (
-                      <span className="mr-auto text-[11px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
+                      <span className="mr-auto text-[11px] px-2 py-0.5 rounded-full font-medium" style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>
                         {t('billing.current')}
                       </span>
                     )}
                   </div>
 
-                  <p className="text-slate-400 text-xs mb-4">{planDesc}</p>
+                  <p className="text-xs mb-4" style={{ color: 'rgba(255,255,255,0.45)' }}>{t(plan.descKey)}</p>
 
                   <div className="flex items-baseline gap-1 mb-3">
                     {plan.price === 0 ? (
-                      <span className="text-3xl font-black text-white">{t('billing.free')}</span>
+                      <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{t('billing.free')}</span>
                     ) : (
                       <>
-                        <span className="text-slate-400 text-sm">₪</span>
-                        <span className="text-3xl font-black text-white">{plan.price}</span>
-                        <span className="text-slate-400 text-sm">/{planPeriod}</span>
+                        <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>₪</span>
+                        <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{plan.price}</span>
+                        <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>/{t(plan.periodKey)}</span>
                       </>
                     )}
                   </div>
 
-                  {/* Token allocation badge */}
-                  <div className={`flex items-center gap-2 rounded-xl px-3 py-2 mb-4 ${
-                    plan.highlight
-                      ? 'bg-indigo-500/20 border border-indigo-400/30'
-                      : 'bg-emerald-500/10 border border-emerald-500/20'
-                  }`}>
+                  <div
+                    className="flex items-center gap-2 rounded-xl px-3 py-2 mb-4"
+                    style={
+                      plan.key === 'pro'
+                        ? { background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)' }
+                        : { background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)' }
+                    }
+                  >
                     <span className="text-base">💎</span>
                     <div>
-                      <span className={`font-black text-base ${plan.highlight ? 'text-indigo-300' : 'text-emerald-400'}`}>
+                      <span className="font-black text-base" style={{ color: plan.key === 'pro' ? '#c4b5fd' : plan.key === 'enterprise' ? '#fbbf24' : '#34d399' }}>
                         {formatTokenDisplay(plan.tokenDollars)}
                       </span>
-                      <span className={`text-xs mr-1 ${plan.highlight ? 'text-indigo-400' : 'text-emerald-500'}`}>
+                      <span className="text-xs mr-1" style={{ color: plan.key === 'pro' ? 'rgba(196,181,253,0.7)' : 'rgba(52,211,153,0.7)' }}>
                         טוקני AI
                       </span>
-                      <p className="text-[10px] text-slate-500 mt-0.5">כלולים בתוכנית · מתחדש חודשי</p>
+                      <p className="text-[10px] mt-0.5" style={{ color: 'rgba(255,255,255,0.3)' }}>כלולים בתוכנית · מתחדש חודשי</p>
                     </div>
                   </div>
 
                   <ul className="space-y-2 flex-1 mb-5">
                     {plan.featureKeys.map(fk => (
-                      <li key={fk} className="flex items-center gap-2 text-sm text-slate-300">
-                        <Check size={13} className={plan.highlight ? 'text-indigo-400' : 'text-green-400'} />
+                      <li key={fk} className="flex items-center gap-2 text-sm" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                        <Check size={13} className={plan.key === 'pro' ? 'text-violet-400' : 'text-emerald-400'} />
                         {t(fk)}
                       </li>
                     ))}
                   </ul>
 
                   <button
-                    disabled={isCurrent || plan.key === 'trial'}
+                    disabled={isCurrent}
                     onClick={e => {
                       e.stopPropagation();
-                      if (!isCurrent && plan.key !== 'trial') {
-                        setSelectedPlan(plan.key as 'pro' | 'enterprise');
-                        setPaymentStep('form');
-                      }
+                      if (!isCurrent) setSelectedPlan(plan.key as 'basic' | 'pro' | 'enterprise');
                     }}
-                    className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                      isCurrent || plan.key === 'trial'
-                        ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                        : plan.highlight
-                          ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.4)]'
-                          : 'bg-slate-700 hover:bg-slate-600 text-white'
-                    }`}
+                    className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all"
+                    style={
+                      isCurrent
+                        ? { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.25)', cursor: 'not-allowed' }
+                        : { background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: 'white', boxShadow: '0 0 16px rgba(99,102,241,0.35)' }
+                    }
                   >
-                    {isCurrent ? t('billing.currentPlanLabel') : planCta}
+                    {isCurrent ? t('billing.currentPlanLabel') : t(plan.ctaKey)}
                   </button>
                 </div>
               );
@@ -428,339 +437,210 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
 
         {/* ── Token Top-up Section ─────────────────────────────────────────── */}
         <div>
-          <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'rgba(255,255,255,0.85)' }}>
             <span className="text-xl">💎</span>
             {t('tokens.topup')}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {TOPUP_PACKAGES.map(pkg => {
-              return (
-                <div key={pkg.id} className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 flex flex-col items-center text-center gap-3 hover:border-emerald-500/60 transition-all">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
-                    <span className="text-2xl font-black text-emerald-400">{pkg.label}</span>
-                  </div>
-                  <div>
-                    <p className="text-white font-bold text-lg">{pkg.label}</p>
-                    <p className="text-emerald-400 text-xs">{formatTokenCount(dollarsToTokens(pkg.dollars))} טוקני AI</p>
-                  </div>
-                  <button
-                    onClick={() => { setTopupPkg(pkg); setTopupStep('form'); setCardNumber(''); setExpiry(''); setCvv(''); setCardName(''); setTopupError(''); }}
-                    className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white"
-                  >
-                    <CreditCard size={14} /> רכוש עכשיו
-                  </button>
+            {TOPUP_PACKAGES.map(pkg => (
+              <div
+                key={pkg.id}
+                className="rounded-2xl p-5 flex flex-col items-center text-center gap-3 transition-all"
+                style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', backdropFilter: 'blur(8px)' }}
+              >
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(52,211,153,0.12)' }}>
+                  <span className="text-2xl font-black" style={{ color: '#34d399' }}>{pkg.label}</span>
                 </div>
-              );
-            })}
+                <div>
+                  <p className="font-bold text-lg" style={{ color: 'rgba(255,255,255,0.9)' }}>{pkg.label}</p>
+                  <p className="text-xs" style={{ color: 'rgba(52,211,153,0.75)' }}>{formatTokenCount(dollarsToTokens(pkg.dollars))} טוקני AI</p>
+                </div>
+                <button
+                  onClick={() => { setTopupPkg(pkg); setTopupError(''); }}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                  style={{ background: 'linear-gradient(135deg,#10b981,#059669)', color: 'white', boxShadow: '0 0 14px rgba(16,185,129,0.3)' }}
+                >
+                  <CreditCard size={14} /> רכוש עכשיו
+                </button>
+              </div>
+            ))}
           </div>
-          <p className="text-slate-500 text-xs mt-3 text-center">
-            * התשלום מאובטח ומוצפן. הטוקנים יתווספו מיד לאחר אישור התשלום.
+          <p className="text-xs mt-3 text-center" style={{ color: 'rgba(255,255,255,0.3)' }}>
+            * התשלום מאובטח ומוצפן על ידי Stripe. הטוקנים יתווספו מיד לאחר אישור התשלום.
           </p>
         </div>
 
         {/* ── Billing history placeholder ──────────────────────────────────── */}
-        <div className="rounded-2xl border border-slate-700 bg-slate-800 p-6">
-          <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-            <CreditCard size={18} className="text-slate-400" />
+        <div
+          className="rounded-2xl p-6"
+          style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(8px)' }}
+        >
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'rgba(255,255,255,0.85)' }}>
+            <CreditCard size={18} className="text-violet-400" />
             {t('billing.history')}
           </h2>
           <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-slate-700 flex items-center justify-center">
-              <CreditCard size={22} className="text-slate-500" />
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <CreditCard size={22} style={{ color: 'rgba(255,255,255,0.2)' }} />
             </div>
-            <p className="text-slate-400 text-sm">{t('billing.noHistory')}</p>
-            <p className="text-slate-600 text-xs">{t('billing.noHistoryDesc')}</p>
+            <p className="text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>{t('billing.noHistory')}</p>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>{t('billing.noHistoryDesc')}</p>
           </div>
         </div>
       </div>
 
-      {/* ── Payment modal ─────────────────────────────────────────────────── */}
+      {/* ══════════════════════════════════════════════════════════════════════
+       * Plan upgrade modal
+       * ══════════════════════════════════════════════════════════════════════ */}
       {selectedPlan && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm" dir={dir}>
-          <div className="bg-slate-800 rounded-t-2xl sm:rounded-2xl border border-slate-700 w-full sm:max-w-md shadow-2xl overflow-hidden max-h-[95vh] overflow-y-auto">
-
-            {/* Modal header */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-700">
-              <button onClick={closeModal} className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-700">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/70 backdrop-blur-sm" dir={dir}>
+          <div
+            className="rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl overflow-hidden"
+            style={{ background: '#0d1526', border: '1px solid rgba(99,102,241,0.25)' }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-5" style={{ background: 'rgba(99,102,241,0.1)', borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
+              <button onClick={closePlanModal} className="p-1 rounded-lg" style={{ color: 'rgba(255,255,255,0.4)' }}>
                 <X size={18} />
               </button>
               <div className="flex items-center gap-2">
-                <Lock size={14} className="text-green-400" />
-                <span className="font-semibold text-white">{t('billing.payment.title')}</span>
+                <Lock size={14} className="text-emerald-400" />
+                <span className="font-semibold" style={{ color: 'rgba(255,255,255,0.9)' }}>{t('billing.payment.title')}</span>
               </div>
             </div>
 
-            {/* Success state */}
-            {paymentStep === 'success' && (
-              <div className="p-8 flex flex-col items-center text-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
-                  <CheckCircle2 size={36} className="text-green-400" />
-                </div>
-                <h3 className="text-xl font-bold text-white">{t('billing.payment.success')}</h3>
-                <p className="text-slate-400 text-sm">
-                  {t('billing.payment.successDesc')} {chosenPlanObj?.nameKey ? t(chosenPlanObj.nameKey) : chosenPlanObj?.name}
-                </p>
-                <button
-                  onClick={closeModal}
-                  className="mt-2 bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 px-8 rounded-xl transition-all"
-                >
-                  {t('billing.payment.close')}
-                </button>
-              </div>
-            )}
-
-            {/* Processing state */}
-            {paymentStep === 'processing' && (
-              <div className="p-8 flex flex-col items-center text-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center">
-                  <RefreshCw size={30} className="text-indigo-400 animate-spin" />
-                </div>
-                <h3 className="text-lg font-bold text-white">{t('billing.payment.processing')}</h3>
-                <p className="text-slate-400 text-sm">{t('billing.payment.processingDesc')}</p>
-              </div>
-            )}
-
-            {/* Form state */}
-            {paymentStep === 'form' && chosenPlanObj && (
-              <div className="p-5 space-y-5">
-                {/* Plan summary */}
-                <div className="bg-slate-700/50 rounded-xl p-4 flex items-center justify-between">
+            <div className="p-5 space-y-5">
+              {/* Plan summary */}
+              {chosenPlanObj && (
+                <div className="rounded-xl p-4 flex items-center justify-between" style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
                   <div>
-                    <p className="font-semibold text-white">
+                    <p className="font-semibold" style={{ color: 'rgba(255,255,255,0.9)' }}>
                       {chosenPlanObj.nameKey ? t(chosenPlanObj.nameKey) : chosenPlanObj.name}
                     </p>
-                    <p className="text-slate-400 text-xs">{t(chosenPlanObj.descKey)}</p>
+                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>{t(chosenPlanObj.descKey)}</p>
                   </div>
                   <div className="text-left">
-                    <span className="text-xl font-black text-white">₪{chosenPlanObj.price}</span>
-                    <span className="text-slate-400 text-xs">/{t(chosenPlanObj.periodKey)}</span>
+                    <span className="text-xl font-black" style={{ color: '#a5b4fc' }}>₪{chosenPlanObj.price}</span>
+                    <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>/{t(chosenPlanObj.periodKey)}</span>
                   </div>
                 </div>
+              )}
 
-                {/* Card number */}
-                <div>
-                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">
-                    {t('billing.payment.cardNumber')}
-                    {brand && <span className="mr-2 text-xs text-indigo-400 font-normal">{brand}</span>}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="0000 0000 0000 0000"
-                      value={cardNumber}
-                      onChange={e => handleCardNumber(e.target.value)}
-                      maxLength={19}
-                      className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
-                      dir="ltr"
-                    />
-                    <CreditCard size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  </div>
-                </div>
-
-                {/* Expiry + CVV */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.expiry')}</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="MM/YY"
-                      value={expiry}
-                      onChange={e => handleExpiry(e.target.value)}
-                      maxLength={5}
-                      className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
-                      dir="ltr"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.cvv')}</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="123"
-                      value={cvv}
-                      onChange={e => setCvv(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                      maxLength={4}
-                      className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
-                      dir="ltr"
-                    />
-                  </div>
-                </div>
-
-                {/* Cardholder name */}
-                <div>
-                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.cardName')}</label>
-                  <input
-                    type="text"
-                    placeholder="John Smith"
-                    value={cardName}
-                    onChange={e => setCardName(e.target.value)}
-                    className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
-                  />
-                </div>
-
-                {/* Email */}
-                <div>
-                  <label className="block text-sm text-slate-300 mb-1.5 font-medium">{t('billing.payment.email')}</label>
-                  <input
-                    type="email"
-                    placeholder="example@domain.com"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
-                    dir="ltr"
-                  />
-                </div>
-
-                {/* Price breakdown */}
-                <div className="bg-slate-700/40 rounded-xl p-4 space-y-2 text-sm">
-                  <div className="flex justify-between text-slate-400">
+              {/* Price breakdown */}
+              {chosenPlanObj && (
+                <div className="rounded-xl p-4 space-y-2 text-sm" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div className="flex justify-between" style={{ color: 'rgba(255,255,255,0.5)' }}>
                     <span>{t('billing.payment.subtotal')}</span>
                     <span>₪{chosenPlanObj.price.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between" style={{ color: 'rgba(255,255,255,0.5)' }}>
                     <span>{t('billing.payment.vat')}</span>
                     <span>₪{vatAmount.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-white font-bold pt-2 border-t border-slate-600">
+                  <div className="flex justify-between font-bold pt-2" style={{ color: 'rgba(255,255,255,0.9)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                     <span>{t('billing.payment.total')}</span>
                     <span>₪{totalAmount.toFixed(2)}</span>
                   </div>
                 </div>
+              )}
 
-                {/* Error */}
-                {formError && (
-                  <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
-                    <AlertCircle size={15} />
-                    {formError}
-                  </div>
-                )}
-
-                {/* Submit */}
-                <button
-                  onClick={handlePay}
-                  className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3.5 rounded-xl transition-all text-base shadow-[0_0_20px_rgba(34,197,94,0.3)] flex items-center justify-center gap-2"
-                >
-                  <Lock size={15} />
-                  {t('billing.payment.pay')} — ₪{totalAmount.toFixed(2)}
-                </button>
-
-                <p className="text-center text-xs text-slate-500">
-                  {t('billing.payment.secureNote')}
+              {/* Stripe info */}
+              <div className="rounded-xl p-4 flex items-start gap-3" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+                <Lock size={14} className="text-indigo-400 mt-0.5 flex-shrink-0" />
+                <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                  התשלום מבוצע בצורה מאובטחת דרך <span className="text-indigo-400 font-semibold">Stripe</span> — תועבר לדף תשלום מאובטח ותוחזר בחזרה לאחר אישור.
                 </p>
               </div>
-            )}
+
+              {planError && (
+                <div className="flex items-center gap-2 text-sm rounded-xl px-4 py-3" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5' }}>
+                  <AlertCircle size={15} /> {planError}
+                </div>
+              )}
+
+              <button
+                onClick={handlePlanStripe}
+                disabled={planLoading}
+                className="w-full font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 20px rgba(99,102,241,0.3)' }}
+              >
+                {planLoading
+                  ? <><RefreshCw size={16} className="animate-spin" /> מעביר לדף תשלום...</>
+                  : <><ExternalLink size={15} /> {t('billing.payment.pay')} ₪{totalAmount.toFixed(2)} עם Stripe</>
+                }
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ── Token Purchase Modal ─────────────────────────────────────────── */}
+      {/* ══════════════════════════════════════════════════════════════════════
+       * Token top-up modal
+       * ══════════════════════════════════════════════════════════════════════ */}
       {topupPkg && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm" dir={dir}>
-          <div className="bg-slate-800 rounded-t-2xl sm:rounded-2xl border border-slate-700 w-full sm:max-w-md shadow-2xl overflow-hidden max-h-[95vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/70 backdrop-blur-sm" dir={dir}>
+          <div
+            className="rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl overflow-hidden"
+            style={{ background: '#0d1526', border: '1px solid rgba(52,211,153,0.25)' }}
+          >
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-700">
-              <button onClick={closeTopup} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-700">
+            <div className="flex items-center justify-between p-5" style={{ background: 'rgba(52,211,153,0.07)', borderBottom: '1px solid rgba(52,211,153,0.15)' }}>
+              <button onClick={closeTopupModal} className="p-1 rounded-lg" style={{ color: 'rgba(255,255,255,0.4)' }}>
                 <X size={18} />
               </button>
               <div className="flex items-center gap-2">
-                <Lock size={14} className="text-green-400" />
-                <span className="font-semibold text-white">רכישת טוקנים</span>
+                <span className="text-base">💎</span>
+                <span className="font-semibold" style={{ color: 'rgba(255,255,255,0.9)' }}>רכישת טוקנים</span>
               </div>
             </div>
 
-            {/* Success */}
-            {topupStep === 'success' && (
-              <div className="p-8 flex flex-col items-center text-center gap-4">
-                <div className="w-20 h-20 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                  <span className="text-4xl">💎</span>
+            <div className="p-5 space-y-4">
+              {/* Package summary */}
+              <div className="rounded-xl p-5 flex items-center justify-between" style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)' }}>
+                <div>
+                  <p className="text-xs font-bold mb-1" style={{ color: 'rgba(52,211,153,0.8)' }}>תקבל</p>
+                  <p className="font-black text-2xl" style={{ color: 'rgba(255,255,255,0.95)' }}>{formatTokenCount(dollarsToTokens(topupPkg.dollars))}</p>
+                  <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.4)' }}>טוקני AI</p>
                 </div>
-                <h3 className="text-xl font-bold text-white">הטוקנים נוספו בהצלחה!</h3>
-                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-8 py-4">
-                  <p className="text-5xl font-black text-emerald-400">{formatTokenCount(tokensGranted)}</p>
-                  <p className="text-emerald-300 text-sm mt-1">טוקני AI נוספו לחשבונך</p>
-                </div>
-                <p className="text-slate-400 text-xs">הטוקנים זמינים לשימוש מיידי בכל כלי ה-AI</p>
-                <button onClick={closeTopup}
-                  className="mt-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 px-8 rounded-xl transition-all">
-                  מצוין!
-                </button>
-              </div>
-            )}
-
-            {/* Processing */}
-            {topupStep === 'processing' && (
-              <div className="p-8 flex flex-col items-center text-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center">
-                  <RefreshCw size={28} className="text-indigo-400 animate-spin" />
-                </div>
-                <h3 className="text-lg font-bold text-white">מעבד תשלום...</h3>
-                <p className="text-slate-400 text-sm">אנא המתן, אל תסגור את החלון</p>
-              </div>
-            )}
-
-            {/* Form */}
-            {topupStep === 'form' && (
-              <div className="p-5 space-y-4">
-                {/* Package summary */}
-                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-emerald-400 text-xs font-bold">תקבל</p>
-                    <p className="text-white font-black text-2xl">{formatTokenCount(dollarsToTokens(topupPkg.dollars))}</p>
-                    <p className="text-slate-400 text-xs">טוקני AI</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-slate-400 text-xs">לתשלום</p>
-                    <p className="text-white font-black text-2xl">{topupPkg.label}</p>
-                    <p className="text-slate-400 text-xs">+ מע"מ {Math.round(topupPkg.dollars * 0.17 * 100) / 100}$</p>
-                  </div>
-                </div>
-
-                {/* Card form */}
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.cardName')}</label>
-                    <input value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Almog Avraham"
-                      className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.cardNumber')}</label>
-                    <div className="relative">
-                      <input value={cardNumber} onChange={e => handleCardNumber(e.target.value)} placeholder="0000 0000 0000 0000" maxLength={19}
-                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
-                      {brand && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-bold">{brand}</span>}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-slate-400 text-xs mb-1.5">{t('billing.payment.expiry')}</label>
-                      <input value={expiry} onChange={e => handleExpiry(e.target.value)} placeholder="MM/YY"
-                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
-                    </div>
-                    <div>
-                      <label className="block text-slate-400 text-xs mb-1.5">CVV</label>
-                      <input value={cvv} onChange={e => setCvv(e.target.value.slice(0,4))} placeholder="123" type="password"
-                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
-                    </div>
-                  </div>
-                </div>
-
-                {topupError && (
-                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 text-red-300 text-sm">
-                    <AlertCircle size={14}/> {topupError}
-                  </div>
-                )}
-
-                <button onClick={handleTopupPay}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2">
-                  <Lock size={14}/> שלם {topupPkg.label} + מע"מ
-                </button>
-                <div className="flex items-center justify-center gap-2 text-slate-600 text-xs">
-                  <Lock size={10}/> תשלום מאובטח ומוצפן 256-bit SSL
+                <div className="text-right">
+                  <p className="text-xs mb-1" style={{ color: 'rgba(255,255,255,0.4)' }}>לתשלום</p>
+                  <p className="font-black text-3xl" style={{ color: '#34d399' }}>{topupPkg.label}</p>
+                  <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    + מע"מ ${(topupPkg.dollars * 0.17).toFixed(2)}
+                  </p>
                 </div>
               </div>
-            )}
+
+              {/* Stripe info */}
+              <div className="rounded-xl p-4 flex items-start gap-3" style={{ background: 'rgba(52,211,153,0.05)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                <Lock size={14} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+                <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                  התשלום מבוצע דרך <span className="text-emerald-400 font-semibold">Stripe</span> — תועבר לדף תשלום מאובטח ותוחזר בחזרה לאחר אישור.
+                </p>
+              </div>
+
+              {topupError && (
+                <div className="flex items-center gap-2 rounded-xl px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', color: '#fca5a5' }}>
+                  <AlertCircle size={14} /> {topupError}
+                </div>
+              )}
+
+              <button
+                onClick={handleTopupStripe}
+                disabled={topupLoading}
+                className="w-full font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ background: 'linear-gradient(135deg,#10b981,#059669)', color: 'white', boxShadow: '0 0 14px rgba(16,185,129,0.3)' }}
+              >
+                {topupLoading
+                  ? <><RefreshCw size={16} className="animate-spin" /> מעביר לדף תשלום...</>
+                  : <><ExternalLink size={15} /> שלם {topupPkg.label} עם Stripe</>
+                }
+              </button>
+
+              <p className="text-center text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
+                🔒 256-bit SSL · מאובטח על ידי Stripe
+              </p>
+            </div>
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Plus, Package, AlertTriangle } from 'lucide-react';
 import type { Lead, LeadStatus, LeadSource, Solution } from '../types';
+import type { StatusConfig } from '../lib/statusConfig';
 import { useLang } from '../contexts/LangContext';
 
 interface NewLeadModalProps {
@@ -9,10 +10,11 @@ interface NewLeadModalProps {
   workspaceSolutions?: string[];
   currentUser?: string;
   existingLeads?: Lead[];   // used for duplicate detection
+  statusConfigs?: StatusConfig[];
 }
 
 const SOURCES: LeadSource[] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
-const STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
+const DEFAULT_STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
 
 /** Normalize a string for fuzzy duplicate comparison */
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, '');
@@ -22,14 +24,23 @@ export default function NewLeadModal({
   workspaceSolutions = [],
   currentUser = '',
   existingLeads = [],
+  statusConfigs,
 }: NewLeadModalProps) {
   const { t, dir } = useLang();
+
+  // Use custom statuses sorted by order, fall back to hardcoded list
+  const statuses: string[] = statusConfigs && statusConfigs.length > 0
+    ? [...statusConfigs].sort((a, b) => a.order - b.order).map(s => s.label)
+    : DEFAULT_STATUSES;
+
+  const defaultStatus = statuses[0] ?? 'חדש';
+
   const [form, setForm] = useState({
     company:     '',
     contactName: '',
     email:       '',
     phone:       '',
-    status:      'חדש' as LeadStatus,
+    status:      defaultStatus as LeadStatus,
     source:      'אורגני' as LeadSource,
     assignedTo:  currentUser,
   });
@@ -203,7 +214,7 @@ export default function NewLeadModal({
               <select value={form.status}
                 onChange={e => setForm(f => ({ ...f, status: e.target.value as LeadStatus }))}
                 className={inp}>
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>

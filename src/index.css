@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&family=Open+Sans:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,18 +8,36 @@
   box-sizing: border-box;
 }
 
+/* iOS Safari requires overflow-x on html to truly prevent horizontal scroll */
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
-  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Noto Sans Hebrew', 'Segoe UI', Tahoma, Arial, 'Helvetica Neue', sans-serif;
   direction: rtl;
   background-color: #f5f7fa;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Prevent horizontal overflow on mobile — negative margins in pages must not scroll */
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 #root {
   min-height: 100vh;
+  overflow-x: hidden;
+  /* Ensure root never exceeds viewport width */
+  max-width: 100%;
+}
+
+/* ── Page content wrapper — prevents horizontal scroll from child overflow ── */
+.crm-page {
+  overflow-x: hidden;
+  /* Constrain width to parent — prevents negative-margin pages from overflowing */
+  max-width: 100%;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────────────── */
@@ -39,23 +59,23 @@ body {
 
 /* ── Card surface ──────────────────────────────────────────────────────── */
 .cf-card {
-  background-color: #08101e;
-  border: 1px solid #1a2540;
+  background-color: var(--crm-bg-card);
+  border: 1px solid var(--crm-border);
   border-radius: 14px;
 }
 
 .cf-card-inner {
-  background-color: #0d1629;
-  border: 1px solid #1e2d4a;
+  background-color: var(--crm-bg-alt);
+  border: 1px solid var(--crm-border);
   border-radius: 10px;
 }
 
 /* ── Glass ─────────────────────────────────────────────────────────────── */
 .glass {
-  background: rgba(8, 16, 30, 0.7);
+  background: rgba(17, 24, 39, 0.85);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(26, 37, 64, 0.8);
+  border: 1px solid rgba(255,255,255,0.09);
 }
 
 /* ── Glow ──────────────────────────────────────────────────────────────── */
@@ -87,6 +107,33 @@ body {
 .btn-primary:hover {
   background-color: #4338ca;
   box-shadow: 0 0 28px rgba(79,70,229,0.45);
+}
+
+/* ── AI Assistant welcome animations ───────────────────────────────────── */
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* Tailwind's `ping` animation in arbitrary CSS (for the pulse rings) */
+@keyframes ping {
+  75%, 100% { transform: scale(1.25); opacity: 0; }
+}
+
+@keyframes fadeOut {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+  50%       { box-shadow: 0 0 14px rgba(239,68,68,0.8); }
 }
 
 .btn-ghost {
@@ -179,6 +226,658 @@ body {
 /* ── iOS ───────────────────────────────────────────────────────────────── */
 .safe-area-pb { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   LANDING PAGE ANIMATIONS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes lp-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-12px); }
+}
+@keyframes lp-float-slow {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-7px); }
+}
+@keyframes lp-fade-up {
+  from { opacity: 0; transform: translateY(32px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes lp-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes lp-slide-right {
+  from { opacity: 0; transform: translateX(-24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes lp-slide-left {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes lp-scale-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes lp-pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+@keyframes lp-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+@keyframes lp-spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes lp-gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%       { background-position: 100% 50%; }
+}
+@keyframes lp-ticker {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes lp-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+@keyframes lp-count-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes lp-beam {
+  0%   { opacity: 0; transform: scaleX(0) translateX(0); }
+  50%  { opacity: 1; }
+  100% { opacity: 0; transform: scaleX(1) translateX(100%); }
+}
+
+.lp-float          { animation: lp-float 5s ease-in-out infinite; }
+.lp-float-slow     { animation: lp-float-slow 7s ease-in-out infinite; }
+.lp-spin-slow      { animation: lp-spin-slow 20s linear infinite; }
+.lp-pulse-ring     { animation: lp-pulse-ring 2s ease-out infinite; }
+.lp-shimmer-text {
+  background: linear-gradient(90deg, #6366f1, #a5b4fc, #6366f1, #818cf8, #6366f1);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: lp-shimmer 4s linear infinite;
+}
+.lp-gradient-bg {
+  background: linear-gradient(135deg, #eef2ff, #f5f3ff, #eff6ff, #eef2ff);
+  background-size: 300% 300%;
+  animation: lp-gradient-shift 8s ease-in-out infinite;
+}
+.lp-fade-up   { animation: lp-fade-up   0.6s ease-out both; }
+.lp-fade-in   { animation: lp-fade-in   0.5s ease-out both; }
+.lp-scale-in  { animation: lp-scale-in  0.5s ease-out both; }
+
+/* Stagger delays */
+.lp-delay-100 { animation-delay: 0.1s; }
+.lp-delay-200 { animation-delay: 0.2s; }
+.lp-delay-300 { animation-delay: 0.3s; }
+.lp-delay-400 { animation-delay: 0.4s; }
+.lp-delay-500 { animation-delay: 0.5s; }
+.lp-delay-600 { animation-delay: 0.6s; }
+.lp-delay-700 { animation-delay: 0.7s; }
+
+/* Ticker for social proof */
+.lp-ticker-inner { animation: lp-ticker 30s linear infinite; }
+
+/* Feature card hover beam */
+.lp-card-hover {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.lp-card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 60px rgba(99,102,241,0.12), 0 4px 16px rgba(0,0,0,0.06);
+  border-color: rgba(99,102,241,0.3) !important;
+}
+.lp-card-hover::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(99,102,241,0.05), transparent);
+  transition: left 0.5s ease;
+}
+.lp-card-hover:hover::after { left: 150%; }
+
+/* Scroll-triggered classes */
+.lp-in-view { animation: lp-fade-up 0.65s ease-out both; }
+
+/* ── Aurora / Mesh Gradient Background ──────────────────────────────────── */
+@keyframes lp-aurora {
+  0%   { background-position: 0% 50%; }
+  25%  { background-position: 50% 0%; }
+  50%  { background-position: 100% 50%; }
+  75%  { background-position: 50% 100%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes lp-orb-drift {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  33%       { transform: translate(40px, -40px) scale(1.08); }
+  66%       { transform: translate(-25px, 30px) scale(0.94); }
+}
+@keyframes lp-orb-drift-2 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  40%       { transform: translate(-50px, 30px) scale(1.1); }
+  70%       { transform: translate(30px, -20px) scale(0.92); }
+}
+@keyframes lp-btn-glow {
+  0%, 100% { box-shadow: 0 4px 20px rgba(99,102,241,0.45), 0 0 0 0 rgba(99,102,241,0); }
+  50%       { box-shadow: 0 8px 36px rgba(99,102,241,0.7), 0 0 24px rgba(99,102,241,0.2); }
+}
+@keyframes lp-card-shimmer {
+  0%   { transform: translateX(-100%) skewX(-15deg); }
+  100% { transform: translateX(250%) skewX(-15deg); }
+}
+@keyframes lp-border-glow {
+  0%, 100% { border-color: rgba(99,102,241,0.15); }
+  50%       { border-color: rgba(99,102,241,0.45); }
+}
+@keyframes lp-text-aurora {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.lp-aurora-bg {
+  background: linear-gradient(-45deg,
+    #f0f4ff 0%, #f5f0ff 15%,
+    #e8f8f0 30%, #faf0ff 45%,
+    #e8f4ff 60%, #f5e8ff 75%,
+    #e8fff8 90%, #f0f4ff 100%
+  );
+  background-size: 400% 400%;
+  animation: lp-aurora 14s ease-in-out infinite;
+}
+
+/* Glass card — frosted glass effect (skill: backdrop-blur 10-20px, 1px solid rgba white 0.2) */
+.lp-glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(1.8);
+  -webkit-backdrop-filter: blur(18px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 4px 24px rgba(99, 102, 241, 0.07),
+    0 1px 4px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.lp-glass:hover {
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 12px 40px rgba(99, 102, 241, 0.14),
+    0 2px 8px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+
+/* Orb animations */
+.lp-orb-drift   { animation: lp-orb-drift   13s ease-in-out infinite; }
+.lp-orb-drift-2 { animation: lp-orb-drift-2 17s ease-in-out infinite; }
+
+/* Glow CTA button */
+.lp-glow-btn { animation: lp-btn-glow 2.8s ease-in-out infinite; }
+
+/* Gradient heading */
+.lp-gradient-heading {
+  background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 45%, #818cf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Aurora shimmer text (cycle through more colors) */
+.lp-aurora-text {
+  background: linear-gradient(90deg,
+    #6366f1, #8b5cf6, #06b6d4, #10b981, #6366f1, #8b5cf6
+  );
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: lp-text-aurora 5s linear infinite;
+}
+
+/* Card shimmer effect on hover */
+.lp-card-hover {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.28s cubic-bezier(.22,.68,0,1.2), box-shadow 0.28s ease, border-color 0.28s ease;
+}
+.lp-card-hover:hover {
+  transform: translateY(-6px) scale(1.01);
+  box-shadow: 0 24px 60px rgba(99,102,241,0.14), 0 4px 16px rgba(0,0,0,0.06);
+  border-color: rgba(99,102,241,0.3) !important;
+}
+.lp-card-hover::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(255,255,255,0.5), transparent);
+  transition: none;
+}
+.lp-card-hover:hover::after {
+  animation: lp-card-shimmer 0.6s ease forwards;
+}
+
+/* Glass feature card */
+.lp-feature-card {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.9);
+  box-shadow: 0 2px 16px rgba(99,102,241,0.06), 0 1px 3px rgba(0,0,0,0.04);
+  transition: transform 0.28s cubic-bezier(.22,.68,0,1.2),
+              box-shadow 0.28s ease,
+              border-color 0.28s ease;
+  animation: lp-border-glow 4s ease-in-out infinite;
+}
+.lp-feature-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 28px 72px rgba(99,102,241,0.18), 0 4px 16px rgba(0,0,0,0.06);
+  border-color: rgba(99,102,241,0.4) !important;
+  animation: none;
+}
+.lp-feature-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(99,102,241,0.04) 0%, transparent 60%);
+  pointer-events: none;
+}
+
 @media (max-width: 768px) {
   button { -webkit-tap-highlight-color: transparent; }
+}
+
+/* ── Advanced Landing Page Animations ──────────────────────────────────── */
+@keyframes lp-slide-in-right  { from{opacity:0;transform:translateX(40px)} to{opacity:1;transform:translateX(0)} }
+@keyframes lp-slide-in-left   { from{opacity:0;transform:translateX(-40px)} to{opacity:1;transform:translateX(0)} }
+@keyframes lp-scale-in        { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:scale(1)} }
+@keyframes lp-pulse-dot       { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.4);opacity:0.6} }
+@keyframes lp-rotate-slow     { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+@keyframes lp-gradient-x      { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+@keyframes lp-number-up       { from{transform:translateY(100%);opacity:0} to{transform:translateY(0);opacity:1} }
+@keyframes lp-ping             { 0%{transform:scale(1);opacity:0.8} 75%,100%{transform:scale(2.2);opacity:0} }
+@keyframes lp-tab-slide        { from{transform:translateY(12px);opacity:0} to{transform:translateY(0);opacity:1} }
+@keyframes lp-connector-draw   { from{width:0;opacity:0} to{width:100%;opacity:1} }
+@keyframes lp-icon-bounce      { 0%,100%{transform:translateY(0)} 40%{transform:translateY(-5px)} 60%{transform:translateY(-3px)} }
+@keyframes lp-glow-pulse       { 0%,100%{box-shadow:0 0 20px rgba(99,102,241,0.3)} 50%{box-shadow:0 0 40px rgba(99,102,241,0.6),0 0 80px rgba(139,92,246,0.3)} }
+@keyframes lp-line-scan        { 0%{top:-2px;opacity:0} 10%{opacity:1} 90%{opacity:1} 100%{top:100%;opacity:0} }
+@keyframes lp-stagger-fade     { from{opacity:0;transform:translateY(20px) scale(0.97)} to{opacity:1;transform:translateY(0) scale(1)} }
+@keyframes lp-bg-shift         { 0%,100%{background-position:0% 0%} 33%{background-position:100% 0%} 66%{background-position:50% 100%} }
+@keyframes lp-float-x          { 0%,100%{transform:translateX(0) translateY(0)} 50%{transform:translateX(8px) translateY(-6px)} }
+
+/* Utility classes for new animations */
+.lp-slide-right   { animation: lp-slide-in-right 0.6s ease-out both; }
+.lp-slide-left    { animation: lp-slide-in-left  0.6s ease-out both; }
+.lp-scale-in      { animation: lp-scale-in       0.55s cubic-bezier(.22,.68,0,1.2) both; }
+.lp-stagger-fade  { animation: lp-stagger-fade   0.5s ease-out both; }
+.lp-float-x       { animation: lp-float-x 6s ease-in-out infinite; }
+
+/* Delay helpers (extended) */
+.lp-delay-150  { animation-delay: 150ms; }
+.lp-delay-250  { animation-delay: 250ms; }
+.lp-delay-350  { animation-delay: 350ms; }
+.lp-delay-450  { animation-delay: 450ms; }
+.lp-delay-600  { animation-delay: 600ms; }
+.lp-delay-750  { animation-delay: 750ms; }
+.lp-delay-900  { animation-delay: 900ms; }
+
+/* Agent card: marketing variant */
+.lp-agent-card {
+  position: relative; overflow: hidden;
+  border-radius: 1.5rem;
+  transition: transform 0.3s cubic-bezier(.22,.68,0,1.2), box-shadow 0.3s ease;
+}
+.lp-agent-card:hover { transform: translateY(-10px) scale(1.015); }
+.lp-agent-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.12) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+/* Shimmer sweep on hover */
+.lp-shimmer-hover {
+  position: relative; overflow: hidden;
+}
+.lp-shimmer-hover::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -80%;
+  width: 60%; height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(255,255,255,0.35), transparent);
+  transition: none;
+  pointer-events: none;
+}
+.lp-shimmer-hover:hover::after { animation: lp-card-shimmer 0.7s ease forwards; }
+
+/* Glow border card */
+.lp-glow-card {
+  position: relative; border-radius: 1.25rem;
+  transition: all 0.3s ease;
+}
+.lp-glow-card::after {
+  content: '';
+  position: absolute; inset: -1px; border-radius: inherit; z-index: -1;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4, #6366f1);
+  background-size: 300% 300%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  animation: lp-gradient-x 4s ease infinite;
+}
+.lp-glow-card:hover::after { opacity: 1; }
+
+/* Tab content fade */
+.lp-tab-content { animation: lp-tab-slide 0.35s ease-out both; }
+
+/* Comparison row highlight on hover */
+.lp-compare-row {
+  transition: background 0.2s ease;
+  cursor: default;
+}
+.lp-compare-row:hover { background: rgba(99,102,241,0.04); }
+
+/* Step connector line animation */
+.lp-connector {
+  height: 2px; background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  animation: lp-connector-draw 1s ease-out both;
+}
+
+/* Icon hover bounce */
+.lp-icon-wrap {
+  transition: transform 0.25s ease;
+}
+.lp-icon-wrap:hover { animation: lp-icon-bounce 0.5s ease; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME  –  global CSS-variable tokens + inline-style overrides
+   All selectors are scoped to .crm-page (Layout's page-content wrapper)
+   so they don't bleed into sidebar / header / modals.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Design tokens (synced with ThemeContext.tsx) ──────────────────────── */
+:root {
+  /* Dark (default) */
+  --crm-bg-page:   #0b1120;
+  --crm-bg-card:   #111827;
+  --crm-bg-alt:    #1a2236;
+  --crm-bg-subtle: rgba(255,255,255,0.04);
+  --crm-border:    rgba(255,255,255,0.09);
+  --crm-divider:   rgba(255,255,255,0.08);
+  --crm-text-hi:   #f1f5f9;
+  --crm-text-mid:  #94a3b8;
+  --crm-text-lo:   #64748b;
+}
+
+html.light-theme {
+  --crm-bg-page:   #f1f5f9;
+  --crm-bg-card:   #ffffff;
+  --crm-bg-alt:    #f8fafc;
+  --crm-bg-subtle: #f1f5f9;
+  --crm-border:    #e2e8f0;
+  --crm-divider:   #e2e8f0;
+  --crm-text-hi:   #0f172a;
+  --crm-text-mid:  #475569;
+  --crm-text-lo:   #94a3b8;
+}
+
+/* ── Body / utility classes ────────────────────────────────────────────── */
+html.light-theme body         { background-color: #f1f5f9; color: #0f172a; }
+html.light-theme .cf-card     { background-color: #ffffff !important; border-color: #e2e8f0 !important; }
+html.light-theme .cf-card-inner { background-color: #f8fafc !important; border-color: #e2e8f0 !important; }
+html.light-theme .glass       { background: rgba(255,255,255,0.95) !important; border-color: #e2e8f0 !important; backdrop-filter: none !important; }
+
+/* ── scrollbar in light mode ───────────────────────────────────────────── */
+html.light-theme ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); }
+
+/* ══ PAGE CONTENT AREA overrides (.crm-page class added in Layout.tsx) ═══ */
+
+/* 1. Dark page backgrounds → light slate (covers both old #0a0f1e and new #0b1120) */
+html.light-theme .crm-page [style*="#0a0f1e"],
+html.light-theme .crm-page [style*="#0b1120"],
+html.light-theme .crm-page [style*="#0c1120"],
+html.light-theme .crm-page [style*="#111827"] {
+  background:       #f1f5f9 !important;
+  background-color: #f1f5f9 !important;
+  background-image: none !important;
+}
+
+/* 2. Dot-grid radial-gradient → remove */
+html.light-theme .crm-page [style*="rgba(99,102,241,0.12) 1px"] { background-image: none !important; }
+html.light-theme .crm-page [style*="rgba(99,102,241,0.12)1px"]  { background-image: none !important; }
+html.light-theme .crm-page [style*="rgba(99, 102, 241, 0.12)"]  { background-image: none !important; }
+
+/* 3. Dark glass cards rgba(10,15,30,x) → white */
+html.light-theme .crm-page [style*="rgba(10,15,30"],
+html.light-theme .crm-page [style*="rgba(10, 15, 30"] {
+  background:   #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* 4. Very-subtle dark overlays rgba(255,255,255,0.03-0.08) → near-white */
+html.light-theme .crm-page [style*="rgba(255,255,255,0.03)"],
+html.light-theme .crm-page [style*="rgba(255,255,255,0.04)"],
+html.light-theme .crm-page [style*="rgba(255,255,255,0.05)"],
+html.light-theme .crm-page [style*="rgba(255,255,255,0.06)"],
+html.light-theme .crm-page [style*="rgba(255,255,255,0.07)"],
+html.light-theme .crm-page [style*="rgba(255,255,255,0.08)"] {
+  background: #f8fafc !important;
+}
+
+/* 5. White text classes → dark */
+html.light-theme .crm-page .text-white,
+html.light-theme .crm-page .text-gray-50,
+html.light-theme .crm-page .text-gray-100,
+html.light-theme .crm-page .text-gray-200,
+html.light-theme .crm-page .text-slate-50,
+html.light-theme .crm-page .text-slate-100,
+html.light-theme .crm-page .text-slate-200,
+html.light-theme .crm-page .text-slate-300,
+html.light-theme .crm-page .text-zinc-100,
+html.light-theme .crm-page .text-zinc-200,
+html.light-theme .crm-page .text-neutral-100,
+html.light-theme .crm-page .text-neutral-200  { color: #475569 !important; }
+
+/* 5b. White opacity text classes (e.g. text-white/90, text-white/60…) → dark readable */
+html.light-theme .admin-panel .text-white\/90,
+html.light-theme .admin-panel .text-white\/85,
+html.light-theme .admin-panel .text-white\/80,
+html.light-theme .admin-panel .text-white\/75,
+html.light-theme .admin-panel .text-white\/70 { color: #1e293b !important; }
+
+html.light-theme .admin-panel .text-white\/65,
+html.light-theme .admin-panel .text-white\/60,
+html.light-theme .admin-panel .text-white\/55,
+html.light-theme .admin-panel .text-white\/50 { color: #475569 !important; }
+
+html.light-theme .admin-panel .text-white\/45,
+html.light-theme .admin-panel .text-white\/40,
+html.light-theme .admin-panel .text-white\/35,
+html.light-theme .admin-panel .text-white\/30,
+html.light-theme .admin-panel .text-white\/25 { color: #64748b !important; }
+
+/* 5c. White bg opacity → light card backgrounds */
+html.light-theme .admin-panel .bg-white\/5,
+html.light-theme .admin-panel .bg-white\/\[0\.03\],
+html.light-theme .admin-panel .bg-white\/\[0\.04\],
+html.light-theme .admin-panel .bg-white\/\[0\.05\],
+html.light-theme .admin-panel .bg-white\/\[0\.06\] { background-color: #f8fafc !important; }
+
+html.light-theme .admin-panel .bg-white\/10,
+html.light-theme .admin-panel .bg-white\/\[0\.08\],
+html.light-theme .admin-panel .bg-white\/\[0\.09\],
+html.light-theme .admin-panel .bg-white\/\[0\.1\]  { background-color: #f1f5f9 !important; }
+
+html.light-theme .admin-panel .bg-white\/15,
+html.light-theme .admin-panel .bg-white\/20,
+html.light-theme .admin-panel .bg-white\/25       { background-color: #e2e8f0 !important; }
+
+/* 5d. White border opacity → visible borders */
+html.light-theme .admin-panel .border-white\/10,
+html.light-theme .admin-panel .border-white\/\[0\.08\],
+html.light-theme .admin-panel .border-white\/\[0\.09\] { border-color: #e2e8f0 !important; }
+
+html.light-theme .admin-panel .border-white\/15,
+html.light-theme .admin-panel .border-white\/20      { border-color: #cbd5e1 !important; }
+
+/* 5e. Inline rgba(255,255,255,x) text in admin panel */
+html.light-theme .admin-panel [style*="color: rgba(255,255,255"],
+html.light-theme .admin-panel [style*="color:rgba(255,255,255"],
+html.light-theme .admin-panel [style*="color: rgba(255, 255, 255"],
+html.light-theme .admin-panel [style*="color: white"],
+html.light-theme .admin-panel [style*="color: #fff"] { color: #1e293b !important; }
+
+/* 5f. Inline rgba(255,255,255,x) backgrounds in admin panel */
+html.light-theme .admin-panel [style*="background: rgba(255,255,255,0.0"],
+html.light-theme .admin-panel [style*="background-color: rgba(255,255,255,0.0"],
+html.light-theme .admin-panel [style*="background:rgba(255,255,255,0.0"] { background-color: #f8fafc !important; }
+
+/* 6. Inline white-rgba text → readable dark (covers both space and no-space rgba) */
+html.light-theme .crm-page [style*="color: rgba(255,255,255"],
+html.light-theme .crm-page [style*="color:rgba(255,255,255"],
+html.light-theme .crm-page [style*="color: rgba(255, 255, 255"],
+html.light-theme .crm-page [style*="color:rgba(255, 255, 255"],
+html.light-theme .crm-page [style*="color: white"],
+html.light-theme .crm-page [style*="color:white"],
+html.light-theme .crm-page [style*="color: #fff"],
+html.light-theme .crm-page [style*="color: #ffffff"],
+html.light-theme .crm-page [style*="color: #f1f5f9"],
+html.light-theme .crm-page [style*="color: #e2e8f0"],
+html.light-theme .crm-page [style*="color: #cbd5e1"] { color: #475569 !important; }
+
+/* ── INPUTS, TEXTAREAS, SELECTS: always readable in light mode ─────────── */
+html.light-theme .crm-page input,
+html.light-theme .crm-page textarea,
+html.light-theme .crm-page select {
+  color: #0f172a !important;
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+html.light-theme .crm-page input::placeholder,
+html.light-theme .crm-page textarea::placeholder {
+  color: #94a3b8 !important;
+}
+html.light-theme .crm-page input[style*="color"],
+html.light-theme .crm-page textarea[style*="color"],
+html.light-theme .crm-page select[style*="color"] {
+  color: #0f172a !important;
+}
+
+/* ── ALL elements with any white/near-white inline color ───────────────── */
+html.light-theme .crm-page [style*="color: rgba(255"]   { color: #475569 !important; }
+html.light-theme .crm-page [style*="color:rgba(255"]    { color: #475569 !important; }
+html.light-theme .crm-page [style*="color: white"]      { color: #1e293b !important; }
+html.light-theme .crm-page [style*="color: #f"]         { color: #475569 !important; }
+
+/* ── Specific light hex text colors that are invisible on white ─────────── */
+html.light-theme .crm-page [style*="color: #f1f5f9"],
+html.light-theme .crm-page [style*="color: #e2e8f0"],
+html.light-theme .crm-page [style*="color: #94a3b8"],
+html.light-theme .crm-page [style*="color: #64748b"] { color: #475569 !important; }
+
+/* ── Buttons with white / light inline text ─────────────────────────────── */
+html.light-theme .crm-page button[style*="color: rgba(255"],
+html.light-theme .crm-page button[style*="color:rgba(255"],
+html.light-theme .crm-page button[style*="color: rgba(255, 255, 255"],
+html.light-theme .crm-page button[style*="color: white"],
+html.light-theme .crm-page button[style*="color: #f"] { color: #475569 !important; }
+
+/* Exception: gradient buttons with white text should stay white */
+html.light-theme .crm-page button[style*="linear-gradient"][style*="color: white"] { color: #ffffff !important; }
+html.light-theme .crm-page button[style*="linear-gradient"][style*="color:white"]  { color: #ffffff !important; }
+
+/* ── Labels with light inline text ─────────────────────────────────────── */
+html.light-theme .crm-page label[style*="color: rgba(255"],
+html.light-theme .crm-page label[style*="color: white"],
+html.light-theme .crm-page label[style*="color: #f"] { color: #64748b !important; }
+
+/* ── Spans and p with light colors ─────────────────────────────────────── */
+html.light-theme .crm-page span[style*="color: rgba(255"],
+html.light-theme .crm-page span[style*="color: white"],
+html.light-theme .crm-page span[style*="color: #f"],
+html.light-theme .crm-page p[style*="color: rgba(255"],
+html.light-theme .crm-page p[style*="color: white"],
+html.light-theme .crm-page p[style*="color: #f"],
+html.light-theme .crm-page div[style*="color: rgba(255,255,255"],
+html.light-theme .crm-page div[style*="color: rgba(255, 255, 255"] { color: #64748b !important; }
+
+/* ── Subtle dividers / borders that are white-tinted → slate ───────────── */
+html.light-theme .crm-page [style*="borderBottom: 1px solid rgba(255"],
+html.light-theme .crm-page [style*="border-bottom: 1px solid rgba(255"] { border-bottom-color: #e2e8f0 !important; }
+html.light-theme .crm-page [style*="borderTop: 1px solid rgba(255"],
+html.light-theme .crm-page [style*="border-top: 1px solid rgba(255"]    { border-top-color: #e2e8f0 !important; }
+
+/* 7. White-tinted borders → light slate */
+html.light-theme .crm-page [style*="border: 1px solid rgba(255"],
+html.light-theme .crm-page [style*="border:1px solid rgba(255"],
+html.light-theme .crm-page [style*="border: 2px solid rgba(255"],
+html.light-theme .crm-page [style*="border: 1.5px solid rgba(255"] { border-color: #e2e8f0 !important; }
+
+/* 8. White ring/ring colours */
+html.light-theme .crm-page [style*="borderColor: rgba(255"] { border-color: #e2e8f0 !important; }
+
+/* 9. Dark backgrounds → white (comprehensive list) */
+html.light-theme .crm-page [style*="background: #08101e"],
+html.light-theme .crm-page [style*="background: #0a0e1a"],
+html.light-theme .crm-page [style*="background: #0d1526"],
+html.light-theme .crm-page [style*="background: #0d1629"],
+html.light-theme .crm-page [style*="background: #0f1623"],
+html.light-theme .crm-page [style*="background: #0f172a"],
+html.light-theme .crm-page [style*="background: #111827"],
+html.light-theme .crm-page [style*="background: #1a2035"],
+html.light-theme .crm-page [style*="background: #1a2236"],
+html.light-theme .crm-page [style*="background: #1e2a3a"],
+html.light-theme .crm-page [style*="background: #0c1220"],
+html.light-theme .crm-page [style*="background: #0c1120"],
+html.light-theme .crm-page [style*="background: #050c18"] {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* 9b. backgroundColor variants */
+html.light-theme .crm-page [style*="backgroundColor: #111827"],
+html.light-theme .crm-page [style*="backgroundColor: #0f172a"],
+html.light-theme .crm-page [style*="backgroundColor: #1a2236"],
+html.light-theme .crm-page [style*="backgroundColor: #0d1629"] { background-color: #f8fafc !important; }
+
+/* 10. Drop-shadow neon glows → neutral on light */
+html.light-theme .crm-page .glow-indigo { box-shadow: 0 4px 16px rgba(99,102,241,0.12); }
+html.light-theme .crm-page .glow-blue   { box-shadow: 0 4px 16px rgba(59,130,246,0.12); }
+
+/* 11. Backdrop-blur glass inside pages → plain white card */
+html.light-theme .crm-page [style*="backdropFilter"],
+html.light-theme .crm-page [style*="backdrop-filter"] { backdrop-filter: none !important; }
+
+/* 12. Recharts / chart text in light mode */
+html.light-theme .crm-page .recharts-text,
+html.light-theme .crm-page .recharts-cartesian-axis-tick-value,
+html.light-theme .crm-page .recharts-legend-item-text { fill: #475569 !important; color: #475569 !important; }
+html.light-theme .crm-page .recharts-tooltip-wrapper [style*="background"],
+html.light-theme .crm-page .recharts-default-tooltip { background: #ffffff !important; border-color: #e2e8f0 !important; color: #0f172a !important; }
+
+/* 13. SVG text fill (charts) */
+html.light-theme .crm-page svg text { fill: #475569 !important; }
+html.light-theme .crm-page .recharts-cartesian-grid line { stroke: #e2e8f0 !important; }
+
+/* 14. Stat/number values that use light colors */
+html.light-theme .crm-page [style*="color: #818cf8"] { color: #4f46e5 !important; }
+html.light-theme .crm-page [style*="color: #a5b4fc"] { color: #4338ca !important; }
+
+/* 15. Dark rgba backgrounds missed above */
+html.light-theme .crm-page [style*="rgba(8,16,30"],
+html.light-theme .crm-page [style*="rgba(5,7,15"],
+html.light-theme .crm-page [style*="rgba(11,17,32"],
+html.light-theme .crm-page [style*="rgba(15,23,42"] {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
 }
