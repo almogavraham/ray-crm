@@ -42,6 +42,18 @@ service cloud.firestore {
       }
     }
 
+    // ── Gmail refresh tokens ─────────────────────────────────────────────────
+    // Long-lived credential material. Denied to every client without exception:
+    // only the Admin SDK, which bypasses these rules, may read or write it. The
+    // browser is handed short-lived access tokens and never the refresh token.
+    match /gmailAuth/{workspaceId} {
+      allow read, write: if false;
+    }
+    // One-time OAuth state nonces — server-side only, same reasoning.
+    match /gmailAuthNonce/{nonceId} {
+      allow read, write: if false;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;

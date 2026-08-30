@@ -254,22 +254,17 @@ export default function RayMailChat({
   };
 
   const reconnect = async () => {
-    const cid = clientId ?? config?.accounts?.[0]?.clientId;
-    if (!cid) { setError('חסר Client ID — הגדר אותו בסוכן מכירות AI ← הגדרות'); return; }
+    if (!workspaceId) { setError('אין סביבת עבודה פעילה'); return; }
     setReconnecting(true); setError('');
     try {
       // Interactive on purpose. The background refresh needs a popup Google
       // opens for it, and a browser blocks popups that no click asked for —
       // which is exactly why the silent renewal kept failing.
-      const { requestGmailToken } = await import('../lib/gmailAgent');
-      await requestGmailToken(cid, config?.accounts?.[0]?.email);
-      if (workspaceId) {
-        const { refreshGmailTokens } = await import('../lib/gmailKeepAlive');
-        await refreshGmailTokens(workspaceId, cid, true);
-      }
-      setAuth('live');
-      await checkMail(false);
-      onToast('החיבור ל-Gmail חודש ✓', 'success');
+      // Permanent connection: the server takes a refresh token, so this is the
+      // last time anyone has to do this. Navigates away to Google's consent
+      // screen and comes back through the callback.
+      const { connectGmailPermanently } = await import('../lib/gmailServerAuth');
+      await connectGmailPermanently(workspaceId!, config?.accounts?.[0]?.email);
     } catch (e) {
       setError(`ההתחברות נכשלה: ${(e as Error).message}`);
     } finally { setReconnecting(false); }
@@ -318,21 +313,26 @@ export default function RayMailChat({
             style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
             <AlertCircle size={14} className="flex-shrink-0" />
             <span className="flex-1 min-w-[180px]">
-              החיבור ל-Gmail פג ולא ניתן לחדש אותו ברקע — הדפדפן חוסם את חלון ההרשאה
-              של Google כשלא לחצת עליו בעצמך.
+              החיבור ל-Gmail פג. חיבור קבוע יישמר בשרת ולא יתנתק שוב — גם כשהמערכת
+              סגורה לגמרי.
             </span>
             <button onClick={() => void reconnect()} disabled={reconnecting}
               className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-60"
               style={{ background: '#d97706' }}>
-              {reconnecting ? 'מתחבר…' : 'התחבר מחדש'}
+              {reconnecting ? 'מתחבר…' : 'חבר לצמיתות'}
             </button>
           </div>
         )}
         {auth === 'none' && (
-          <div className="px-4 py-2.5 text-[12px] flex items-center gap-2"
+          <div className="px-4 py-2.5 text-[12px] flex items-center gap-2 flex-wrap"
             style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
             <AlertCircle size={14} className="flex-shrink-0" />
-            אין חשבון Gmail מחובר. חבר אחד בסוכן מכירות AI ← הגדרות, ואז חזור לכאן.
+            <span className="flex-1 min-w-[180px]">אין חשבון Gmail מחובר.</span>
+            <button onClick={() => void reconnect()} disabled={reconnecting}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-60"
+              style={{ background: '#d97706' }}>
+              {reconnecting ? 'מתחבר…' : 'חבר את Gmail'}
+            </button>
           </div>
         )}
         {hebrewVoice === false && (

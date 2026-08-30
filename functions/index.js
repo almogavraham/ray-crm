@@ -6,6 +6,13 @@ exports.formSubmit = formIngest.formSubmit;
 const siteContact = require('./siteContact');
 exports.siteContact = siteContact.siteContact;
 
+// Gmail authorization-code flow — a connection that outlives the browser.
+const gmailOAuth = require('./gmailOAuth');
+exports.gmailConnectUrl    = gmailOAuth.gmailConnectUrl;
+exports.gmailOAuthCallback = gmailOAuth.gmailOAuthCallback;
+exports.gmailAccessToken   = gmailOAuth.gmailAccessToken;
+exports.gmailDisconnect    = gmailOAuth.gmailDisconnect;
+
 // Nightly point-in-time snapshot — the only thing that recovers from a bulk
 // overwrite, which deletes-only protections (recycle bin) cannot.
 const dailyBackup = require('./dailyBackup');

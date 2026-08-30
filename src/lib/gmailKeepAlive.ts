@@ -140,6 +140,15 @@ export async function getLiveGmailToken(
   const cached = getActiveToken();
   if (cached) return cached;
   if (!wid) return null;
+
+  // Prefer the server-held refresh token: it works with no popup, no open tab
+  // and no recent user activity, which is everything the browser flow cannot do.
+  const { getServerGmailToken } = await import('./gmailServerAuth');
+  const server = await getServerGmailToken(wid);
+  if (server) return server;
+
+  // Fall back to the old implicit flow so a workspace that connected the old
+  // way keeps working until it is reconnected properly.
   const ok = await refreshGmailTokens(wid, clientIdFallback);
   return ok ? getActiveToken() : null;
 }

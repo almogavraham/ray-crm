@@ -1227,6 +1227,23 @@ function AppInner() {
   // ─── Keep the Gmail connection alive ─────────────────────────────────────
   // Browser OAuth tokens die after ~1h with no refresh token, which is why a
   // mailbox connected yesterday read as "disconnected" today. Re-mint silently
+  // Google sends the user back here after the permanent-connection consent
+  // screen. Reported once and scrubbed from the URL, so a refresh does not
+  // replay a stale banner.
+  useEffect(() => {
+    void (async () => {
+      const { readConnectResult } = await import('./lib/gmailServerAuth');
+      const res = readConnectResult();
+      if (!res) return;
+      if (res.status === 'success') {
+        addToast(`Gmail חובר לצמיתות${res.email ? ` — ${res.email}` : ''} ✓`, 'success');
+      } else {
+        addToast(`חיבור Gmail נכשל: ${res.reason ?? 'שגיאה לא ידועה'}`, 'error');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // for as long as the app is open (see lib/gmailKeepAlive.ts).
   useEffect(() => {
     const wid = workspace?.id;
