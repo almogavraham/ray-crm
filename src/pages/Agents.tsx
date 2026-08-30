@@ -13,8 +13,9 @@ import type { Lead, TeamMember, StandaloneTask, TaskPriority } from '../types';
 // Canonical automation vocabulary + types live in the engine so the form builder,
 // the AI chat and the server-side scanner can never drift apart.
 import {
-  TRIGGER_LABELS, ACTION_LABELS, VALUELESS_TRIGGERS, FLAG_COLORS, CONTACT_METHODS,
+  TRIGGER_LABELS, ACTION_LABELS, VALUELESS_TRIGGERS, FLAG_COLORS, CONTACT_METHODS, SEND_ACTIONS,
 } from '../lib/automationEngine';
+import { dispatchAutomationSends } from '../lib/automationSend';
 import type {
   TriggerType, WFActionType, WorkflowCondition, WorkflowAction, Workflow,
 } from '../lib/automationEngine';
@@ -1152,6 +1153,7 @@ const WF_SOURCES  = ['אורגני','פרסום ממומן','הפניה','אינ
 const ACTION_ICON: Record<WFActionType, string> = {
   create_task: '📋', change_status: '🔄', send_whatsapp_ai: '💬',
   send_email_ai: '📧', add_note: '📝', assign_to: '👤', send_webhook: '🔗',
+  send_email_template: '📧', send_whatsapp_template: '💬',
   mark_hot: '🔥', unmark_hot: '❄️', set_followup: '📅',
   set_flag_color: '🎨', clear_flag_color: '⬜',
 };
@@ -1615,8 +1617,44 @@ ${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
               const parsed = (() => { try { return JSON.parse(rawText.replace(/^```json\s*/,'').replace(/\s*```$/,'')); } catch { return { subject: '', body: rawText }; } })();
               actionResults.push({ actionId: action.id, type: action.type, message: parsed.body || rawText, subject: parsed.subject || '', success: true });
             }
+          } else if (SEND_ACTIONS[action.type]) {
+            // Template sends were falling straight through this chain: no branch
+            // matched, so no result was recorded at all and the action silently
+            // did nothing. dispatchAutomationSends resolves the template, refuses
+            // to message the same lead twice, and reports every failure.
+            const out = await dispatchAutomationSends({
+              workspaceId, lead, fromName: currentUser,
+              sends: [{
+                workflowId: wf.id, workflowName: wf.name,
+                channel: SEND_ACTIONS[action.type],
+                templateId: action.config.templateId ?? '',
+              }],
+            });
+            for (const l of out.links) window.open(l.url, '_blank', 'noopener');
+            const failed = out.failed[0];
+            actionResults.push({
+              actionId: action.id, type: action.type,
+              success: !failed,
+              message: failed ? failed.reason
+                : out.sent.length ? 'נשלח'
+                : out.links.length ? 'הודעת וואטסאפ הוכנה לשליחה'
+                : 'דילגתי — הליד כבר קיבל את ההודעה הזו',
+            });
+
+          } else {
+            // An action type nobody handles must not pass as done. Without this
+            // the chain above swallowed anything it did not recognise.
+            actionResults.push({
+              actionId: action.id, type: action.type, success: false,
+              message: `פעולה לא נתמכת בהרצה: ${action.type}`,
+            });
           }
-        } catch { actionResults.push({ actionId: action.id, type: action.type, success: false }); }
+        } catch (err) {
+          actionResults.push({
+            actionId: action.id, type: action.type, success: false,
+            message: (err as Error).message,
+          });
+        }
       }
       results.push({ lead, actionResults });
     }

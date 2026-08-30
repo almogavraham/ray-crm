@@ -76,6 +76,10 @@ function evalCondition(lead, c) {
       return (Date.now() - t) / 86400000 >= num();
     }
     case 'never_contacted':   return !lead.lastContactDate;
+    // Mirrors automationEngine.ts. These two were missing entirely, so a rule
+    // built in the studio using either was never detected server-side.
+    case 'was_contacted':     return Boolean(lead.lastContactDate);
+    case 'contact_method_is': return lead.contactMethod === c.value;
     case 'followup_overdue': {
       if (!lead.nextFollowUpDate) return false;
       try { return new Date(lead.nextFollowUpDate) < new Date(); } catch { return false; }
@@ -167,7 +171,7 @@ async function scanWorkspace(db, wid) {
         type: 'info',
         title: `⚡ אוטומציה "${wf.name}" מצאה ${matched.length} לידים`,
         body: 'האוטומציה ממתינה לאישורך כדי לרוץ. פתח את דף האוטומציות לאישור.',
-        link: 'workflows',
+        link: 'agents',
       });
     } catch (err) {
       console.error(`[workflowScanner] ${wid}/${wf.id} failed`, err);
