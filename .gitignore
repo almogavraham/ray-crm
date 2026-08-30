@@ -32,3 +32,9 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Firebase deploy cache — regenerated on every deploy, pure churn in diffs
+.firebase/
+
+# Claude Code local state and task worktrees
+.claude/
