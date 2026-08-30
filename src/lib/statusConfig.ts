@@ -1,12 +1,21 @@
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
-import type { TaskPriority } from '../types';
+import type { TaskPriority, TaskType, Task, Lead } from '../types';
+
+export interface SequenceStep {
+  description: string;      // supports {{company}}, {{contact}} placeholders
+  priority: TaskPriority;
+  daysOffset: number;       // 0=today, 1=tomorrow, …
+  type?: TaskType;
+}
 
 export interface StatusAutomation {
   createTask?: {
     description: string;   // supports {{company}}, {{contact}} placeholders
     priority: TaskPriority;
     daysOffset: number;    // 0=today, 1=tomorrow
+    type?: TaskType;
   };
+  sequence?: SequenceStep[];  // multi-step playbook fired when a lead enters this status
   dashboardSection?: string; // e.g. 'meetings', 'demos', 'proposals'
   nextStatusSuggestion?: string;
 }
@@ -66,6 +75,34 @@ export function resolveTaskDescription(template: string, lead: { company?: strin
   return template
     .replace(/\{\{company\}\}/g, lead.company ?? 'הלקוח')
     .replace(/\{\{contact\}\}/g, lead.contactName ?? 'איש הקשר');
+}
+
+/**
+ * Build the tasks a status' automation should create when a lead enters it —
+ * the single `createTask` plus any multi-step `sequence` (playbook). Dates are
+ * computed from each step's daysOffset relative to today.
+ */
+export function buildAutomationTasks(config: StatusConfig, lead: Lead, currentUser: string): Task[] {
+  const steps: SequenceStep[] = [];
+  if (config.automation?.createTask) steps.push(config.automation.createTask);
+  if (config.automation?.sequence?.length) steps.push(...config.automation.sequence);
+  return steps
+    .filter(s => s.description && s.description.trim())
+    .map((s, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() + (s.daysOffset || 0));
+      return {
+        id: `${Date.now()}-auto-${i}`,
+        description: resolveTaskDescription(s.description, lead),
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        time: '09:00',
+        completed: false,
+        priority: s.priority,
+        assignedTo: lead.assignedTo || currentUser,
+        assignedBy: 'אוטומציה',
+        ...(s.type ? { type: s.type } : {}),
+      } as Task;
+    });
 }
 
 /**

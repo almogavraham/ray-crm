@@ -81,6 +81,7 @@ function calcConversion(lead: Lead): number {
 type TempType = 'hot' | 'cold' | 'active' | 'normal';
 
 function getTemperature(lead: Lead): TempType {
+  if (lead.isHot) return 'hot';   // manual override always wins
   const stale = daysSince(lead.lastUpdate);
   const hasSoonTask = lead.tasks.some(t => !t.completed && isTaskDueSoon(t.date));
   if (hasSoonTask) return 'active';

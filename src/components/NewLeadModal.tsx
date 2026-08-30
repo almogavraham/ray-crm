@@ -8,6 +8,7 @@ interface NewLeadModalProps {
   onClose: () => void;
   onAdd: (lead: Lead) => void;
   workspaceSolutions?: string[];
+  workspaceSources?: string[];   // custom lead sources defined on the lead card
   currentUser?: string;
   existingLeads?: Lead[];   // used for duplicate detection
   statusConfigs?: StatusConfig[];
@@ -22,6 +23,7 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, '');
 export default function NewLeadModal({
   onClose, onAdd,
   workspaceSolutions = [],
+  workspaceSources = [],
   currentUser = '',
   existingLeads = [],
   statusConfigs,
@@ -35,13 +37,17 @@ export default function NewLeadModal({
 
   const defaultStatus = statuses[0] ?? 'חדש';
 
+  // Use the workspace's custom lead sources (set on the lead card), fall back to defaults.
+  const sourceOptions: string[] = workspaceSources.length > 0 ? workspaceSources : SOURCES;
+  const defaultSource = sourceOptions[0] ?? 'אורגני';
+
   const [form, setForm] = useState({
     company:     '',
     contactName: '',
     email:       '',
     phone:       '',
     status:      defaultStatus as LeadStatus,
-    source:      'אורגני' as LeadSource,
+    source:      defaultSource as LeadSource,
     assignedTo:  currentUser,
   });
 
@@ -222,7 +228,7 @@ export default function NewLeadModal({
               <select value={form.source}
                 onChange={e => setForm(f => ({ ...f, source: e.target.value as LeadSource }))}
                 className={inp}>
-                {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                {sourceOptions.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>

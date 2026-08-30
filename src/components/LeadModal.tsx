@@ -1,10 +1,10 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import {
   X, MessageCircle, Mail, Phone, Save, Plus, Trash2, Brain,
   Clock, Building2, CheckCircle2, Activity, Star, Zap,
   FileText, ListChecks, Loader2, Globe, ChevronDown, AlertCircle,
   Mic, MicOff, Sparkles, Calendar, CalendarPlus, PhoneCall,
-  Users2, RotateCcw, Pencil, Check,
+  Users2, RotateCcw, Pencil, Check, Flame,
 } from 'lucide-react';
 import { AgentsTab } from './LeadAgents';
 import ProposalEditorModal from './ProposalEditorModal';
@@ -12,7 +12,8 @@ import type { Lead, LeadStatus, LeadSource, TaskPriority, WorkspaceProfile, Lead
 import { DEFAULT_CARD_LAYOUT, DEFAULT_CARD_SECTIONS } from '../types';
 import type { StatusConfig } from '../lib/statusConfig';
 import CardCustomizePanel from './CardCustomizePanel';
-import { DEFAULT_STATUS_CONFIGS, getStatusConfig } from '../lib/statusConfig';
+import { DEFAULT_STATUS_CONFIGS, getStatusConfig, buildAutomationTasks } from '../lib/statusConfig';
+import { useDictation } from '../hooks/useDictation';
 
 const LEAD_SOURCES: LeadSource[] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 import { SOLUTIONS } from '../data/mockData';
@@ -67,7 +68,7 @@ const STATUS_COLORS: Record<LeadStatus, string> = {
   'לא רלוונטי': 'bg-slate-500/20 text-slate-400 border-slate-500/30',
 };
 
-type Tab = 'details' | 'tasks' | 'notes' | 'activity' | 'agents';
+type Tab = 'details' | 'tasks' | 'activity' | 'agents';
 
 interface CompanyInsight {
   summary: string;
@@ -100,6 +101,23 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
     ? (workspace!.businessSolutions!)
     : SOLUTIONS;
   const [data, setData] = useState<Lead>({ ...lead });
+
+  // ── Auto-save ──────────────────────────────────────────────────────────────
+  // Persist every edit immediately (debounced) so the user never has to press a
+  // save button, and nothing is lost on refresh. A final flush on close covers
+  // edits made within the debounce window.
+  const latestData = useRef(data);
+  latestData.current = data;
+  const autoSaveInit = useRef(true);
+  const autoSaveDirty = useRef(false);
+  useEffect(() => {
+    if (autoSaveInit.current) { autoSaveInit.current = false; return; }
+    autoSaveDirty.current = true;
+    const id = setTimeout(() => { onUpdate(latestData.current); autoSaveDirty.current = false; }, 700);
+    return () => clearTimeout(id);
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (autoSaveDirty.current) onUpdate(latestData.current); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [activeTab, setActiveTab] = useState<Tab>('details');
   const [newNote, setNewNote] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
@@ -116,8 +134,11 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
   const [showWhatsApp, setShowWhatsApp] = useState(false);
   const [showProposalEditor, setShowProposalEditor] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [noteRecording, setNoteRecording] = useState(false);
-  const noteRecogRef = useRef<unknown>(null);
+  const [editingContact, setEditingContact] = useState(false);  // edit company/contact/email/phone
+  const toggleHot = () => { const updated = { ...data, isHot: !data.isHot }; setData(updated); onUpdate(updated); };
+  // AI "Next Best Action"
+  const [nbaLoading, setNbaLoading] = useState(false);
+  const [nba, setNba] = useState<{ action: string; reason: string; task: { description: string; date: string; time: string; priority: TaskPriority } } | null>(null);
 
   // Contact logging
   const [showContactModal, setShowContactModal] = useState(false);
@@ -195,31 +216,10 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
   const [editFieldOptions,   setEditFieldOptions]   = useState<string[]>([]);
   const [editFieldOptionInput, setEditFieldOptionInput] = useState('');
 
-  const toggleNoteVoice = () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { alert(t('leadModal.browserNoSpeech')); return; }
-    if (noteRecording) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (noteRecogRef.current as any)?.stop();
-      setNoteRecording(false);
-      return;
-    }
-    const recog = new SR();
-    recog.lang = 'he-IL';
-    recog.continuous = false;
-    recog.interimResults = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recog.onresult = (e: any) => {
-      const text: string = e.results[0][0].transcript;
-      setNewNote(prev => (prev ? prev + ' ' + text : text));
-    };
-    recog.onend = () => setNoteRecording(false);
-    recog.onerror = () => setNoteRecording(false);
-    recog.start();
-    noteRecogRef.current = recog;
-    setNoteRecording(true);
-  };
+  // Continuous voice dictation (records until stop) + AI clean-up — for the note
+  // field and for the contact-log ("תיעוד הפנייה") details field.
+  const noteDictation    = useDictation(setNewNote,     { onToast });
+  const contactDictation = useDictation(setContactNote, { onToast });
 
   const toggleSolution = (name: string) => {
     setData(d => {
@@ -427,7 +427,8 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     if (!contactNote.trim()) return;
     const contactLabels: Record<ContactMethod, string> = {
       phone: 'שיחת טלפון', email: 'מייל', whatsapp: 'וואטסאפ', in_person: 'פגישה פנים-אל-פנים',
-      meeting: 'פגישה נקבעה', quote: 'הצעת מחיר נשלחה', custom: customContactLabel || 'תיעוד מותאם',
+      meeting: 'פגישה נקבעה', quote: 'הצעת מחיר נשלחה', no_answer: 'לא ענה',
+      custom: customContactLabel || 'תיעוד מותאם',
     };
     const followUpDate = followUpDays
       ? new Date(Date.now() + parseInt(followUpDays) * 86400000).toISOString()
@@ -462,6 +463,9 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
       ];
     }
 
+    // "לא ענה" keeps a running counter + timestamp so automations can act on
+    // "didn't answer N times" / "N hours since the last unanswered attempt".
+    const isNoAnswer = contactType === 'no_answer';
     const updated: Lead = {
       ...data,
       activityLog: newLog,
@@ -469,6 +473,9 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
       lastContactDate: new Date().toISOString(),
       contactMethod: contactType,
       ...(followUpDate ? { nextFollowUpDate: followUpDate } : {}),
+      ...(isNoAnswer
+        ? { noAnswerCount: (data.noAnswerCount ?? 0) + 1, lastNoAnswerAt: new Date().toISOString() }
+        : { noAnswerCount: 0 }),   // a real answer resets the streak
     };
     setData(updated);
     onUpdate(updated);
@@ -503,13 +510,30 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     return `https://calendar.google.com/calendar/render?${p}`;
   }
 
-  const handleScheduleMeeting = () => {
+  function buildOutlookUrl(m: { title: string; date: string; time: string; duration: number; location?: string; notes?: string }) {
+    const start = new Date(`${m.date}T${m.time}:00`);
+    const end = new Date(start.getTime() + m.duration * 60000);
+    const p = new URLSearchParams({
+      path: '/calendar/action/compose', rru: 'addevent',
+      subject: m.title,
+      startdt: start.toISOString(),
+      enddt: end.toISOString(),
+      ...(m.location ? { location: m.location } : {}),
+      ...(m.notes ? { body: m.notes } : {}),
+    });
+    return `https://outlook.office.com/calendar/0/deeplink/compose?${p.toString()}`;
+  }
+
+  const handleScheduleMeeting = (provider: 'google' | 'outlook' = 'google') => {
     if (!meetingTitle.trim() || !meetingDate) return;
-    const calUrl = buildGCalUrl({
+    const meetingInput = {
       title: meetingTitle, date: meetingDate, time: meetingTime,
       duration: meetingDuration, location: meetingLocation || undefined,
       notes: meetingNotes || undefined, attendeeEmail: data.email || undefined,
-    });
+    };
+    const calUrl = buildGCalUrl(meetingInput);
+    const outlookUrl = buildOutlookUrl(meetingInput);
+    const openUrl = provider === 'outlook' ? outlookUrl : calUrl;
     const meeting: LeadMeeting = {
       id: Date.now().toString(),
       title: meetingTitle.trim(),
@@ -530,14 +554,24 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     };
     setData(updated);
     onUpdate(updated);
-    window.open(calUrl, '_blank');
+    window.open(openUrl, '_blank');
     setShowMeetingModal(false);
     setMeetingTitle(''); setMeetingDate(''); setMeetingTime('10:00');
     setMeetingDuration(60); setMeetingLocation(''); setMeetingNotes('');
-    onToast?.('הפגישה נקבעה ונפתחה ב-Google Calendar ✓', 'success');
+    onToast?.(provider === 'outlook' ? 'הפגישה נקבעה ונפתחה ב-Outlook ✓' : 'הפגישה נקבעה ונפתחה ב-Google Calendar ✓', 'success');
   };
 
   // ── Status change with objection intercept ─────────────────────────────────
+  // Fire a status' automation playbook (single task + sequence) when a lead enters it.
+  const withAutomation = (updated: Lead, newStatus: LeadStatus): Lead => {
+    if (newStatus === data.status) return updated;   // only on real transition
+    const cfg = getStatusConfig(newStatus, statusConfigs ?? DEFAULT_STATUS_CONFIGS);
+    const autoTasks = buildAutomationTasks(cfg, updated, currentUser || '');
+    if (!autoTasks.length) return updated;
+    onToast?.(`⚙️ נוצרו ${autoTasks.length} משימות אוטומטיות לסטטוס "${newStatus}"`, 'info');
+    return { ...updated, tasks: [...updated.tasks, ...autoTasks] };
+  };
+
   const handleStatusChange = (newStatus: LeadStatus) => {
     if (newStatus === 'לא רלוונטי' && data.status !== 'לא רלוונטי') {
       setPendingStatus(newStatus);
@@ -545,7 +579,7 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
       return;
     }
     const newLog = appendActivity('status_change', `סטטוס שונה מ"${data.status}" ל"${newStatus}"`);
-    const updated = { ...data, status: newStatus, activityLog: newLog };
+    const updated = withAutomation({ ...data, status: newStatus, activityLog: newLog }, newStatus);
     setData(updated);
     onUpdate(updated);
   };
@@ -554,12 +588,12 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     if (!pendingStatus) return;
     const objText = selectedObjection || 'לא צוינה סיבה';
     const newLog = appendActivity('objection', `סומן כ"לא רלוונטי" — ${objText}`, { objection: objText });
-    const updated: Lead = {
+    const updated: Lead = withAutomation({
       ...data,
       status: pendingStatus,
       objection: objText,
       activityLog: newLog,
-    };
+    }, pendingStatus);
     setData(updated);
     onUpdate(updated);
     setShowObjectionModal(false);
@@ -616,6 +650,79 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     const updated = { ...data, tasks: data.tasks.filter(t => t.id !== id) };
     setData(updated);
     onUpdate(updated);
+  };
+
+  // ── AI: Next Best Action ────────────────────────────────────────────────────
+  const handleNextBestAction = async () => {
+    setNbaLoading(true);
+    setNba(null);
+    try {
+      const client = getAnthropicProxy();
+      const now = new Date();
+      const todayIso = now.toISOString().slice(0, 10);
+      const recentNotes = (data.notes ?? []).slice(-3).map(n => `- ${n.text}`).join('\n');
+      const recentActivity = (data.activityLog ?? []).slice(-5).map(a => `- ${a.type}: ${a.content}`).join('\n');
+      const ctx = [
+        `לקוח: ${data.company}${data.contactName ? ` (${data.contactName})` : ''}`,
+        `סטטוס: ${data.status}`,
+        data.source ? `מקור: ${data.source}` : '',
+        data.solutions?.length ? `פתרונות: ${data.solutions.map(s => s.name).join(', ')}` : '',
+        data.lastContactDate ? `יצירת קשר אחרונה: ${data.lastContactDate.slice(0, 10)}` : 'טרם נוצר קשר',
+        data.nextFollowUpDate ? `מעקב מתוכנן: ${data.nextFollowUpDate}` : '',
+        (data as { objection?: string }).objection ? `התנגדות: ${(data as { objection?: string }).objection}` : '',
+        recentNotes ? `הערות אחרונות:\n${recentNotes}` : '',
+        recentActivity ? `פעילות אחרונה:\n${recentActivity}` : '',
+      ].filter(Boolean).join('\n');
+
+      const resp = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 500,
+        system: `אתה מנהל מכירות בכיר. בהינתן מצב הליד, קבע את הפעולה הבאה הכי אפקטיבית לקידום העסקה. היום ${todayIso}. החזר אך ורק JSON:
+{"action":"כותרת קצרה לפעולה","reason":"משפט אחד למה זו הפעולה הנכונה עכשיו","taskDescription":"תיאור משימה מעשי","date":"YYYY-MM-DD","time":"HH:MM","priority":"high|medium|low"}
+החזר JSON בלבד.`,
+        messages: [{ role: 'user', content: ctx }],
+      });
+      const raw = (resp.content?.find((b: { type: string }) => b.type === 'text') as { text: string } | undefined)?.text ?? '';
+      const s = raw.replace(/```json\s*/i, '').replace(/```/g, '').trim();
+      const a = s.indexOf('{'), b = s.lastIndexOf('}');
+      const p = JSON.parse(a !== -1 ? s.slice(a, b + 1) : s) as { action?: string; reason?: string; taskDescription?: string; date?: string; time?: string; priority?: TaskPriority };
+      setNba({
+        action: p.action || 'המשך טיפול בליד',
+        reason: p.reason || '',
+        task: {
+          description: p.taskDescription || p.action || 'מעקב',
+          date: /^\d{4}-\d{2}-\d{2}$/.test(p.date || '') ? p.date! : todayIso,
+          time: /^\d{2}:\d{2}$/.test(p.time || '') ? p.time! : '09:00',
+          priority: ['high', 'medium', 'low'].includes(p.priority as string) ? p.priority! : 'medium',
+        },
+      });
+    } catch (err) {
+      console.error('[nba]', err);
+      onToast?.('לא הצלחתי להפיק המלצה — נסה שוב', 'error');
+    } finally {
+      setNbaLoading(false);
+    }
+  };
+
+  const createNbaTask = () => {
+    if (!nba) return;
+    const newLog = appendActivity('task', `משימה נוצרה (AI): ${nba.task.description} — ${nba.task.date} ${nba.task.time}`);
+    const updated = {
+      ...data,
+      tasks: [...data.tasks, {
+        id: Date.now().toString(),
+        description: nba.task.description,
+        date: nba.task.date,
+        time: nba.task.time,
+        completed: false,
+        priority: nba.task.priority,
+      }],
+      activityLog: newLog,
+    };
+    setData(updated);
+    onUpdate(updated);
+    setNba(null);
+    onToast?.('✅ המשימה נוצרה', 'success');
   };
 
   /* ── AI Company Research ─────────────────────────────────────────────────── */
@@ -774,7 +881,6 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
   const tabs: { key: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: 'details',  label: t('leadModal.tab.details'),  icon: <Building2 size={13} /> },
     { key: 'tasks',    label: t('leadModal.tab.tasks'),    icon: <ListChecks size={13} />, badge: data.tasks.filter(t => !t.completed).length },
-    { key: 'notes',    label: t('leadModal.tab.notes'),    icon: <FileText size={13} />,  badge: data.notes.length },
     { key: 'activity', label: t('leadModal.tab.activity'), icon: <Activity size={13} /> },
     { key: 'agents',   label: `${t('leadModal.tab.agents')} ⚡`, icon: <Sparkles size={13} /> },
   ];
@@ -809,32 +915,79 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
               </button>
 
               <div className="flex-1 text-right mx-4">
-                <div className="flex items-center gap-2 justify-end mb-1">
-                  <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${STATUS_COLORS[data.status]}`}>
-                    {data.status}
-                  </span>
-                  <h2 className="text-xl font-bold text-white leading-none">{data.company}</h2>
-                </div>
-                <p className="text-slate-400 text-sm">{data.contactName}</p>
-                <div className="flex items-center gap-3 mt-1.5 justify-end flex-wrap">
-                  {data.email && (
-                    <a href={`mailto:${data.email}`}
-                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors">
-                      <Mail size={11} />{data.email}
-                    </a>
-                  )}
-                  {data.phone && (
-                    <a href={`tel:${data.phone}`}
-                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors">
-                      <Phone size={11} />{data.phone}
-                    </a>
-                  )}
-                </div>
-                {data.source && (
-                  <div className="flex items-center gap-1 text-xs text-slate-500 justify-end mt-1">
-                    <span className="bg-slate-700/50 px-2 py-0.5 rounded-full">{data.source}</span>
-                    <span className="text-slate-600">מקור</span>
+                {editingContact ? (
+                  /* ── Edit contact details ─────────────────────────────── */
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 justify-end mb-1">
+                      <button onClick={toggleHot} title={data.isHot ? 'הסר סימון ליד חם' : 'סמן כליד חם'}
+                        className={`p-1 rounded transition-all ${data.isHot ? 'text-orange-400 hover:text-orange-300' : 'text-slate-600 hover:text-orange-400 hover:bg-slate-700'}`}>
+                        <Flame size={14} className={data.isHot ? 'fill-orange-400' : ''} />
+                      </button>
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${STATUS_COLORS[data.status]}`}>{data.status}</span>
+                      <input autoFocus value={data.company} onChange={e => setData(d => ({ ...d, company: e.target.value }))}
+                        placeholder="שם החברה"
+                        className="flex-1 bg-slate-700/80 border border-indigo-500/60 text-white text-base font-bold px-2 py-1 rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <input value={data.contactName} onChange={e => setData(d => ({ ...d, contactName: e.target.value }))}
+                      placeholder="שם איש הקשר"
+                      className="w-full bg-slate-700/80 border border-slate-600/60 text-slate-200 text-sm px-2 py-1 rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <input value={data.phone} onChange={e => setData(d => ({ ...d, phone: e.target.value }))}
+                        placeholder="טלפון" dir="ltr"
+                        className="bg-slate-700/80 border border-slate-600/60 text-slate-200 text-xs px-2 py-1 rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input value={data.email} onChange={e => setData(d => ({ ...d, email: e.target.value }))}
+                        placeholder="אימייל" dir="ltr"
+                        className="bg-slate-700/80 border border-slate-600/60 text-slate-200 text-xs px-2 py-1 rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <button onClick={() => setEditingContact(false)}
+                      className="mt-1 flex items-center gap-1 text-[11px] text-green-400 hover:text-green-300 justify-end w-full">
+                      <Check size={12} /> סיום עריכה (נשמר אוטומטית)
+                    </button>
                   </div>
+                ) : (
+                  /* ── Display contact details ──────────────────────────── */
+                  <>
+                    <div className="flex items-center gap-2 justify-end mb-1">
+                      <button onClick={() => setEditingContact(true)} title="ערוך פרטי קשר"
+                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-white transition-all">
+                        <Pencil size={12} />
+                      </button>
+                      <button onClick={toggleHot} title={data.isHot ? 'הסר סימון ליד חם' : 'סמן כליד חם'}
+                        className={`p-1 rounded transition-all ${data.isHot ? 'text-orange-400 hover:text-orange-300' : 'text-slate-600 hover:text-orange-400 hover:bg-slate-700'}`}>
+                        <Flame size={14} className={data.isHot ? 'fill-orange-400' : ''} />
+                      </button>
+                      {data.isHot && (
+                        <span className="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full border border-orange-500/40 bg-orange-500/15 text-orange-400">
+                          <Flame size={10} className="fill-orange-400" /> חם
+                        </span>
+                      )}
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${STATUS_COLORS[data.status]}`}>
+                        {data.status}
+                      </span>
+                      <h2 className="text-xl font-bold text-white leading-none">{data.company}</h2>
+                    </div>
+                    <p className="text-slate-400 text-sm">{data.contactName}</p>
+                    <div className="flex items-center gap-3 mt-1.5 justify-end flex-wrap">
+                      {data.email && (
+                        <a href={`mailto:${data.email}`}
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                          <Mail size={11} />{data.email}
+                        </a>
+                      )}
+                      {data.phone && (
+                        <a href={`tel:${data.phone}`}
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                          <Phone size={11} />{data.phone}
+                        </a>
+                      )}
+                    </div>
+                    {data.source && (
+                      <div className="flex items-center gap-1 text-xs text-slate-500 justify-end mt-1">
+                        <span className="bg-slate-700/50 px-2 py-0.5 rounded-full">{data.source}</span>
+                        <span className="text-slate-600">מקור</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -928,7 +1081,42 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   <><Brain size={13} />{t('leadModal.aiScore')}</>
                 )}
               </button>
+
+              {/* NEXT BEST ACTION BUTTON */}
+              <button
+                onClick={handleNextBestAction}
+                disabled={nbaLoading}
+                className="flex items-center gap-1.5 text-white px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50 transition-all"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#6366f1)' }}
+              >
+                {nbaLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                הפעולה הבאה
+              </button>
             </div>
+
+            {/* NEXT BEST ACTION RESULT */}
+            {nba && (
+              <div className="mx-4 md:mx-5 mb-4 rounded-xl p-3.5 border" style={{ background: 'rgba(124,58,237,0.12)', borderColor: 'rgba(139,92,246,0.4)' }}>
+                <div className="flex items-start gap-2">
+                  <Sparkles size={16} className="text-violet-300 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-sm text-white">🎯 {nba.action}</p>
+                    {nba.reason && <p className="text-xs text-slate-300 mt-0.5">{nba.reason}</p>}
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                      <span className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-800/70 text-slate-300">📋 {nba.task.description}</span>
+                      <span className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-800/70 text-slate-400">📅 {nba.task.date} {nba.task.time}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-2.5">
+                      <button onClick={createNbaTask}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-white" style={{ background: 'linear-gradient(135deg,#10b981,#059669)' }}>
+                        ✓ צור משימה
+                      </button>
+                      <button onClick={() => setNba(null)} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white">בטל</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* AI Research Panel */}
             {showInsight && (
@@ -1589,17 +1777,11 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     .map(s => sectionJSX[s.id] ? <div key={s.id}>{sectionJSX[s.id]}</div> : null);
                 })()}
 
-                {/* Save button */}
-                <button
-                  onClick={handleSave}
-                  className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
-                    saved
-                      ? 'bg-green-600 text-white shadow-sm shadow-green-500/20'
-                      : 'bg-white hover:bg-neutral-100 text-black shadow-sm hover:shadow-md'
-                  }`}
-                >
-                  {saved ? <><CheckCircle2 size={16} />{t('common.saved') || t('leadModal.save')}</> : <><Save size={16} />{t('leadModal.save')}</>}
-                </button>
+                {/* Auto-save — no manual save button needed */}
+                <div className="w-full py-2 flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
+                  <CheckCircle2 size={13} className="text-green-500" />
+                  השינויים נשמרים אוטומטית
+                </div>
 
                 {/* Delete button */}
                 {onDelete && (
@@ -1719,61 +1901,6 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
             )}
 
             {/* NOTES TAB */}
-            {activeTab === 'notes' && (
-              <div className="space-y-3">
-                <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-                  <div className="flex gap-2">
-                    <button onClick={addNote} disabled={!newNote.trim()}
-                      className="bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors">
-                      {t('leadModal.addNote')}
-                    </button>
-                    <div className="flex-1 relative">
-                      <input type="text" placeholder={t('leadModal.notes') + '...'} value={newNote}
-                        onChange={e => setNewNote(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && addNote()}
-                        className="w-full bg-slate-700/80 border border-slate-600/50 text-white placeholder-slate-500 pr-3 pl-10 py-2.5 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                      <button
-                        onClick={toggleNoteVoice}
-                        title={noteRecording ? t('leadModal.stopRecording') : t('leadModal.startRecording')}
-                        className={`absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all ${
-                          noteRecording
-                            ? 'bg-red-500 text-white animate-pulse'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-600'
-                        }`}
-                      >
-                        {noteRecording ? <MicOff size={14} /> : <Mic size={14} />}
-                      </button>
-                    </div>
-                  </div>
-                  {noteRecording && (
-                    <div className="mt-2 flex items-center gap-2 text-xs text-red-400">
-                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                      {t('ai.voiceRecording')}
-                    </div>
-                  )}
-                </div>
-                {data.notes.length === 0 ? (
-                  <div className="text-center text-slate-500 text-sm py-10 bg-slate-800/40 rounded-xl border border-slate-700/30">
-                    <div className="text-3xl mb-2">💬</div>
-                    {t('leadModal.noNotes')}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {[...data.notes].reverse().map(note => (
-                      <div key={note.id} className="bg-slate-800/80 rounded-xl px-4 py-3.5 border border-slate-700/50">
-                        <p className="text-sm text-slate-200 text-right leading-relaxed">{note.text}</p>
-                        <div className="flex justify-end gap-2 mt-2 text-xs text-slate-500">
-                          <span>{note.timestamp}</span>
-                          <span>·</span>
-                          <span className="text-slate-400">{note.author}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* AGENTS TAB */}
             {activeTab === 'agents' && (
               <AgentsTab
@@ -1799,6 +1926,46 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     <span className="text-sm font-bold text-slate-200">יומן פעילות</span>
                     <Activity size={15} className="text-indigo-400" />
                   </div>
+                </div>
+
+                {/* Add note — moved here from the old standalone Notes tab */}
+                <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
+                  <div className="flex gap-2">
+                    <button onClick={addNote} disabled={!newNote.trim()}
+                      className="bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors">
+                      {t('leadModal.addNote')}
+                    </button>
+                    <div className="flex-1 relative">
+                      <input type="text" placeholder={t('leadModal.notes') + '...'} value={newNote}
+                        onChange={e => setNewNote(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && addNote()}
+                        className="w-full bg-slate-700/80 border border-slate-600/50 text-white placeholder-slate-500 pr-3 pl-10 py-2.5 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <button
+                        onClick={() => noteDictation.toggle(newNote)}
+                        disabled={noteDictation.transcribing}
+                        title={noteDictation.recording ? t('leadModal.stopRecording') : t('leadModal.startRecording')}
+                        className={`absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all ${
+                          noteDictation.recording
+                            ? 'bg-red-500 text-white animate-pulse'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-600'
+                        }`}
+                      >
+                        {noteDictation.transcribing ? <Loader2 size={14} className="animate-spin" /> : noteDictation.recording ? <MicOff size={14} /> : <Mic size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                  {noteDictation.recording && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-red-400">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      🎤 מקליט... דבר חופשי ולחץ על העצירה כשתסיים
+                    </div>
+                  )}
+                  {noteDictation.transcribing && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-indigo-400">
+                      <Loader2 size={12} className="animate-spin" />
+                      מפענח עם AI...
+                    </div>
+                  )}
                 </div>
 
                 {/* Follow-up info */}
@@ -1927,6 +2094,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     { key: 'in_person', label: '🤝 פנים-אל-פנים' },
                     { key: 'meeting',   label: '📅 פגישה נקבעה' },
                     { key: 'quote',     label: '📄 הצעת מחיר' },
+                    { key: 'no_answer', label: '📵 לא ענה' },
                   ] as { key: ContactMethod; label: string }[]).map(opt => (
                     <button key={opt.key} onClick={() => { setContactType(opt.key); if (opt.key !== 'custom') setCustomContactLabel(''); }}
                       className={`py-2 px-1 rounded-xl text-xs font-semibold text-center transition-all border ${contactType === opt.key ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
@@ -1934,6 +2102,11 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                     </button>
                   ))}
                 </div>
+                {contactType === 'no_answer' && (
+                  <p className="text-[11px] text-amber-400 mt-2 text-right">
+                    📵 ייספר כניסיון ללא מענה (סה"כ עד כה: {(data.noAnswerCount ?? 0)}) — אוטומציות יכולות להגיב לזה
+                  </p>
+                )}
                 {/* Custom type row */}
                 <div className="mt-2">
                   <button
@@ -1959,11 +2132,37 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
               {/* Note */}
               <div>
                 <label className="text-xs text-slate-400 mb-2 block text-right">פרטי הפנייה</label>
-                <textarea
-                  value={contactNote} onChange={e => setContactNote(e.target.value)}
-                  rows={3} placeholder="תאר את הפנייה..."
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white text-right resize-none focus:outline-none focus:border-amber-500"
-                />
+                <div className="relative">
+                  <textarea
+                    value={contactNote} onChange={e => setContactNote(e.target.value)}
+                    rows={3} placeholder="תאר את הפנייה... או הקלט בקול 🎤"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 pl-10 text-sm text-white text-right resize-none focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => contactDictation.toggle(contactNote)}
+                    disabled={contactDictation.transcribing}
+                    title={contactDictation.recording ? 'עצור הקלטה' : 'הקלטה קולית'}
+                    className={`absolute left-2 top-2 p-1.5 rounded-lg transition-all ${
+                      contactDictation.recording
+                        ? 'bg-red-500 text-white animate-pulse'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    {contactDictation.transcribing ? <Loader2 size={14} className="animate-spin" /> : contactDictation.recording ? <MicOff size={14} /> : <Mic size={14} />}
+                  </button>
+                </div>
+                {contactDictation.recording && (
+                  <div className="mt-1.5 flex items-center gap-2 text-xs text-red-400">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    🎤 מקליט... דבר חופשי ולחץ על העצירה כשתסיים
+                  </div>
+                )}
+                {contactDictation.transcribing && (
+                  <div className="mt-1.5 flex items-center gap-2 text-xs text-indigo-400">
+                    <Loader2 size={12} className="animate-spin" /> מפענח עם AI...
+                  </div>
+                )}
               </div>
               {/* Follow-up */}
               <div>
@@ -2119,11 +2318,18 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   <Users2 size={12} className="text-purple-400" />
                 </div>
               )}
-              <button onClick={handleScheduleMeeting}
-                disabled={!meetingTitle.trim() || !meetingDate}
-                className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2">
-                <CalendarPlus size={15} />קבע ופתח ב-Google Calendar
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => handleScheduleMeeting('google')}
+                  disabled={!meetingTitle.trim() || !meetingDate}
+                  className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2">
+                  <CalendarPlus size={15} />Google
+                </button>
+                <button onClick={() => handleScheduleMeeting('outlook')}
+                  disabled={!meetingTitle.trim() || !meetingDate}
+                  className="flex-1 py-3 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2">
+                  <CalendarPlus size={15} />Outlook
+                </button>
+              </div>
             </div>
           </div>
         </div>

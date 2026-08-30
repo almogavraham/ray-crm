@@ -208,6 +208,44 @@ function EditPanel({ config, onChange, onCancel, onConfirm }: EditPanelProps) {
         </div>
       </div>
 
+      {/* Sequence / Playbook */}
+      {(() => {
+        const seq = config.automation?.sequence ?? [];
+        const setSeq = (next: typeof seq) => setAuto({ ...config.automation, sequence: next.length ? next : undefined });
+        return (
+          <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.15)' }}>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-slate-500">נוצר אוטומטית כשליד נכנס לסטטוס</span>
+              <span className="text-xs font-semibold text-violet-300">רצף משימות (Playbook)</span>
+            </div>
+            {seq.map((step, idx) => (
+              <div key={idx} className="flex gap-1.5 items-center">
+                <button onClick={() => setSeq(seq.filter((_, i) => i !== idx))} className="p-1 rounded hover:bg-red-500/20"><Trash2 size={12} style={{ color: 'rgba(248,113,113,0.7)' }} /></button>
+                <input type="number" min={0} max={90} value={step.daysOffset}
+                  onChange={e => setSeq(seq.map((s, i) => i === idx ? { ...s, daysOffset: parseInt(e.target.value) || 0 } : s))}
+                  title="ימים מהיום" className="w-12 px-1.5 py-1 rounded-lg text-xs text-center focus:outline-none"
+                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(99,102,241,0.2)', color: 'white' }} />
+                <select value={step.priority}
+                  onChange={e => setSeq(seq.map((s, i) => i === idx ? { ...s, priority: e.target.value as TaskPriority } : s))}
+                  className="px-1.5 py-1 rounded-lg text-xs focus:outline-none"
+                  style={{ background: 'rgba(15,20,40,0.9)', border: '1px solid rgba(99,102,241,0.2)', color: 'white' }}>
+                  {PRIORITY_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <input value={step.description}
+                  onChange={e => setSeq(seq.map((s, i) => i === idx ? { ...s, description: e.target.value } : s))}
+                  placeholder="תיאור המשימה..." className="flex-1 px-2 py-1 rounded-lg text-xs text-right focus:outline-none"
+                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(99,102,241,0.2)', color: 'white' }} dir="rtl" />
+              </div>
+            ))}
+            <button onClick={() => setSeq([...seq, { description: 'מעקב עם {{company}}', priority: 'medium' as TaskPriority, daysOffset: seq.length ? (seq[seq.length - 1].daysOffset + 2) : 1 }])}
+              className="w-full py-1.5 rounded-lg text-[11px] border border-dashed border-violet-500/40 text-violet-300 hover:bg-violet-500/10 flex items-center justify-center gap-1">
+              <Plus size={12} /> הוסף שלב לרצף
+            </button>
+            <p className="text-[9px] text-slate-500 text-right">טיפ: השתמש ב-&#123;&#123;company&#125;&#125; ו-&#123;&#123;contact&#125;&#125; · המספר = ימים מהיום</p>
+          </div>
+        );
+      })()}
+
       {/* Actions */}
       <div className="flex gap-2">
         <button
@@ -272,7 +310,15 @@ export default function StatusConfigEditor({ configs: initialConfigs, onSave, on
   };
   // ────────────────────────────────────────────────────────────────
 
+  // Fold a currently-open (uncommitted) edit back into a config list, so switching
+  // edits / adding a status / saving never silently drops what the user just typed.
+  const foldDraft = (list: StatusConfig[]): StatusConfig[] =>
+    (editingId && editDraft)
+      ? list.map(c => (c.id === editingId ? { ...editDraft, order: c.order } : c))
+      : list;
+
   const startEdit = (c: StatusConfig) => {
+    setConfigs(prev => foldDraft(prev));
     setEditingId(c.id);
     setEditDraft({ ...c });
   };
@@ -290,10 +336,12 @@ export default function StatusConfigEditor({ configs: initialConfigs, onSave, on
   };
 
   const addNew = () => {
-    const maxOrder = Math.max(...configs.map(c => c.order), -1);
+    const folded = foldDraft(configs);
+    const maxOrder = Math.max(...folded.map(c => c.order), -1);
     const blank = newBlankConfig(maxOrder + 1);
-    setConfigs(prev => [...prev, blank]);
-    startEdit(blank);
+    setConfigs([...folded, blank]);
+    setEditingId(blank.id);
+    setEditDraft({ ...blank });
   };
 
   const remove = (id: string) => {
@@ -303,8 +351,16 @@ export default function StatusConfigEditor({ configs: initialConfigs, onSave, on
 
   const handleSave = async () => {
     setSaving(true);
-    const reordered = [...configs].sort((a, b) => a.order - b.order).map((c, i) => ({ ...c, order: i }));
+    // Fold any in-progress edit back into the list first, so a name the user typed
+    // but didn't confirm with the inner "שמור" isn't silently lost when they click
+    // the bottom "שמור הגדרות" button.
+    const reordered = foldDraft(configs)
+      .filter(c => c.label.trim() !== '')                    // drop unnamed/blank statuses
+      .sort((a, b) => a.order - b.order)
+      .map((c, i) => ({ ...c, order: i }));
     await onSave(reordered);
+    setEditingId(null);
+    setEditDraft(null);
     setSaving(false);
     onClose();
   };
