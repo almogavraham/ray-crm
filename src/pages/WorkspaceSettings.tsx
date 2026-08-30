@@ -2,13 +2,13 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Building2, Mail, Users2, Image, Save, Copy,
   Lock, Eye, EyeOff, CheckCircle2, Check, AlertCircle, UserPlus, Trash2,
-  ChevronLeft, Crown, RefreshCw, Send, AlertTriangle,
+  ChevronLeft, Crown, RefreshCw, Send, AlertTriangle, Clock, ShieldCheck, Code2,
   Link, Loader2, ExternalLink,
   BarChart3, TrendingUp, Target, Award,
   Zap, Webhook, ChevronDown, ChevronUp, Shield,
   Palette, Moon, Monitor, Sparkles,
   Bell, DollarSign, Users, BarChart2, Briefcase, Plus, Minus, Settings2,
-  FileText, ClipboardList, X, Printer, Edit3, Brain, PlugZap,
+  FileText, ClipboardList, X, Printer, Edit3, Brain, PlugZap, Star,
 } from 'lucide-react';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { getAnthropicProxy } from '../lib/anthropicClient';
@@ -17,9 +17,12 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
-import { doc, updateDoc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, addDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, addDoc, query, where } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
+import AuditAndRecycle from '../components/AuditAndRecycle';
+import FormBuilder from '../components/FormBuilder';
 import type { WorkspaceProfile, TeamMember, Lead, StandaloneTask, AppSettings } from '../types';
+import type { StatusConfig } from '../lib/statusConfig';
 
 interface Props {
   workspace: WorkspaceProfile;
@@ -34,9 +37,29 @@ interface Props {
   onSettingsChange?: (s: AppSettings) => void;
   integrationsPanel?: React.ReactNode;
   defaultSection?: Section;
+  /** Live lead statuses — the same source of truth the leads board uses. */
+  statusConfigs?: StatusConfig[];
+  onSaveStatusConfigs?: (configs: StatusConfig[]) => Promise<void> | void;
+  /** Patch arbitrary workspace fields (lead sources, card layout, …). */
+  onWorkspaceFieldUpdate?: (updates: Partial<WorkspaceProfile>) => Promise<void>;
 }
 
-type Section = 'workspace' | 'password' | 'team' | 'performance' | 'plan' | 'portal' | 'appearance' | 'revenue' | 'notifications' | 'sales' | 'proposals' | 'marketing-budget' | 'custom-fields' | 'integrations';
+/**
+ * `revenue` was removed (the tab duplicated the marketing-budget and performance
+ * views), `sales` was folded into `custom-fields` — both are "how the lead card
+ * behaves" settings and splitting them made people hunt — and `proposals` moved
+ * to the Sales Agent page, where the quote manager belongs next to the rest of
+ * the selling tools.
+ */
+interface PendingInvite {
+  token: string;
+  email: string;
+  role: 'מנהל' | 'סוכן';
+  invitedAt?: string;
+  createdAt?: string;
+}
+
+type Section = 'safety' | 'forms' | 'pipeline' | 'workspace' | 'password' | 'team' | 'performance' | 'plan' | 'portal' | 'appearance' | 'notifications' | 'marketing-budget' | 'custom-fields' | 'integrations';
 
 /* ── Finance types & constants ──────────────────────────────────────────── */
 interface FinanceEntry {
@@ -111,6 +134,7 @@ const INPUT = 'w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none';
 export default function WorkspaceSettings({
   workspace, team, leads, standaloneTask, currentUserUid, currentUserEmail, onToast, onWorkspaceUpdate,
   settings, onSettingsChange, integrationsPanel, defaultSection,
+  statusConfigs = [], onSaveStatusConfigs, onWorkspaceFieldUpdate,
 }: Props) {
   const { t, dir } = useLang();
   const { isDark, c } = useTheme();
@@ -172,6 +196,30 @@ export default function WorkspaceSettings({
   // ── Team invite state ────────────────────────────────────────────────────
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole,  setInviteRole]  = useState<'מנהל' | 'סוכן'>('סוכן');
+  const [inviteLink,  setInviteLink]  = useState('');
+  const [inviteSent,  setInviteSent]  = useState<'idle' | 'sent' | 'failed'>('idle');
+  /** Invites issued for this workspace that nobody has accepted yet. */
+  const [pending, setPending] = useState<PendingInvite[]>([]);
+  const [pendingBusy, setPendingBusy] = useState<string | null>(null);
+
+  /* ── Pipeline split ─────────────────────────────────────────────────────── */
+  const [splitEnabled,  setSplitEnabled]  = useState<boolean>(Boolean(workspace.pipelineSplit?.enabled));
+  const [splitStatuses, setSplitStatuses] = useState<string[]>(workspace.pipelineSplit?.opportunityStatuses ?? []);
+  const [splitSaving,   setSplitSaving]   = useState(false);
+
+  const saveSplit = async () => {
+    setSplitSaving(true);
+    try {
+      await updateDoc(doc(db, 'workspaces', workspace.id), {
+        pipelineSplit: { enabled: splitEnabled, opportunityStatuses: splitStatuses },
+      });
+      onToast(splitEnabled && splitStatuses.length
+        ? 'הפיצול נשמר — רענן כדי לראות את מסך ההזדמנויות'
+        : 'ההגדרה נשמרה', 'success');
+    } catch (e) {
+      onToast(`שמירה נכשלה: ${(e as Error).message}`, 'error');
+    } finally { setSplitSaving(false); }
+  };
   const [inviting,    setInviting]    = useState(false);
 
   // ── Team editing state ───────────────────────────────────────────────────
@@ -324,6 +372,8 @@ export default function WorkspaceSettings({
   const handleInvite = async () => {
     if (!inviteEmail.trim()) { onToast(t('settings.inviteEmailRequired'), 'error'); return; }
     setInviting(true);
+    setInviteSent('idle');
+    setInviteLink('');
     try {
       // Create invite token in Firestore
       const token = `inv_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -337,7 +387,28 @@ export default function WorkspaceSettings({
       });
       const inviteUrl = `${window.location.origin}/?token=${token}`;
       await navigator.clipboard.writeText(inviteUrl).catch(() => {});
-      onToast(t('settings.inviteCreated'), 'success');
+      setInviteLink(inviteUrl);
+
+      // This screen only ever created a link and copied it — no mail was sent,
+      // which made "invite" mean "deliver this URL yourself". Send it through
+      // the RAY platform sender (noreply@ray-crm.com), and report honestly when
+      // that fails instead of claiming success.
+      try {
+        const { sendInviteEmail } = await import('../lib/email');
+        await sendInviteEmail({
+          toEmail: inviteEmail.trim(),
+          invitedBy: workspace.name || 'RAY',
+          role: inviteRole,
+          inviteLink: inviteUrl,
+          workspaceId: workspace.id,
+        });
+        setInviteSent('sent');
+        onToast(`ההזמנה נשלחה ל-${inviteEmail.trim()} ✓`, 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        setInviteSent('failed');
+        onToast(`ההזמנה נוצרה אך המייל לא נשלח${msg ? ': ' + msg : ''} — הקישור הועתק ללוח`, 'error');
+      }
       setInviteEmail('');
     } catch (err) {
       console.error(err);
@@ -345,6 +416,67 @@ export default function WorkspaceSettings({
     } finally {
       setInviting(false);
     }
+  };
+
+  // ── Pending invites ──────────────────────────────────────────────────────
+  // Scoped to this workspace: the invites collection is shared platform-wide,
+  // so an unfiltered listener would show other customers' pending invitations.
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, 'invites'), where('workspaceId', '==', workspace.id)),
+      snap => {
+        const rows: PendingInvite[] = [];
+        snap.forEach(d => {
+          const v = d.data() as PendingInvite & { used?: boolean };
+          if (!v.used) rows.push({ ...v, token: d.id });
+        });
+        rows.sort((a, b) => (b.invitedAt ?? b.createdAt ?? '').localeCompare(a.invitedAt ?? a.createdAt ?? ''));
+        setPending(rows);
+      },
+      err => console.error('[pending invites]', err),
+    );
+    return () => unsub();
+  }, [workspace.id]);
+
+  const resendInvite = async (inv: PendingInvite) => {
+    setPendingBusy(inv.token);
+    try {
+      const url = `${window.location.origin}/?token=${inv.token}`;
+      await updateDoc(doc(db, 'invites', inv.token), { invitedAt: new Date().toISOString() });
+      const { sendInviteEmail } = await import('../lib/email');
+      await sendInviteEmail({
+        toEmail: inv.email,
+        invitedBy: workspace.name || 'RAY',
+        role: inv.role,
+        inviteLink: url,
+        workspaceId: workspace.id,
+      });
+      onToast(`הקישור נשלח שוב ל-${inv.email} ✓`, 'success');
+    } catch (err) {
+      await navigator.clipboard?.writeText(`${window.location.origin}/?token=${inv.token}`).catch(() => {});
+      onToast(`השליחה נכשלה${err instanceof Error ? ': ' + err.message : ''} — הקישור הועתק ללוח`, 'error');
+    } finally { setPendingBusy(null); }
+  };
+
+  const changeInviteRole = async (inv: PendingInvite, role: 'מנהל' | 'סוכן') => {
+    setPendingBusy(inv.token);
+    try {
+      await updateDoc(doc(db, 'invites', inv.token), { role });
+      onToast(`ההרשאה עודכנה ל-${role} ✓`, 'success');
+    } catch (err) {
+      onToast(`עדכון ההרשאה נכשל${err instanceof Error ? ': ' + err.message : ''}`, 'error');
+    } finally { setPendingBusy(null); }
+  };
+
+  const revokeInvite = async (inv: PendingInvite) => {
+    if (!window.confirm(`לבטל את ההזמנה של ${inv.email}? הקישור שנשלח יפסיק לעבוד.`)) return;
+    setPendingBusy(inv.token);
+    try {
+      await deleteDoc(doc(db, 'invites', inv.token));
+      onToast('ההזמנה בוטלה', 'info');
+    } catch (err) {
+      onToast(`ביטול ההזמנה נכשל${err instanceof Error ? ': ' + err.message : ''}`, 'error');
+    } finally { setPendingBusy(null); }
   };
 
   // ── Email config state ───────────────────────────────────────────────────
@@ -579,11 +711,16 @@ export default function WorkspaceSettings({
     conversionTarget: (workspace as any).salesSettings?.conversionTarget ?? 20,
     followUpDays: (workspace as any).salesSettings?.followUpDays ?? 5,
     proposalValidDays: (workspace as any).salesSettings?.proposalValidDays ?? 14,
-    pipelineStages: (workspace as any).salesSettings?.pipelineStages ?? ['חדש', 'בתהליך', 'הצעת מחיר', 'משא ומתן', 'לקוח פעיל'],
     proposalFooter: (workspace as any).salesSettings?.proposalFooter ?? '',
   });
   const [salesSaving, setSalesSaving] = useState(false);
   const [newStageName, setNewStageName] = useState('');
+  // Lead sources — read live from the workspace so this page, the leads board and
+  // the lead card all edit one shared list.
+  const leadSourcesList: string[] = workspace.leadSources?.length
+    ? workspace.leadSources
+    : ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
+  const [newSourceName, setNewSourceName] = useState('');
 
   // ── Custom Fields ─────────────────────────────────────────────────────────
   const [customFieldDefs, setCustomFieldDefs] = useState<import('../types').CustomFieldDef[]>(
@@ -633,14 +770,14 @@ export default function WorkspaceSettings({
     { key: 'team',             label: t('settings.teamManagement'),   icon: Users2        },
     { key: 'integrations',     label: 'אינטגרציות',                   icon: PlugZap       },
     { key: 'performance',      label: 'ביצועי צוות',                  icon: BarChart3     },
-    { key: 'revenue',          label: 'הכנסות',                       icon: TrendingUp    },
     { key: 'notifications',    label: 'התראות',                       icon: Bell          },
-    { key: 'sales',            label: 'הגדרות מכירה',                 icon: Settings2     },
-    { key: 'proposals',        label: 'הצעות מחיר',                   icon: FileText      },
     { key: 'marketing-budget', label: 'תקציב שיווק',                  icon: Brain         },
-    { key: 'custom-fields',    label: 'שדות מותאמים',                 icon: ClipboardList },
+    { key: 'custom-fields',    label: 'שדות והגדרות מכירה',           icon: ClipboardList },
     { key: 'portal',           label: 'פורטל לקוחות',                 icon: Link          },
     { key: 'appearance',       label: 'מראה ועיצוב',                  icon: Palette       },
+    { key: 'pipeline',         label: 'פיצול פייפליין',               icon: Target        },
+    { key: 'forms',            label: 'טפסים לאתר',                   icon: Code2         },
+    { key: 'safety',           label: 'גיבוי ושחזור',                 icon: ShieldCheck   },
     { key: 'plan',             label: t('settings.planManagement'),   icon: Crown         },
   ];
 
@@ -853,13 +990,90 @@ export default function WorkspaceSettings({
                     className="w-full disabled:opacity-60 text-white py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2"
                     style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
                     {inviting ? <RefreshCw size={14} className="animate-spin" /> : <UserPlus size={14} />}
-                    {t('team.sendInvite')}
+                    {inviting ? 'שולח...' : t('team.sendInvite')}
                   </button>
+
+                  {inviteLink && (
+                    <div className="rounded-xl p-3 text-right"
+                      style={{
+                        background: inviteSent === 'sent' ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+                        border: `1px solid ${inviteSent === 'sent' ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                      }}>
+                      <div className="text-xs font-bold mb-2"
+                        style={{ color: inviteSent === 'sent' ? '#34d399' : '#fbbf24' }}>
+                        {inviteSent === 'sent'
+                          ? '✅ ההזמנה נשלחה במייל. הקישור גם הועתק ללוח:'
+                          : '⚠️ המייל לא נשלח — הקישור הועתק ללוח, שלח אותו ידנית:'}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { navigator.clipboard?.writeText(inviteLink).catch(() => {}); onToast('הקישור הועתק ✓', 'success'); }}
+                          className="flex-shrink-0 text-[11px] font-bold px-2 py-1 rounded-lg"
+                          style={{ background: c.subtleBg, color: c.textSecondary, border: `1px solid ${c.cardBorder}` }}>
+                          העתק
+                        </button>
+                        <code className="flex-1 min-w-0 truncate text-[11px]" dir="ltr"
+                          style={{ color: c.textMuted }}>{inviteLink}</code>
+                      </div>
+                    </div>
+                  )}
                   <p className="text-xs text-center" style={{ color: c.textMuted }}>
                     🔗 קישור הזמנה יועתק ללוח — שלח אותו לחבר הצוות
                   </p>
                 </div>
               </Card>
+
+              {/* ── Pending invites ──────────────────────────────────── */}
+              {pending.length > 0 && (
+                <Card title={`הזמנות ממתינות (${pending.length})`} icon={<Clock size={18} />}>
+                  <div className="space-y-2">
+                    {pending.map(inv => {
+                      const busy = pendingBusy === inv.token;
+                      const when = inv.invitedAt ?? inv.createdAt;
+                      return (
+                        <div key={inv.token}
+                          className="rounded-xl px-3 py-2.5 flex flex-wrap items-center gap-2 justify-between"
+                          style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button onClick={() => revokeInvite(inv)} disabled={busy}
+                              title="בטל הזמנה"
+                              className="p-1.5 rounded-lg disabled:opacity-40"
+                              style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)' }}>
+                              <Trash2 size={13} style={{ color: '#f87171' }} />
+                            </button>
+                            <button onClick={() => resendInvite(inv)} disabled={busy}
+                              title="שלח את הקישור שוב"
+                              className="px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"
+                              style={{ background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8' }}>
+                              {busy ? <RefreshCw size={12} className="animate-spin" /> : <Send size={12} />}
+                              שלח שוב
+                            </button>
+                            <select
+                              value={inv.role} disabled={busy}
+                              onChange={e => changeInviteRole(inv, e.target.value as 'מנהל' | 'סוכן')}
+                              className="text-[11px] font-bold rounded-lg px-2 py-1.5 disabled:opacity-40"
+                              style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary }}>
+                              <option value="סוכן">👤 סוכן</option>
+                              <option value="מנהל">👑 מנהל</option>
+                            </select>
+                          </div>
+                          <div className="text-right min-w-0 flex-1">
+                            <div className="text-sm font-bold truncate" style={{ color: c.textPrimary }} dir="ltr">{inv.email}</div>
+                            <div className="text-[11px] flex items-center gap-1.5 justify-end" style={{ color: c.textMuted }}>
+                              <span className="px-1.5 py-0.5 rounded font-bold"
+                                style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }}>ממתין</span>
+                              {when && <span>הוזמן {new Date(when).toLocaleDateString('he-IL')}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] mt-3 text-right" style={{ color: c.textMuted }}>
+                    ההזמנה תיעלם מכאן ברגע שהמשתמש ישלים הרשמה.
+                  </p>
+                </Card>
+              )}
 
               {/* ── Search ────────────────────────────────────────────── */}
               {team.length > 3 && (
@@ -1586,10 +1800,6 @@ export default function WorkspaceSettings({
             </div>
           )}
 
-          {/* ── REVENUE ──────────────────────────────────────────────── */}
-          {section === 'revenue' && (
-            <RevenueManager workspaceId={workspace.id} leads={leads} />
-          )}
 
           {/* ── NOTIFICATIONS ────────────────────────────────────────── */}
           {section === 'notifications' && (
@@ -1713,7 +1923,7 @@ export default function WorkspaceSettings({
           )}
 
           {/* ── SALES SETTINGS ───────────────────────────────────────── */}
-          {section === 'sales' && (
+          {section === 'custom-fields' && (
             <div className="space-y-4" dir="rtl">
               {/* Monthly targets */}
               <Card title="יעדים חודשיים" icon={<Target size={18} />}>
@@ -1741,39 +1951,55 @@ export default function WorkspaceSettings({
                 </div>
               </Card>
 
-              {/* Pipeline stages */}
-              <Card title="שלבי Pipeline" icon={<BarChart2 size={18} />}>
+              {/* Pipeline stages — bound to the SAME statusConfigs the leads board uses */}
+              <Card title="שלבי Pipeline (סטטוסי לידים)" icon={<BarChart2 size={18} />}>
+                <p className="text-xs mb-3" style={{ color: c.textMuted }}>
+                  אלו בדיוק הסטטוסים שמופיעים במסך הלידים ובקנבן — כל שינוי כאן מתעדכן שם מיד.
+                </p>
                 <div className="space-y-2 mb-3">
-                  {salesSettings.pipelineStages.map((stage, i) => (
-                    <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2"
+                  {[...statusConfigs].sort((a, b) => a.order - b.order).map((cfg, i) => (
+                    <div key={cfg.id} className="flex items-center gap-2 rounded-xl px-3 py-2"
                       style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
-                      <span className="text-xs font-bold w-5 text-center flex-shrink-0"
-                        style={{ color: c.textMuted }}>{i + 1}</span>
+                      <span className="text-xs font-bold w-5 text-center flex-shrink-0" style={{ color: c.textMuted }}>{i + 1}</span>
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: cfg.color }} />
+                      <span className="flex-shrink-0">{cfg.emoji}</span>
                       <input
-                        type="text" value={stage}
-                        onChange={e => setSalesSettings(s => ({
-                          ...s,
-                          pipelineStages: s.pipelineStages.map((st, j) => j === i ? e.target.value : st)
-                        }))}
+                        type="text" value={cfg.label}
+                        onChange={e => {
+                          const next = statusConfigs.map(s => s.id === cfg.id ? { ...s, label: e.target.value } : s);
+                          onSaveStatusConfigs?.(next);
+                        }}
                         className="flex-1 bg-transparent text-sm text-right focus:outline-none"
                         style={{ color: c.textPrimary }}
                       />
-                      {i >= 3 && (
+                      {!cfg.pipeline && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0"
+                          style={{ background: c.cardBorder, color: c.textMuted }}>מחוץ לקנבן</span>
+                      )}
+                      {!cfg.isDefault && (
                         <button
-                          onClick={() => setSalesSettings(s => ({ ...s, pipelineStages: s.pipelineStages.filter((_, j) => j !== i) }))}
+                          onClick={() => onSaveStatusConfigs?.(statusConfigs.filter(s => s.id !== cfg.id))}
                           className="flex-shrink-0 p-1 rounded-lg transition-colors"
-                          style={{ color: '#ef4444' }}>
+                          style={{ color: '#ef4444' }} title="מחק סטטוס">
                           <Minus size={13} />
                         </button>
                       )}
                     </div>
                   ))}
+                  {statusConfigs.length === 0 && (
+                    <p className="text-xs text-center py-3" style={{ color: c.textMuted }}>טוען סטטוסים…</p>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
-                      if (!newStageName.trim()) return;
-                      setSalesSettings(s => ({ ...s, pipelineStages: [...s.pipelineStages, newStageName.trim()] }));
+                      const name = newStageName.trim();
+                      if (!name || !onSaveStatusConfigs) return;
+                      if (statusConfigs.some(s => s.label === name)) { onToast('סטטוס בשם הזה כבר קיים', 'error'); return; }
+                      onSaveStatusConfigs([...statusConfigs, {
+                        id: name, label: name, color: '#6366f1', emoji: '📌',
+                        order: statusConfigs.length, isDefault: false, pipeline: true,
+                      }]);
                       setNewStageName('');
                     }}
                     className="px-3 py-2 rounded-xl text-xs font-bold text-white flex-shrink-0"
@@ -1783,17 +2009,74 @@ export default function WorkspaceSettings({
                   <input
                     type="text" value={newStageName} onChange={e => setNewStageName(e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && newStageName.trim()) {
-                        setSalesSettings(s => ({ ...s, pipelineStages: [...s.pipelineStages, newStageName.trim()] }));
-                        setNewStageName('');
-                      }
+                      if (e.key !== 'Enter') return;
+                      const name = newStageName.trim();
+                      if (!name || !onSaveStatusConfigs) return;
+                      if (statusConfigs.some(s => s.label === name)) { onToast('סטטוס בשם הזה כבר קיים', 'error'); return; }
+                      onSaveStatusConfigs([...statusConfigs, {
+                        id: name, label: name, color: '#6366f1', emoji: '📌',
+                        order: statusConfigs.length, isDefault: false, pipeline: true,
+                      }]);
+                      setNewStageName('');
                     }}
-                    placeholder="שם שלב חדש..."
+                    placeholder="שם סטטוס חדש..."
                     className="flex-1 rounded-xl px-3 py-2 text-sm text-right focus:outline-none"
                     style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textPrimary }}
                   />
                 </div>
               </Card>
+
+              {/* Lead sources — same list edited from the leads page & lead card */}
+              {onWorkspaceFieldUpdate && (
+                <Card title="מקורות הגעה" icon={<Star size={18} />}>
+                  <p className="text-xs mb-3" style={{ color: c.textMuted }}>
+                    המקורות שניתן לבחור בכרטיס הליד וביצירת ליד חדש.
+                  </p>
+                  <div className="space-y-2 mb-3">
+                    {leadSourcesList.map((src, i) => (
+                      <div key={src} className="flex items-center gap-2 rounded-xl px-3 py-2"
+                        style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}` }}>
+                        <span className="text-xs font-bold w-5 text-center flex-shrink-0" style={{ color: c.textMuted }}>{i + 1}</span>
+                        <span className="flex-1 text-sm text-right" style={{ color: c.textPrimary }}>{src}</span>
+                        <button
+                          onClick={() => onWorkspaceFieldUpdate({ leadSources: leadSourcesList.filter(s => s !== src) })}
+                          className="flex-shrink-0 p-1 rounded-lg transition-colors"
+                          style={{ color: '#ef4444' }} title="מחק מקור">
+                          <Minus size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const name = newSourceName.trim();
+                        if (!name) return;
+                        if (leadSourcesList.includes(name)) { onToast('מקור בשם הזה כבר קיים', 'error'); return; }
+                        onWorkspaceFieldUpdate({ leadSources: [...leadSourcesList, name] });
+                        setNewSourceName('');
+                      }}
+                      className="px-3 py-2 rounded-xl text-xs font-bold text-white flex-shrink-0"
+                      style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+                      <Plus size={13} />
+                    </button>
+                    <input
+                      type="text" value={newSourceName} onChange={e => setNewSourceName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key !== 'Enter') return;
+                        const name = newSourceName.trim();
+                        if (!name) return;
+                        if (leadSourcesList.includes(name)) { onToast('מקור בשם הזה כבר קיים', 'error'); return; }
+                        onWorkspaceFieldUpdate({ leadSources: [...leadSourcesList, name] });
+                        setNewSourceName('');
+                      }}
+                      placeholder="שם מקור חדש..."
+                      className="flex-1 rounded-xl px-3 py-2 text-sm text-right focus:outline-none"
+                      style={{ background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textPrimary }}
+                    />
+                  </div>
+                </Card>
+              )}
 
               {/* Objection types */}
               {settings && onSettingsChange && (
@@ -1855,7 +2138,7 @@ export default function WorkspaceSettings({
           )}
 
           {/* ── PROPOSALS ─────────────────────────────────────────────── */}
-          {section === 'proposals' && (
+          {section === 'custom-fields' && (
             <div className="space-y-4" dir="rtl">
               {/* Follow-up & Proposal defaults */}
               <Card title="הגדרות פולואפ והצעת מחיר" icon={<Settings2 size={18} />}>
@@ -1915,15 +2198,96 @@ export default function WorkspaceSettings({
                 </div>
               </Card>
 
-              <ProposalManager
-                workspaceId={workspace.id}
-                leads={leads}
-                workspaceName={workspace.name}
-                workspaceEmail={workspace.email}
-                defaultFooter={salesSettings.proposalFooter}
-                defaultValidDays={salesSettings.proposalValidDays}
-                onToast={onToast}
-              />
+            </div>
+          )}
+
+          {/* ── PIPELINE SPLIT ────────────────────────────────────────── */}
+          {section === 'pipeline' && (
+            <div className="space-y-4" dir="rtl">
+              <Card title="פיצול לידים והזדמנויות מכירה" icon={<Target size={18} />}>
+                <p className="text-xs mb-4 leading-relaxed" style={{ color: c.textMuted }}>
+                  מפצל את הפייפליין לשני מסכים: <b>לידים</b> למי שעדיין בבדיקה, ו<b>הזדמנויות מכירה</b>
+                  למי שכבר בתהליך מכירה פעיל. הליד עצמו לא משתכפל — הוא עובר בין המסכים לפי הסטטוס שלו,
+                  כך שאין המרה ואין רשומה כפולה לתחזק.
+                </p>
+
+                <label className="flex items-center gap-2 justify-end cursor-pointer mb-4">
+                  <span className="text-sm font-bold" style={{ color: c.textSecondary }}>
+                    {splitEnabled ? 'הפיצול פעיל' : 'הפיצול כבוי — מסך אחד לכל הלידים'}
+                  </span>
+                  <input type="checkbox" checked={splitEnabled}
+                    onChange={e => setSplitEnabled(e.target.checked)}
+                    className="w-4 h-4 accent-indigo-600" />
+                </label>
+
+                {splitEnabled && (
+                  <>
+                    <p className="text-[11px] mb-2 text-right" style={{ color: c.textMuted }}>
+                      בחר אילו סטטוסים שייכים למסך "הזדמנויות מכירה". כל השאר יישארו במסך הלידים.
+                    </p>
+                    <div className="flex flex-wrap gap-2 justify-end mb-4">
+                      {(statusConfigs ?? []).map(sc => {
+                        const on = splitStatuses.includes(sc.label);
+                        return (
+                          <button key={sc.id} type="button"
+                            onClick={() => setSplitStatuses(prev =>
+                              on ? prev.filter(x => x !== sc.label) : [...prev, sc.label])}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold transition-colors"
+                            style={on
+                              ? { background: `${sc.color}22`, border: `1px solid ${sc.color}`, color: sc.color }
+                              : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
+                            {sc.emoji} {sc.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {splitStatuses.length === 0 && (
+                      <p className="text-[11px] mb-3 text-right" style={{ color: '#fbbf24' }}>
+                        לא נבחר אף סטטוס — עד שתבחר, הפיצול לא ייכנס לתוקף.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                <button onClick={saveSplit} disabled={splitSaving}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-60"
+                  style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+                  {splitSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                  שמור
+                </button>
+              </Card>
+            </div>
+          )}
+
+          {/* ── WEB FORMS ─────────────────────────────────────────────── */}
+          {section === 'forms' && (
+            <div className="space-y-4" dir="rtl">
+              <Card title="טפסים לאתר" icon={<Code2 size={18} />}>
+                <FormBuilder
+                  workspaceId={workspace.id}
+                  statuses={(statusConfigs ?? []).map(s => s.label)}
+                  sources={workspace.leadSources ?? []}
+                  team={team}
+                  onToast={onToast}
+                />
+              </Card>
+            </div>
+          )}
+
+          {/* ── SAFETY: audit log + recycle bin ───────────────────────── */}
+          {section === 'safety' && (
+            <div className="space-y-4" dir="rtl">
+              <Card title="יומן פעילות וסל מיחזור" icon={<ShieldCheck size={18} />}>
+                <p className="text-xs mb-4 leading-relaxed" style={{ color: c.textMuted }}>
+                  כל מחיקה, ייבוא ושינוי קבוצתי מתועדים כאן, ולידים שנמחקו נשמרים במלואם וניתנים לשחזור.
+                  בנוסף נשמר גיבוי יומי אוטומטי של כל הלידים בשרת.
+                </p>
+                <AuditAndRecycle
+                  workspaceId={workspace.id}
+                  onToast={onToast}
+                  onRestored={() => onToast('רענן את דף הלידים כדי לראות את הליד המשוחזר', 'info')}
+                />
+              </Card>
             </div>
           )}
 
@@ -2926,7 +3290,13 @@ function RevenueManager({ workspaceId, leads }: { workspaceId: string; leads: Le
 }
 
 /* ── ProposalManager ─────────────────────────────────────────────────────── */
-function ProposalManager({ workspaceId, leads, workspaceName, workspaceEmail, defaultFooter, defaultValidDays, onToast }: {
+/**
+ * Exported so the Sales Agent page can host it — the quote manager belongs
+ * beside the selling tools, not buried in settings. It stays defined here
+ * because it leans on this module's Card/Field/style helpers; Agents pulls it
+ * through a lazy import so the settings bundle only loads when the tab opens.
+ */
+export function ProposalManager({ workspaceId, leads, workspaceName, workspaceEmail, defaultFooter, defaultValidDays, onToast }: {
   workspaceId: string;
   leads: Lead[];
   workspaceName: string;

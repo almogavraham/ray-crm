@@ -23,6 +23,7 @@ import type { SocialConnection } from '../lib/socialConnections';
 import { getAnthropicProxy } from '../lib/anthropicClient';
 import GoogleAdsCampaigns from '../components/GoogleAdsCampaigns';
 import { loadAgentConfig } from '../lib/gmailAgent';
+import { oauthOriginsForDisplay } from '../lib/oauthOrigins';
 
 interface Props {
   leads: Lead[];
@@ -775,9 +776,10 @@ function EmailSection({ workspace, onToast, onWorkspaceUpdate }: {
                         { n:1, icon:'🌐', title:'פתח Google Cloud Console', body: <span>כנס ל-<a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="underline font-semibold" style={{ color:'#818cf8' }}>console.cloud.google.com</a> ← ודא שאתה מחובר לחשבון Google הנכון</span> },
                         { n:2, icon:'📁', title:'צור פרויקט חדש', body: <span>לחץ על שם הפרויקט בתפריט העליון ← <strong style={{ color: c.textPrimary }}>New Project</strong> ← שם: "RAY CRM" ← <strong style={{ color: c.textPrimary }}>Create</strong></span> },
                         { n:3, icon:'✅', title:'הפעל Gmail API', body: <span><strong style={{ color: c.textPrimary }}>APIs & Services → Library</strong> ← חפש <strong style={{ color: c.textPrimary }}>"Gmail API"</strong> ← לחץ <strong style={{ color: c.textPrimary }}>Enable</strong></span> },
-                        { n:4, icon:'🔑', title:'צור OAuth 2.0 Client ID', body: <span><strong style={{ color: c.textPrimary }}>APIs & Services → Credentials → + Create Credentials → OAuth client ID</strong><br/>Application type: <strong style={{ color: c.textPrimary }}>Web application</strong></span> },
-                        { n:5, icon:'🔗', title:'הוסף Authorized JS Origins', body: <span>תחת "Authorized JavaScript origins" לחץ <strong style={{ color: c.textPrimary }}>+ Add URI</strong> והוסף:<br/><code className="font-mono text-xs px-1.5 py-0.5 rounded mt-1 inline-block" style={{ background:`${EMAIL_COLOR}12`, color: EMAIL_COLOR }}>{typeof window !== 'undefined' ? window.location.origin : 'https://ray-crm-app.web.app'}</code></span> },
-                        { n:6, icon:'📋', title:'העתק Client ID', body: <span>לחץ <strong style={{ color: c.textPrimary }}>Create</strong> ← בחלון שנפתח — העתק את ה-<strong style={{ color: c.textPrimary }}>Client ID</strong> ← הדבק למטה<br/><span className="text-[10px]" style={{ color: c.textMuted }}>פורמט: 123456789-xxxxx.apps.googleusercontent.com</span></span> },
+                        { n:4, icon:'🛡️', title:'הגדר מסך הסכמה (OAuth consent screen)', body: <span><strong style={{ color: c.textPrimary }}>APIs & Services → OAuth consent screen</strong> ← בחר <strong style={{ color: c.textPrimary }}>Internal</strong> אם המייל שייך ל-Google Workspace של הארגון.<br/><span className="text-[10px]" style={{ color:'#10b981' }}>Internal חוסך אישור אבטחה של Google לקריאת מיילים — External מחייב בדיקה יקרה.</span></span> },
+                        { n:5, icon:'🔑', title:'צור OAuth 2.0 Client ID', body: <span><strong style={{ color: c.textPrimary }}>APIs & Services → Credentials → + Create Credentials → OAuth client ID</strong><br/>Application type: <strong style={{ color: c.textPrimary }}>Web application</strong></span> },
+                        { n:6, icon:'🔗', title:'הוסף Authorized JS Origins', body: <span>תחת "Authorized JavaScript origins" לחץ <strong style={{ color: c.textPrimary }}>+ Add URI</strong> והוסף את <strong style={{ color: c.textPrimary }}>כולן</strong> — אחרת החיבור יעבוד בכתובת אחת ויישבר באחרת:<br/>{oauthOriginsForDisplay().map(o => (<code key={o} className="font-mono text-xs px-1.5 py-0.5 rounded mt-1 ml-1 inline-block" style={{ background:`${EMAIL_COLOR}12`, color: EMAIL_COLOR }}>{o}</code>))}</span> },
+                        { n:7, icon:'📋', title:'העתק Client ID', body: <span>לחץ <strong style={{ color: c.textPrimary }}>Create</strong> ← בחלון שנפתח — העתק את ה-<strong style={{ color: c.textPrimary }}>Client ID</strong> ← הדבק למטה<br/><span className="text-[10px]" style={{ color: c.textMuted }}>פורמט: 123456789-xxxxx.apps.googleusercontent.com</span></span> },
                       ].map(({ n, icon, title, body }) => (
                         <div key={n} className="flex gap-3 p-3 rounded-xl" style={{ background: c.subtleBg, border:`1px solid ${c.cardBorder}` }}>
                           <StepBadge n={n} color={EMAIL_COLOR}/>

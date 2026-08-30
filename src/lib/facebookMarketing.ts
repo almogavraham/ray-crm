@@ -94,6 +94,13 @@ export interface MarketingAgentConfig {
   // ── Brand safety ──────────────────────────────────────────────────────────
   requireApproval:      boolean;  // always require human approval before posting
   sensitiveTopics:      string;   // topics the agent must NOT touch
+
+  // ── Autopilot (autonomous agent) ───────────────────────────────────────────
+  autopilotEnabled?:     boolean;                          // master switch
+  autopilotPlatforms?:   Array<'facebook' | 'instagram'>;  // where autopilot posts
+  autopilotPostsPerRun?: number;                           // posts per generated plan
+  autopilotCadence?:     'daily' | '3x-week' | 'weekly';   // publishing cadence
+  autopilotAutoGenerate?: boolean;                         // server generates new plans on its own
 }
 
 export interface PageInsights {
@@ -113,6 +120,14 @@ export interface ScheduledPost {
   status: 'pending' | 'posted' | 'failed';
   fbPostId?: string;
   createdAt: number;
+  // ── Autopilot extensions (used by the scheduled Cloud Function drain) ──────
+  platform?: 'facebook' | 'instagram';
+  pageId?: string;          // FB page id
+  igUserId?: string;        // IG business account id
+  videoUrl?: string;        // when the post carries a video instead of image
+  planId?: string;          // parent AutopilotPlan id
+  postUrl?: string;         // filled after publish
+  error?: string;           // filled on failure
 }
 
 /* ── Read page token from workspace Meta integration ───────────────────────── */

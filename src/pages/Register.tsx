@@ -48,11 +48,31 @@ export default function Register({ token, onSuccess }: RegisterProps) {
         firstName,
         lastName,
         role:         invite.role,
-        allowedPages: invite.allowedPages,
+        allowedPages: invite.allowedPages ?? [],
         createdAt:    new Date().toISOString(),
+        // Joining the workspace named on the invite is what actually makes this
+        // person a member. Without it they registered as a platform user with
+        // no workspace and saw an empty system.
+        ...(invite.workspaceId ? { workspaceId: invite.workspaceId } : {}),
       };
+      // ORDER MATTERS: the security rules decide workspace membership by reading
+      // users/{uid}.workspaceId, so this document must exist BEFORE any write to
+      // the workspace subcollection below — otherwise that write is denied.
       await setDoc(doc(db, 'users', cred.user.uid), profile);
-      await updateDoc(doc(db, 'invites', token), { used: true });
+
+      if (invite.workspaceId) {
+        const memberId = cred.user.uid;
+        await setDoc(doc(db, 'workspaces', invite.workspaceId, 'team', memberId), {
+          id:    memberId,
+          uid:   cred.user.uid,
+          name:  `${firstName} ${lastName}`.trim() || invite.email.split('@')[0],
+          email: invite.email,
+          role:  invite.role === 'admin' ? 'מנהל' : 'סוכן',
+          joinedAt: new Date().toISOString(),
+        });
+      }
+
+      await updateDoc(doc(db, 'invites', token), { used: true, status: 'accepted' });
 
       // Send email verification
       try { await sendEmailVerification(cred.user); } catch { /* non-fatal */ }

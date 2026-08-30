@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { sendInviteEmail } from '../lib/email';
 import {
@@ -11,14 +11,26 @@ import StatusBadge from '../components/StatusBadge';
 import { useLang } from '../contexts/LangContext';
 import { useTheme } from '../contexts/ThemeContext';
 
-const APP_URL = 'https://ray-crm.vercel.app';
+/**
+ * Invite links must point at the deployment the invite was issued from.
+ * This used to be a hard-coded Vercel URL that no longer serves the app, so
+ * every invite link 404'd.
+ */
+const appUrl = () => (typeof window !== 'undefined' ? window.location.origin : 'https://ray-crm.com');
 
 interface PendingInvite {
+  /** Doc id. Invites are token-keyed, not email-keyed: the same person can be
+   *  invited to more than one workspace, and an email-keyed id made those
+   *  collide (and silently overwrite each other). */
+  token: string;
   email: string;
   role: 'מנהל' | 'סוכן';
   status: 'pending' | 'expired';
   invitedAt: string;
   invitedBy: string;
+  workspaceId?: string;
+  /** Set once the invitee registers — such invites drop off the pending list. */
+  used?: boolean;
 }
 
 interface TeamManagementProps {
@@ -70,6 +82,7 @@ export default function TeamManagement({
   const [inviteRole, setInviteRole] = useState<'מנהל' | 'סוכן'>('סוכן');
   const [inviteStatus, setInviteStatus] = useState<'idle' | 'loading' | 'sent' | 'error'>('idle');
   const [inviteError, setInviteError] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [resendingEmail, setResendingEmail] = useState<string | null>(null);
   const [revokingEmail, setRevokingEmail] = useState<string | null>(null);
@@ -78,17 +91,25 @@ export default function TeamManagement({
   const [reassigningLeadId, setReassigningLeadId] = useState<string | null>(null);
   const emailJSReady = !!emailConfigured;
 
+  // Only this workspace's invites. The unfiltered listener showed every
+  // workspace on the platform its neighbours' pending invitations.
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'invites'), snapshot => {
-      const invites: PendingInvite[] = [];
-      snapshot.forEach(docSnap => {
-        invites.push(docSnap.data() as PendingInvite);
-      });
-      invites.sort((a, b) => b.invitedAt.localeCompare(a.invitedAt));
-      setPendingInvites(invites);
-    });
+    if (!workspaceId) { setPendingInvites([]); return; }
+    const unsub = onSnapshot(
+      query(collection(db, 'invites'), where('workspaceId', '==', workspaceId)),
+      snapshot => {
+        const invites: PendingInvite[] = [];
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data() as PendingInvite;
+          if (!d.used) invites.push({ ...d, token: docSnap.id });
+        });
+        invites.sort((a, b) => (b.invitedAt ?? '').localeCompare(a.invitedAt ?? ''));
+        setPendingInvites(invites);
+      },
+      err => console.error('[invites listener]', err),
+    );
     return () => unsub();
-  }, []);
+  }, [workspaceId]);
 
   const agentStats = (name: string) => {
     const agentLeads = leads.filter(l => l.assignedTo === name);
@@ -103,63 +124,96 @@ export default function TeamManagement({
     return { total: agentLeads.length, active, onboarding, avgScore, conversion };
   };
 
+  /**
+   * Create a workspace-scoped invite.
+   *
+   * Two things changed here after the flow was found to be broken end-to-end:
+   *
+   *  1. The invite document is written BEFORE the email is attempted. It used
+   *     to be the other way round inside one try block, so any mail problem
+   *     (unconfigured SMTP, a rejected recipient) threw before the invite was
+   *     ever saved — the user saw "error" and nothing at all was created.
+   *  2. The document is keyed by a random token and carries `workspaceId`,
+   *     matching the shape Register.tsx already consumes via `?token=`. The old
+   *     email-keyed doc was written to a `?invite=` link whose acceptance
+   *     screen was never wired into the app, so those invites led nowhere.
+   */
   const handleInvite = async () => {
-    if (!inviteEmail.trim()) return;
+    const email = inviteEmail.trim();
+    if (!email) return;
+    if (!workspaceId) { setInviteError('אין סביבת עבודה פעילה'); setInviteStatus('error'); return; }
     setInviteStatus('loading');
     setInviteError('');
+    setInviteLink('');
+
+    const token = crypto.randomUUID();
+    const link = `${appUrl()}?token=${token}`;
+
     try {
-      const email = inviteEmail.trim();
-      const inviteLink = `${APP_URL}?invite=${encodeURIComponent(email)}`;
-
-      if (emailJSReady) {
-        await sendInviteEmail({
-          toEmail:    email,
-          invitedBy:  currentUser || 'מנהל',
-          role:        inviteRole,
-          inviteLink,
-          workspaceId,
-        });
-      }
-
-      await setDoc(doc(db, 'invites', email.replace('@', '_at_')), {
+      await setDoc(doc(db, 'invites', token), {
+        token,
         email,
         role: inviteRole,
-        status: 'pending',
-        invitedAt: new Date().toISOString(),
+        allowedPages: [],
+        workspaceId,
         invitedBy: currentUser || 'מנהל',
+        invitedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser || 'מנהל',
+        status: 'pending',
+        used: false,
       });
-
-      onInvite(email, inviteRole);
-      setInviteStatus('sent');
-      setInviteEmail('');
-      setTimeout(() => setInviteStatus('idle'), 4000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'שגיאה לא ידועה';
-      setInviteError('שגיאה בשליחת ההזמנה: ' + msg);
+      setInviteError('לא ניתן ליצור את ההזמנה: ' + msg);
       setInviteStatus('error');
+      return;
+    }
+
+    // The invite now exists regardless of what happens to the email.
+    onInvite(email, inviteRole);
+    setInviteLink(link);
+    setInviteEmail('');
+    setInviteStatus('sent');
+
+    // Always attempt to send: invites go out through the RAY platform mailbox,
+    // so they no longer depend on this workspace having its own email set up.
+    try {
+      await sendInviteEmail({
+        toEmail: email,
+        invitedBy: currentUser || 'מנהל',
+        role: inviteRole,
+        inviteLink: link,
+        workspaceId,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'שגיאה לא ידועה';
+      setInviteError('ההזמנה נוצרה, אך המייל לא נשלח (' + msg + '). העתק את הקישור ושלח ידנית.');
     }
   };
 
   const handleResend = async (invite: PendingInvite) => {
     setResendingEmail(invite.email);
+    setInviteError('');
     try {
-      const inviteLink = `${APP_URL}?invite=${encodeURIComponent(invite.email)}`;
-      if (emailJSReady) {
-        await sendInviteEmail({
-          toEmail:    invite.email,
-          invitedBy:  currentUser || 'מנהל',
-          role:        invite.role,
-          inviteLink,
-          workspaceId,
-        });
-      }
-      await setDoc(doc(db, 'invites', invite.email.replace('@', '_at_')), {
-        ...invite,
+      const link = `${appUrl()}?token=${invite.token}`;
+      await updateDoc(doc(db, 'invites', invite.token), {
         invitedAt: new Date().toISOString(),
         status: 'pending',
       });
-    } catch {
-      // silently fail resend
+      await sendInviteEmail({
+        toEmail: invite.email,
+        invitedBy: currentUser || 'מנהל',
+        role: invite.role,
+        inviteLink: link,
+        workspaceId,
+      });
+      setInviteLink(link);
+    } catch (err: unknown) {
+      // Surfacing this matters: it used to fail silently, so a resend the rules
+      // rejected looked exactly like one that worked.
+      setInviteError('שליחה חוזרת נכשלה: ' + (err instanceof Error ? err.message : ''));
+      setInviteStatus('error');
     } finally {
       setResendingEmail(null);
     }
@@ -167,10 +221,12 @@ export default function TeamManagement({
 
   const handleRevoke = async (invite: PendingInvite) => {
     setRevokingEmail(invite.email);
+    setInviteError('');
     try {
-      await deleteDoc(doc(db, 'invites', invite.email.replace('@', '_at_')));
-    } catch {
-      // silently fail revoke
+      await deleteDoc(doc(db, 'invites', invite.token));
+    } catch (err: unknown) {
+      setInviteError('ביטול ההזמנה נכשל: ' + (err instanceof Error ? err.message : ''));
+      setInviteStatus('error');
     } finally {
       setRevokingEmail(null);
     }
@@ -179,10 +235,13 @@ export default function TeamManagement({
   const handleRemoveMember = async (member: TeamMember) => {
     setRemovingMemberId(member.id);
     try {
-      await deleteDoc(doc(db, 'team', member.id));
+      // Root /team is not writable by anyone but the superadmin (the rules'
+      // default-deny catch-all), so this used to fail silently for every
+      // workspace admin. Members live under the workspace.
+      if (workspaceId) await deleteDoc(doc(db, 'workspaces', workspaceId, 'team', member.id));
       onRemoveMember?.(member.id);
-    } catch {
-      // silently fail
+    } catch (err: unknown) {
+      setInviteError('הסרת חבר הצוות נכשלה: ' + (err instanceof Error ? err.message : ''));
     } finally {
       setRemovingMemberId(null);
       setConfirmRemoveMember(null);
@@ -314,11 +373,34 @@ export default function TeamManagement({
                 style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', color: '#fbbf24' }}
               >
                 <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                <span>{t('teamMgmt.gmailNotConnected')}</span>
+                <span>
+                  הזמנות נשלחות מכתובת ה-no-reply של RAY ולא מתיבת הדואר של סביבת העבודה,
+                  ולכן הן יישלחו גם ללא חיבור מייל כאן. חיבור המייל משמש לפניות ללידים.
+                </span>
               </div>
             )}
 
-            {inviteStatus === 'error' && inviteError && (
+            {inviteLink && (
+              <div
+                className="mt-3 text-xs rounded-lg px-4 py-3 text-right"
+                style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', color: '#a5b4fc' }}
+              >
+                <div className="font-bold mb-1.5">קישור ההזמנה — שלח אותו למוזמן:</div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { navigator.clipboard?.writeText(inviteLink).catch(() => {}); }}
+                    className="px-2 py-1 rounded-md text-[11px] font-bold flex-shrink-0"
+                    style={{ background: 'rgba(99,102,241,0.25)', color: '#c7d2fe' }}
+                  >
+                    העתק
+                  </button>
+                  <code className="flex-1 truncate text-[11px]" dir="ltr">{inviteLink}</code>
+                </div>
+              </div>
+            )}
+
+            {inviteError && (
               <div
                 className="mt-3 text-sm rounded-lg px-4 py-3 flex items-start gap-2 text-right"
                 style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }}

@@ -1,3 +1,21 @@
+// Public endpoint behind embeddable website forms (form id is the capability,
+// since a form on a public page cannot hold a secret).
+const formIngest = require('./formIngest');
+exports.formSubmit = formIngest.formSubmit;
+
+const siteContact = require('./siteContact');
+exports.siteContact = siteContact.siteContact;
+
+// Nightly point-in-time snapshot — the only thing that recovers from a bulk
+// overwrite, which deletes-only protections (recycle bin) cannot.
+const dailyBackup = require('./dailyBackup');
+exports.dailyBackup = dailyBackup.dailyBackup;
+
+// New signups land in the admin's own pipeline as leads (see the file for why
+// this has to be a server trigger rather than client code in the signup flow).
+const newWorkspaceLead = require('./newWorkspaceLead');
+exports.onWorkspaceCreated = newWorkspaceLead.onWorkspaceCreated;
+
 // Social network functions (LinkedIn, TikTok, Twitter token exchange + posting)
 const socialFunctions = require('./social');
 exports.exchangeSocialToken = socialFunctions.exchangeSocialToken;
@@ -36,6 +54,13 @@ const onCall = (opts, handler) => _onCall({ ...opts, enforceAppCheck: false }, h
 const admin = require('firebase-admin');
 
 admin.initializeApp();
+
+// Autonomous Marketing Agent — scheduled publisher (drains scheduledPosts queue).
+// Required AFTER admin.initializeApp() so the scheduler can use admin.firestore().
+exports.autopilotScheduler = require('./autopilot').autopilotScheduler;
+
+// CRM automations — background detection; execution stays behind user approval.
+exports.workflowScanner = require('./workflowScanner').workflowScanner;
 
 /* ══════════════════════════════════════════════════════════════════════════
  * anthropicProxy  — secure server-side proxy for all Anthropic API calls.
@@ -979,6 +1004,56 @@ exports.sendPasswordResetToOwner = onCall(
  *
  * Returns: { success: true }
  * ══════════════════════════════════════════════════════════════════════════ */
+/**
+ * Resend transactional-email sender.
+ *
+ * Platform mail (invites, system notices) goes out through Resend rather than a
+ * customer's Gmail SMTP for three reasons:
+ *   • From can be any verified-domain address, so noreply@ray-crm.com actually
+ *     appears as the sender — SMTP providers rewrite From to the authenticated
+ *     mailbox and silently ignore what we asked for.
+ *   • Gmail's per-day send caps don't apply, and one workspace tripping a cap
+ *     can't take down sign-ups for everyone.
+ *   • Deliveries, bounces and spam complaints are queryable when a customer
+ *     reports "I never got the invite".
+ *
+ * Node 20 has global fetch, so this needs no extra dependency.
+ */
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+const DEFAULT_PLATFORM_FROM = 'RAY CRM <noreply@ray-crm.com>';
+
+/** Statuses that mean the request was rejected outright — nothing was sent, so
+ *  falling back to SMTP cannot produce a duplicate. */
+const RESEND_SAFE_TO_RETRY = new Set([401, 403, 404, 422]);
+
+async function sendViaResend({ apiKey, from, to, subject, html, text, replyTo, headers }) {
+  const res = await fetch(RESEND_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      ...(html ? { html } : {}),
+      ...(text ? { text } : {}),
+      ...(replyTo ? { reply_to: replyTo } : {}),
+      ...(headers ? { headers } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const err = new Error(`Resend ${res.status}: ${body.slice(0, 300)}`);
+    err.status = res.status;
+    err.safeToRetry = RESEND_SAFE_TO_RETRY.has(res.status);
+    throw err;
+  }
+  return res.json().catch(() => ({}));
+}
+
 exports.sendEmail = onCall(
   { region: 'us-central1', timeoutSeconds: 30 },
   async (request) => {
@@ -986,33 +1061,95 @@ exports.sendEmail = onCall(
       throw new HttpsError('unauthenticated', 'Must be signed in to send email.');
     }
 
-    const { workspaceId, to, subject, htmlBody, textBody } = request.data || {};
+    const {
+      workspaceId, to, subject, htmlBody, textBody,
+      // Platform mail (invites, system notices) should come FROM RAY, not from
+      // whichever customer mailbox happens to be configured on the workspace.
+      preferPlatform, replyTo, fromNameOverride, noReply,
+    } = request.data || {};
 
     if (!to || !subject || (!htmlBody && !textBody)) {
       throw new HttpsError('invalid-argument', 'Missing required fields: to, subject, htmlBody or textBody.');
     }
 
-    // ── Read email credentials from Firestore ──────────────────────────────
     const db = admin.firestore();
+
+    // ── Platform mail via Resend, when configured ──────────────────────────
+    // Tried BEFORE reading SMTP credentials: platform mail must not depend on
+    // the workspace having its own mailbox set up at all.
+    const resendKey = process.env.RESEND_API_KEY;
+    if (preferPlatform && resendKey) {
+      let platformFrom = DEFAULT_PLATFORM_FROM;
+      try {
+        const sysSnap = await db.collection('system').doc('emailConfig').get();
+        platformFrom = (sysSnap.data() || {}).platformFrom || DEFAULT_PLATFORM_FROM;
+      } catch { /* fall back to the default sender */ }
+
+      try {
+        await sendViaResend({
+          apiKey: resendKey,
+          from: platformFrom,
+          to,
+          subject,
+          html: htmlBody || textBody,
+          text: textBody || undefined,
+          replyTo,
+          headers: noReply
+            ? { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' }
+            : undefined,
+        });
+        console.log(`sendEmail: sent to ${to} via Resend as ${platformFrom}`);
+        return { success: true, via: 'resend' };
+      } catch (err) {
+        // Only a definitively-rejected request falls through to SMTP; anything
+        // else may already have been accepted and retrying would double-send.
+        console.error('sendEmail: Resend error:', err.message);
+        if (!err.safeToRetry) {
+          throw new HttpsError('internal', `Failed to send email via Resend: ${err.message}`);
+        }
+        console.warn('sendEmail: falling back to SMTP after recoverable Resend error');
+      }
+    }
+
+    // ── Read email credentials from Firestore ──────────────────────────────
     let gmailUser, gmailAppPassword, fromName, emailProvider;
 
+    const readPlatform = async () => {
+      const sysSnap = await db.collection('system').doc('emailConfig').get();
+      const d = sysSnap.data() || {};
+      return {
+        gmailUser: d.gmailUser,
+        gmailAppPassword: d.gmailAppPassword,
+        fromName: d.fromName,
+        emailProvider: d.emailProvider || 'gmail',
+      };
+    };
+    const readWorkspace = async (wid) => {
+      const wsSnap = await db.collection('workspaces').doc(wid).get();
+      const cfg = (wsSnap.data() || {}).emailConfig || {};
+      return {
+        gmailUser: cfg.gmailUser,
+        gmailAppPassword: cfg.gmailAppPassword,
+        fromName: cfg.fromName,
+        emailProvider: cfg.emailProvider || 'gmail',
+      };
+    };
+
     try {
-      if (workspaceId) {
-        const wsSnap = await db.collection('workspaces').doc(workspaceId).get();
-        const cfg = (wsSnap.data() || {}).emailConfig || {};
-        gmailUser        = cfg.gmailUser;
-        gmailAppPassword = cfg.gmailAppPassword;
-        fromName         = cfg.fromName;
-        emailProvider    = cfg.emailProvider || 'gmail';
+      let chosen = null;
+      if (preferPlatform) {
+        // Platform sender first; fall back to the workspace so a deployment
+        // without a RAY mailbox configured still sends rather than failing.
+        chosen = await readPlatform();
+        if ((!chosen.gmailUser || !chosen.gmailAppPassword) && workspaceId) {
+          chosen = await readWorkspace(workspaceId);
+        }
+      } else if (workspaceId) {
+        chosen = await readWorkspace(workspaceId);
       } else {
-        // Super-admin system config
-        const sysSnap = await db.collection('system').doc('emailConfig').get();
-        const d = sysSnap.data() || {};
-        gmailUser        = d.gmailUser;
-        gmailAppPassword = d.gmailAppPassword;
-        fromName         = d.fromName;
-        emailProvider    = d.emailProvider || 'gmail';
+        chosen = await readPlatform();
       }
+      ({ gmailUser, gmailAppPassword, fromName, emailProvider } = chosen);
     } catch (err) {
       console.error('sendEmail: Firestore read error:', err);
       throw new HttpsError('internal', 'Failed to read email config.');
@@ -1048,9 +1185,25 @@ exports.sendEmail = onCall(
 
     const transporter = nodemailer.createTransport(smtpConfig);
 
-    const fromHeader = fromName
-      ? `"${fromName}" <${gmailUser}>`
+    // IMPORTANT: the From ADDRESS cannot be chosen freely. Gmail and Office 365
+    // both rewrite From to the authenticated mailbox unless that address is a
+    // verified "send mail as" alias on the account. So we control the display
+    // NAME (which is free) and steer replies with Reply-To, rather than
+    // pretending to send from an address the provider would silently replace.
+    const effectiveName = fromNameOverride || fromName;
+    const fromHeader = effectiveName
+      ? `"${effectiveName}" <${gmailUser}>`
       : gmailUser;
+
+    // A no-reply message should not invite a reply that nobody reads. Reply-To
+    // points at the dead address, and the auto-response headers tell well-behaved
+    // clients and mailing systems not to generate replies or out-of-office bounces.
+    const noReplyHeaders = noReply
+      ? {
+          'Auto-Submitted': 'auto-generated',
+          'X-Auto-Response-Suppress': 'All',
+        }
+      : undefined;
 
     try {
       await transporter.sendMail({
@@ -1059,6 +1212,8 @@ exports.sendEmail = onCall(
         subject,
         html:    htmlBody  || textBody,
         text:    textBody  || htmlBody,
+        ...(replyTo ? { replyTo } : {}),
+        ...(noReplyHeaders ? { headers: noReplyHeaders } : {}),
       });
       console.log(`sendEmail: sent to ${to} via ${gmailUser} (provider: ${emailProvider})`);
       return { success: true };

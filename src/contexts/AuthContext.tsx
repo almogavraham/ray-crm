@@ -10,6 +10,7 @@ import {
 import type { User } from 'firebase/auth';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
+import { getImpersonation } from '../lib/adminImpersonation';
 import type { UserProfile, WorkspaceProfile } from '../types';
 
 const SESSION_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -74,15 +75,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * changes (allowedPages, plan, status, etc.) are reflected instantly
    * in the client without requiring a page reload.
    */
+  /**
+   * Which workspace should actually be loaded. Normally the user's own; for the
+   * superadmin with an active impersonation, the one they chose to enter.
+   * Reads auth.currentUser directly because this runs outside React state.
+   */
+  const effectiveWorkspaceId = (ownId: string): string => {
+    const email = auth.currentUser?.email?.toLowerCase();
+    if (email !== SUPER_ADMIN_EMAIL.toLowerCase()) return ownId;
+    return getImpersonation()?.workspaceId || ownId;
+  };
+
   const subscribeWorkspace = (workspaceId: string) => {
     // Cancel previous subscription if any
     setWsUnsub(prev => { prev?.(); return null; });
 
+    // Resolve impersonation HERE rather than at the call sites. refreshProfile
+    // and refreshWorkspace both re-subscribe using profile.workspaceId, so
+    // handling it only in the auth listener meant the very next profile refresh
+    // silently yanked the admin back to their own workspace — banner still up,
+    // data already switched back.
+    const effectiveId = effectiveWorkspaceId(workspaceId);
+
     const unsub = onSnapshot(
-      doc(db, 'workspaces', workspaceId),
+      doc(db, 'workspaces', effectiveId),
       (snap) => {
         if (snap.exists()) {
-          setWorkspace(snap.data() as WorkspaceProfile);
+          setWorkspace({ ...(snap.data() as WorkspaceProfile), id: effectiveId });
         } else {
           setWorkspace(null);
         }
@@ -129,13 +148,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(p);
         setUser(firebaseUser);
 
-        // Subscribe to workspace (real-time) if user has one
-        if (p?.workspaceId) {
+        // Subscribe to workspace (real-time) if user has one.
+        //
+        // A superadmin who chose "enter this workspace" from the admin panel is
+        // pointed at THAT workspace instead. Only the subscription target
+        // changes — their own profile document is never rewritten, so leaving
+        // impersonation is just clearing a sessionStorage key.
+        const targetWid = p?.workspaceId
+          ? effectiveWorkspaceId(p.workspaceId)
+          : (firebaseUser.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+              ? getImpersonation()?.workspaceId
+              : undefined);
+
+        if (targetWid) {
           activeWsUnsub = onSnapshot(
-            doc(db, 'workspaces', p.workspaceId),
+            doc(db, 'workspaces', targetWid),
             (snap) => {
               if (snap.exists()) {
-                setWorkspace(snap.data() as WorkspaceProfile);
+                setWorkspace({ ...(snap.data() as WorkspaceProfile), id: targetWid });
               } else {
                 setWorkspace(null);
               }

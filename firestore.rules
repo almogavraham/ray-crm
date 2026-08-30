@@ -52,10 +52,21 @@ service cloud.firestore {
     match /invites/{token} {
       // Anyone can read an invite (needed to accept it without being logged in yet)
       allow read:   if true;
-      // Only workspace owners/members can create invites (enforced via Cloud Function ideally)
+      // Only workspace owners/members can create invites
       allow create: if isSignedIn();
-      // Only the invitee (by token claim) or superadmin can update/delete
-      allow update, delete: if isSuperAdmin();
+      // Previously superadmin-only, which broke the whole feature for everyone
+      // else: `setDoc` over an existing invite counts as an UPDATE, so
+      // re-inviting, resending and revoking all failed, and an invitee could
+      // never mark their own invite as used. Three parties legitimately need to
+      // write here:
+      //   1. the superadmin,
+      //   2. the invitee — identified by the email on the invite — who marks it
+      //      used or deletes it when accepting,
+      //   3. members of the workspace that issued it, who resend or revoke.
+      allow update, delete: if isSuperAdmin()
+        || (isSignedIn() && request.auth.token.email == resource.data.email)
+        || (isSignedIn() && resource.data.workspaceId != null
+            && isWorkspaceMember(resource.data.workspaceId));
     }
 
     // ── System config (feature flags, deploy settings) ───────────────────────

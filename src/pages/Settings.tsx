@@ -240,6 +240,7 @@ export default function Settings({
   const [inviteRole, setInviteRole]   = useState<'admin' | 'agent'>('agent');
   const [invitePages, setInvitePages] = useState<Page[]>([...ALL_PAGES.map(p => p.page)]);
   const [inviteLink, setInviteLink]   = useState('');
+  const [inviteSendState, setInviteSendState] = useState<'idle' | 'sent' | 'failed'>('idle');
   const [inviteLoading, setInviteLoading] = useState(false);
 
   useEffect(() => {
@@ -342,24 +343,56 @@ export default function Settings({
     onToast('הנתונים אופסו להגדרות ברירת המחדל', 'info');
   };
 
-  /* ── Create invite ── */
+  /**
+   * Create an invite AND send it.
+   *
+   * This screen used to only ever generate a link — it never imported the mail
+   * helper at all — so "invite a user" silently meant "copy a URL and deliver it
+   * yourself". It now emails the invite through the RAY platform sender, and
+   * stamps the invite with `workspaceId` so accepting it actually joins the
+   * right workspace (Register.tsx reads that field).
+   *
+   * The link is still shown, because a failed send must not lose the invite.
+   */
   const handleCreateInvite = async () => {
-    if (!inviteEmail.trim()) { onToast('הכנס כתובת אימייל', 'error'); return; }
+    const email = inviteEmail.trim();
+    if (!email) { onToast('הכנס כתובת אימייל', 'error'); return; }
     setInviteLoading(true);
+    setInviteSendState('idle');
     try {
       const token = crypto.randomUUID();
       await setDoc(doc(db, 'invites', token), {
         token,
-        email: inviteEmail.trim(),
+        email,
         role: inviteRole,
         allowedPages: invitePages,
+        ...(workspaceId ? { workspaceId } : {}),
         createdAt: new Date().toISOString(),
+        invitedAt: new Date().toISOString(),
+        invitedBy: 'admin',
+        status: 'pending',
         used: false,
         createdBy: 'admin',
       });
       const link = `${window.location.origin}?token=${token}`;
       setInviteLink(link);
-      onToast('קישור הזמנה נוצר בהצלחה ✓', 'success');
+
+      try {
+        const { sendInviteEmail } = await import('../lib/email');
+        await sendInviteEmail({
+          toEmail: email,
+          invitedBy: 'RAY',
+          role: inviteRole,
+          inviteLink: link,
+          workspaceId,
+        });
+        setInviteSendState('sent');
+        onToast(`ההזמנה נשלחה ל-${email} ✓`, 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        setInviteSendState('failed');
+        onToast(`ההזמנה נוצרה אך המייל לא נשלח${msg ? ': ' + msg : ''} — העתק את הקישור`, 'error');
+      }
     } catch {
       onToast('שגיאה ביצירת ההזמנה', 'error');
     } finally {
@@ -936,7 +969,7 @@ export default function Settings({
                           style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 12px rgba(99,102,241,0.3)' }}
                         >
                           <Link size={14} />
-                          {inviteLoading ? 'יוצר...' : 'צור קישור הזמנה'}
+                          {inviteLoading ? 'שולח...' : 'שלח הזמנה'}
                         </button>
                       </div>
                       {inviteLink && (
@@ -944,7 +977,13 @@ export default function Settings({
                           className="rounded-xl p-4"
                           style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}
                         >
-                          <div className="text-xs font-semibold mb-2 text-right" style={{ color: '#818cf8' }}>קישור הזמנה:</div>
+                          <div className="text-xs font-semibold mb-2 text-right" style={{ color: inviteSendState === 'sent' ? '#34d399' : inviteSendState === 'failed' ? '#fbbf24' : '#818cf8' }}>
+                            {inviteSendState === 'sent'
+                              ? '✅ ההזמנה נשלחה במייל — הקישור להעתקה במידת הצורך:'
+                              : inviteSendState === 'failed'
+                              ? '⚠️ המייל לא נשלח — העתק את הקישור ושלח ידנית:'
+                              : 'קישור הזמנה:'}
+                          </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               onClick={() => { navigator.clipboard.writeText(inviteLink); onToast('הקישור הועתק ✓', 'success'); }}

@@ -11,13 +11,16 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
-  KeyRound, AtSign, Unlink, Layers, Menu, DollarSign,
+  KeyRound, AtSign, Unlink, Layers, Menu, DollarSign, LogIn,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
   query, orderBy, where, setDoc, getDoc, onSnapshot, writeBatch,
 } from 'firebase/firestore';
 import { db, auth, functions } from '../lib/firebase';
+import { startImpersonation } from '../lib/adminImpersonation';
+// TEMPORARY: one-off repair for the 24/8 import. Remove with the component.
+import StatusRestoreTool from '../components/StatusRestoreTool';
 import { sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import type { WorkspaceProfile, WorkspaceStatus, UserProfile, Page } from '../types';
@@ -1671,6 +1674,32 @@ function WorkspaceDetail({ ws, onClose, onStatus, onPlan, onDelete, loading, onT
             <Settings2 size={11} /> כלי תמיכה טכנית
           </p>
           <div className="space-y-2">
+            {/* One-off status repair — only for the workspace it applies to. */}
+            {ws.id === 'ws_1VoQGpt3iyWkhcZoGIYxS4IA4KB2' && (
+              <StatusRestoreTool workspaceId={ws.id} onToast={onToast} />
+            )}
+
+            {/* Enter the workspace as admin */}
+            <button
+              onClick={() => {
+                if (!window.confirm(
+                  `להיכנס לסביבת "${ws.name}" בתור אדמין?
+
+` +
+                  'תראה את המערכת בדיוק כפי שהלקוח רואה אותה, עם הנתונים שלו. ' +
+                  'כל פעולה שתבצע תשפיע על הנתונים האמיתיים שלו.',
+                )) return;
+                startImpersonation(ws.id, ws.name);
+                // Full reload so every workspace-scoped subscription re-runs
+                // against the new id rather than half the app keeping the old one.
+                window.location.href = '/';
+              }}
+              className="w-full flex items-center gap-2 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-400/30 text-indigo-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors"
+            >
+              <LogIn size={12} />
+              היכנס לסביבה בתור אדמין
+            </button>
+
             {/* Password reset */}
             <button
               onClick={handlePasswordReset}
