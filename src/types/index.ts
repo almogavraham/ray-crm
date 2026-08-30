@@ -19,7 +19,9 @@ export type Solution = {
 };
 
 export type TaskPriority = 'high' | 'medium' | 'low';
-export type KanbanStatus = 'todo' | 'inprogress' | 'done' | 'cancelled';
+export type KanbanStatus = 'todo' | 'inprogress' | 'waiting' | 'done' | 'cancelled';
+// Activity type of a task — drives icons, filtering and reporting (like Salesforce/HubSpot).
+export type TaskType = 'call' | 'email' | 'whatsapp' | 'meeting' | 'followup' | 'proposal' | 'other';
 
 export type Task = {
   id: string;
@@ -33,6 +35,7 @@ export type Task = {
   assignedTo?: string;
   assignedBy?: string;
   kanbanStatus?: KanbanStatus;
+  type?: TaskType;
 };
 
 export type StandaloneTask = {
@@ -49,6 +52,7 @@ export type StandaloneTask = {
   leadId?: string;
   createdAt: string;
   kanbanStatus?: KanbanStatus;
+  type?: TaskType;
 };
 
 export type Note = {
@@ -92,6 +96,26 @@ export type Lead = {
   nextFollowUpDate?: string;          // ISO - scheduled next follow-up
   followUpNote?: string;              // note for next follow-up
   customFields?: Record<string, string | string[]>; // values for workspace custom fields
+  isHot?: boolean;                    // manually marked "hot" by the user (shows a 🔥 badge)
+  // ── Automation-driven fields ──────────────────────────────────────────────
+  flagColor?: string;                 // hex colour stripe set manually or by an automation
+  flagReason?: string;                // why it was flagged (shown on hover)
+  noAnswerCount?: number;             // how many logged contact attempts went unanswered
+  lastNoAnswerAt?: string;            // ISO of the most recent unanswered attempt
+  // ── Campaign attribution ──────────────────────────────────────────────────
+  // Captured from the page the lead submitted on. `source` alone answers
+  // "Facebook"; these answer WHICH campaign — the difference between a guess
+  // and a real ROI number.
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmTerm?: string;
+  utmContent?: string;
+  landingPage?: string;
+  referrer?: string;
+  /** Set when the lead arrived through an embedded form. */
+  formId?: string;
+  formName?: string;
 };
 
 export type TeamMember = {
@@ -103,7 +127,23 @@ export type TeamMember = {
   isCurrentUser?: boolean;
 };
 
-export type Page = 'home' | 'dashboard' | 'overview' | 'analytics' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'workflows' | 'admin' | 'billing' | 'integrations' | 'ai-studio' | 'email-agent' | 'marketing-agent';
+export type Page = 'home' | 'dashboard' | 'overview' | 'analytics' | 'team' | 'ai' | 'kanban' | 'tasks' | 'settings' | 'content' | 'deals' | 'agents' | 'workflows' | 'admin' | 'billing' | 'integrations' | 'ai-studio' | 'email-agent' | 'marketing-agent' | 'opportunities';
+
+/**
+ * Every page in the product. Written as a Record so that adding a value to
+ * `Page` without listing it here fails the build — the alternative, a plain
+ * array, silently omits new pages from the super-admin menu and the omission
+ * is only ever noticed by a person who cannot find a screen.
+ */
+const PAGE_REGISTRY: Record<Page, true> = {
+  home: true, dashboard: true, overview: true, analytics: true, team: true,
+  ai: true, kanban: true, tasks: true, settings: true, content: true,
+  deals: true, agents: true, workflows: true, admin: true, billing: true,
+  integrations: true, 'ai-studio': true, 'email-agent': true,
+  'marketing-agent': true, opportunities: true,
+};
+
+export const ALL_PAGES = Object.keys(PAGE_REGISTRY) as Page[];
 
 /* ── Email Agent types ──────────────────────────────────────────────────────── */
 export type EmailProvider = 'gmail' | 'outlook';
@@ -385,7 +425,7 @@ export type LeadMeeting = {
   createdBy: string;
 };
 
-export type ContactMethod = 'phone' | 'email' | 'whatsapp' | 'in_person' | 'meeting' | 'quote' | 'custom';
+export type ContactMethod = 'phone' | 'email' | 'whatsapp' | 'in_person' | 'meeting' | 'quote' | 'no_answer' | 'custom';
 
 export type MediaPlatform = 'meta' | 'google' | 'tiktok' | 'linkedin' | 'email' | 'other';
 
@@ -667,6 +707,21 @@ export type WorkspaceProfile = {
   tokenPlanAllocation?: number;  // USD granted by current plan
   // System message — shown as a top banner to all workspace users
   systemMessage?: string;
+  /**
+   * Optional split of the pipeline into two screens: "לידים" for everything
+   * still being qualified, and "הזדמנויות מכירה" for what is actively being
+   * sold. Off by default — plenty of businesses want one list, and forcing the
+   * split on them adds a screen without adding meaning.
+   *
+   * Implemented as a STATUS PARTITION rather than a separate record type: the
+   * same lead moves between screens by changing status, so nothing has to be
+   * converted, duplicated, or kept in sync.
+   */
+  pipelineSplit?: {
+    enabled: boolean;
+    /** Statuses that belong to the opportunities screen. */
+    opportunityStatuses: string[];
+  };
   // Email config — multiple provider support
   emailConfig?: {
     provider?: 'gmail' | 'outlook' | 'emailjs'; // active email provider
@@ -680,6 +735,9 @@ export type WorkspaceProfile = {
     emailTemplateId?: string;       // general emails template
     emailInviteTmpl?: string;       // invite emails template
     emailPublicKey?: string;
+    // Google OAuth client id — required for INBOX READ access (App Password can
+    // only send). Used by the email agent and the copilot's in-chat connect.
+    oauthClientId?: string;
   };
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {

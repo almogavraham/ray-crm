@@ -4,9 +4,10 @@ import {
   Layers, BarChart3, Sparkles, Settings, CreditCard, Clapperboard,
   Plus, Menu, X, ChevronLeft, ChevronRight, Bell, Zap, LogOut, Bot, Shield,
   Clock, AlertTriangle, Search, Globe, Gem, Network, PlugZap, Mail, Megaphone,
-  PanelRightClose, PanelRightOpen, CheckCircle2, Info, HelpCircle,
+  PanelRightClose, PanelRightOpen, CheckCircle2, Info, HelpCircle, Target, Workflow,
 } from 'lucide-react';
 import type { Page, WorkspaceProfile } from '../types';
+import type { AppNotification } from '../lib/notifications';
 import { useLang } from '../contexts/LangContext';
 import { formatBalance, balancePercent, formatTokenDisplay } from '../lib/tokenTracker';
 import { db } from '../lib/firebase';
@@ -46,6 +47,8 @@ interface LayoutProps {
   wakeWordEnabled?: boolean;
   onToggleWakeWord?: () => void;
   onStartTour?: () => void;
+  notifications?: AppNotification[];
+  onNotificationClick?: (n: AppNotification) => void;
 }
 
 /* ── NAV GROUPS (reorganized logically) ──────────────────────────────────── */
@@ -56,6 +59,9 @@ const NAV_GROUPS = [
     items: [
       { page: 'home'      as Page, label: 'לוח בקרה',      labelKey: 'nav.home',      icon: LayoutDashboard },
       { page: 'dashboard' as Page, label: 'לידים',          labelKey: 'nav.dashboard', icon: Users           },
+      // Only present when the workspace split its pipeline in two; it is
+      // gated through allowedPages like every other optional screen.
+      { page: 'opportunities' as Page, label: 'הזדמנויות מכירה', labelKey: 'nav.opportunities', icon: Target },
       { page: 'kanban'    as Page, label: 'פייפליין',       labelKey: 'nav.kanban',    icon: GitBranch       },
       { page: 'deals'     as Page, label: 'לקוחות פעילים',  labelKey: 'nav.deals',     icon: Briefcase       },
       { page: 'tasks'     as Page, label: 'משימות',         labelKey: 'nav.tasks',     icon: CheckSquare, badge: true },
@@ -78,6 +84,9 @@ const NAV_GROUPS = [
       { page: 'ai-studio'    as Page, label: 'AI Studio',         labelKey: 'nav.aiStudio',     icon: Clapperboard },
       { page: 'email-agent'  as Page, label: 'סוכן מכירות AI',   labelKey: 'nav.emailAgent',   icon: Mail         },
       { page: 'agents'       as Page, label: 'סוכנים AI',         labelKey: 'nav.agents',       icon: Bot          },
+      // The automation studio had no nav entry at all — the page existed but
+      // only ever redirected, so nothing could reach it.
+      { page: 'workflows'    as Page, label: 'בונה אוטומציות',   labelKey: 'nav.workflows',    icon: Workflow     },
     ],
   },
   {
@@ -471,9 +480,11 @@ function SidebarInner({
 }
 
 /* ── Bell Dropdown ───────────────────────────────────────────────────────── */
-function BellDropdown({ overdueBadge, tokenLowAlert, onNavigateTasks, onNavigateBilling, isDark }: {
+function BellDropdown({ overdueBadge, tokenLowAlert, notifications = [], onNotificationClick, onNavigateTasks, onNavigateBilling, isDark }: {
   overdueBadge: number;
   tokenLowAlert?: boolean;
+  notifications?: AppNotification[];
+  onNotificationClick?: (n: AppNotification) => void;
   onNavigateTasks: () => void;
   onNavigateBilling: () => void;
   isDark: boolean;
@@ -484,7 +495,8 @@ function BellDropdown({ overdueBadge, tokenLowAlert, onNavigateTasks, onNavigate
 
   // Pure task count (excluding token alert which is counted in overdueBadge total)
   const taskCount  = tokenLowAlert ? Math.max(0, overdueBadge - 1) : overdueBadge;
-  const totalCount = overdueBadge; // already includes tokenLowAlert +1 from App.tsx
+  const unreadNotifs = notifications.filter(n => !n.read).length;
+  const totalCount = overdueBadge + unreadNotifs; // overdueBadge already includes tokenLowAlert +1
 
   // Bell color: red for tasks, amber for token only
   const bellColor = taskCount > 0 ? '#ef4444' : tokenLowAlert ? '#f59e0b' : undefined;
@@ -549,7 +561,24 @@ function BellDropdown({ overdueBadge, tokenLowAlert, onNavigateTasks, onNavigate
               <p className="text-xs mt-1" style={{ color: tk.footerRole }}>הכל תקין ✓</p>
             </div>
           ) : (
-            <div>
+            <div className="max-h-[400px] overflow-y-auto">
+              {/* Notifications (autopilot approvals, publishes, digests, …) */}
+              {notifications.map(n => (
+                <button key={n.id}
+                  onClick={() => { setOpen(false); onNotificationClick?.(n); }}
+                  className="w-full px-4 py-3 flex items-start gap-2.5 text-right transition-colors hover:opacity-90"
+                  style={{ borderBottom: `1px solid ${tk.sidebarBorder}`, background: n.read ? 'transparent' : (isDark ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)') }}>
+                  {!n.read && <span className="w-2 h-2 rounded-full flex-shrink-0 mt-1.5" style={{ background: '#6366f1' }} />}
+                  <div className={`flex-1 min-w-0 ${n.read ? 'pr-4' : ''}`}>
+                    <p className="text-sm font-semibold truncate" style={{ color: tk.footerName }}>{n.title}</p>
+                    <p className="text-xs mt-0.5 line-clamp-2" style={{ color: tk.footerRole }}>{n.body}</p>
+                    <p className="text-[10px] mt-1" style={{ color: tk.footerRole }}>
+                      {(() => { const m = Math.floor((Date.now() - n.createdAt) / 60000); if (m < 1) return 'עכשיו'; if (m < 60) return `לפני ${m} דק'`; const h = Math.floor(m / 60); if (h < 24) return `לפני ${h} שע'`; return `לפני ${Math.floor(h / 24)} ימים`; })()}
+                    </p>
+                  </div>
+                </button>
+              ))}
+
               {/* Token low alert */}
               {tokenLowAlert && (
                 <div>
@@ -698,7 +727,7 @@ export default function Layout({
   allowedPages = [], isAdmin = false, isSuperAdmin = false,
   onSignOut, logoUrl, workspaceName, workspace, theme = 'dark',
   onAiClick, showAiPanel = false, aiInsightBadge = 0, wakeWordEnabled = false, onToggleWakeWord,
-  onStartTour,
+  onStartTour, notifications = [], onNotificationClick,
 }: LayoutProps) {
   const { t, dir } = useLang();
   const [open, setOpen]           = useState(false);
@@ -902,6 +931,8 @@ export default function Layout({
               <BellDropdown
                 overdueBadge={overdueBadge}
                 tokenLowAlert={tokenLowAlert}
+                notifications={notifications}
+                onNotificationClick={onNotificationClick}
                 onNavigateTasks={() => onPageChange('tasks')}
                 onNavigateBilling={() => onPageChange('billing')}
                 isDark={isDark}

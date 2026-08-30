@@ -13,6 +13,7 @@ import Settings from './pages/Settings';
 import ContentHub from './pages/ContentHub';
 import HomeDashboard from './pages/HomeDashboard';
 import Deals from './pages/Deals';
+import AutomationStudio from './pages/AutomationStudio';
 import Agents from './pages/Agents';
 import Workflows from './pages/Workflows';
 import Analytics from './pages/Analytics';
@@ -46,14 +47,24 @@ import {
   DEFAULT_STATUS_CONFIGS,
 } from './lib/statusConfig';
 import type { StatusConfig } from './lib/statusConfig';
+import { markNotificationRead } from './lib/notifications';
+import LegalPages from './pages/LegalPages';
+import { ALL_PAGES } from './types';
+import { runAutoWorkflows } from './lib/automationEngine';
+import type { PendingSend } from './lib/automationEngine';
+import { dispatchAutomationSends } from './lib/automationSend';
+import type { Workflow } from './lib/automationEngine';
+import type { AppNotification } from './lib/notifications';
 import StatusConfigEditor from './components/StatusConfigEditor';
 import { initialLeads, initialTeam } from './data/mockData';
 import { db } from './lib/firebase';
+import { getImpersonation, stopImpersonation } from './lib/adminImpersonation';
 import { computeInsights } from './lib/insightEngine';
 import type { Insight } from './lib/insightEngine';
 import { wakeWordDetector, isSpeechSupported } from './lib/wakeWord';
 import {
   collection, doc, setDoc, getDocs, onSnapshot, writeBatch, deleteDoc,
+  query, orderBy, limit,
 } from 'firebase/firestore';
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -115,7 +126,9 @@ class ErrorBoundary extends Component<
 
 // ─── Lead normalizer — guards against missing/null/invalid fields from Firestore or localStorage ──
 // Note: VALID_STATUSES is only used for legacy migration — custom statuses are allowed (LeadStatus = string)
-const LEGACY_STATUS_MIGRATIONS: Record<string, string> = { 'הטמעה': 'בתהליך' };
+// 'הטמעה' is a real, distinct status in the cheX environment — do NOT fold it into
+// 'בתהליך'. Keep this map empty unless a status truly needs renaming.
+const LEGACY_STATUS_MIGRATIONS: Record<string, string> = {};
 const VALID_SOURCES: Lead['source'][] = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 
 function normalizeLead(raw: unknown): Lead {
@@ -138,7 +151,10 @@ function normalizeLead(raw: unknown): Lead {
     email:          String(r.email        ?? ''),
     phone:          String(r.phone        ?? ''),
     status:         migratedStatus || 'חדש',  // allow any string — custom statuses pass through
-    source:         VALID_SOURCES.includes(migratedSource)  ? migratedSource : 'אורגני',
+    // Allow ANY source string (incl. workspace-custom sources like 'ליד טלפוני').
+    // Only fall back to 'אורגני' when the value is empty. VALID_SOURCES is no
+    // longer used to reset — that was silently wiping custom lead sources.
+    source:         (migratedSource && String(migratedSource).trim()) ? migratedSource : 'אורגני',
     assignedTo:     String(r.assignedTo   ?? ''),
     lastUpdate:     String(r.lastUpdate   ?? ''),
     budget:         isFinite(Number(r.budget ?? r.checkCount)) ? Number(r.budget ?? r.checkCount) : 0,
@@ -149,6 +165,25 @@ function normalizeLead(raw: unknown): Lead {
     solutions:      Array.isArray(r.solutions)   ? r.solutions   : [],
     futureNotes:    Array.isArray(r.futureNotes) ? r.futureNotes : [],
   } as Lead;
+}
+
+// Firestore rejects any object containing `undefined` values — a single
+// undefined optional field (objection, nextFollowUpDate, a customField, …) makes
+// the whole setDoc throw, so the save silently fails and the edit is lost on
+// refresh. Strip undefined recursively before every write.
+function deepStripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(v => deepStripUndefined(v)) as unknown as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      out[k] = deepStripUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 // ─── Default settings ────────────────────────────────────────────────────────
@@ -312,10 +347,15 @@ function AppInner() {
   const urlSearch      = new URLSearchParams(window.location.search);
   const inviteToken    = urlSearch.get('token') ?? '';
   const pathSegments   = window.location.pathname.split('/').filter(Boolean);
-  const RESERVED_PATHS = new Set(['signup', 'register', 'login', 'signin', 'admin', 'reset', 'forgot', 'forgot-password']);
+  const RESERVED_PATHS = new Set(['signup', 'register', 'login', 'signin', 'admin', 'reset', 'forgot', 'forgot-password',
+    // Legal pages. Without these a visit to /privacy is read as a workspace
+    // slug and the visitor lands on a tenant login instead of the policy.
+    'privacy', 'terms', 'accessibility']);
   const isSignupPath   = pathSegments[0] === 'signup' || urlSearch.get('signup') === '1';
   const isSigninPath   = pathSegments[0] === 'signin' || pathSegments[0] === 'login';
   const isForgotPath   = pathSegments[0] === 'forgot' || pathSegments[0] === 'forgot-password';
+  const legalDoc       = (['privacy', 'terms', 'accessibility'] as const)
+    .find(d => pathSegments[0] === d) ?? null;
   // Allow path-based slug on any domain (ray-crm.com/acme OR ray-crm-app.web.app/acme)
   const wsSlugFromPath = (!isAdminDomain && pathSegments.length === 1 && !RESERVED_PATHS.has(pathSegments[0]))
     ? pathSegments[0] : null;
@@ -325,12 +365,18 @@ function AppInner() {
   const isSignin  = isSigninPath;
   const isForgot  = isForgotPath;
   // Landing page: root domain with no path and no slug, NOT on admin domain
-  const isLanding = !isAdminDomain && !wsSlugFromHost && !wsSlugFromPath && !isSignup && !isSignin && !isForgot && pathSegments.length === 0;
+  // NOTE: `!inviteToken` matters. An invite link is `https://ray-crm.com/?token=...`
+  // — root path, so without this it counts as the landing page, which is rendered
+  // BEFORE the invite route below. The token was silently discarded and every
+  // invite link dropped the recipient on the marketing site.
+  const isLanding = !isAdminDomain && !wsSlugFromHost && !wsSlugFromPath && !isSignup && !isSignin && !isForgot && !inviteToken && pathSegments.length === 0;
   const wsSlug   = wsSlugFromHost ?? wsSlugFromPath;
 
   // ── Workspace detection ───────────────────────────────────────────────────
   // isWorkspaceUser = a real tenant user (has workspaceId).
   // Super admin on admin domain → admin env. Super admin on workspace domain → workspace user.
+  // Superadmin viewing a customer workspace (see lib/adminImpersonation.ts).
+  const impersonation = isSuperAdmin ? getImpersonation() : null;
   const isWorkspaceUser = !!(user && profile?.workspaceId && (!isSuperAdmin || !isAdminDomain));
   // isAdminWorkspace = super admin on admin domain → uses workspace-scoped Firestore (staging env)
   const isAdminWorkspace = !!(isSuperAdmin && isAdminDomain && workspace);
@@ -347,7 +393,10 @@ function AppInner() {
   const bypassAuth = isLocalhost && !user;
 
   // On admin domain → land directly on the admin page
-  const [page, setPage]               = useState<Page>(isAdminDomain ? 'admin' : 'home');
+  // While impersonating, open on the customer's dashboard — landing on the
+  // admin panel would hide the very workspace the admin just chose to enter.
+  const [page, setPage]               = useState<Page>(
+    getImpersonation() ? 'dashboard' : isAdminDomain ? 'admin' : 'home');
   const [settingsDefaultSection, setSettingsDefaultSection] = useState<'profile' | 'integrations' | undefined>(undefined);
   const [emailAgentDefaultTab, setEmailAgentDefaultTab] = useState<'inbox' | 'workflows' | undefined>(undefined);
   const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
@@ -363,6 +412,9 @@ function AppInner() {
   const [toasts, setToasts]           = useState<ToastMessage[]>([]);
   const [fbReady, setFbReady]             = useState(false);
   const [standaloneTask, setStandaloneTask] = useState<StandaloneTask[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  /** Active automations, kept live so lead changes can trigger them instantly. */
+  const [autoWorkflows, setAutoWorkflows] = useState<Workflow[]>([]);
   const [showLeadsWizard, setShowLeadsWizard] = useState(false);
   const [statusConfigs, setStatusConfigs] = useState<StatusConfig[]>(() => {
     // Eagerly load from localStorage so configs are available before Firestore responds
@@ -672,9 +724,45 @@ function AppInner() {
     return () => unsub();
   }, [loading, useWorkspaceFirestore, user, bypassAuth]); // eslint-disable-line
 
+  // ─── Notifications (autopilot approvals/publishes, morning digest) ──────────
+  useEffect(() => {
+    if (!useWorkspaceFirestore || !wid) { setNotifications([]); return; }
+    const unsub = onSnapshot(
+      query(collection(db, 'workspaces', wid, 'notifications'), orderBy('createdAt', 'desc'), limit(30)),
+      snap => setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification))),
+      () => { /* ignore */ },
+    );
+    return () => unsub();
+  }, [useWorkspaceFirestore, wid]);
+
+  // ─── Live automations (so they can fire the moment a lead changes) ─────────
+  useEffect(() => {
+    if (!useWorkspaceFirestore || !wid) { setAutoWorkflows([]); return; }
+    const unsub = onSnapshot(
+      collection(db, 'workspaces', wid, 'workflows'),
+      snap => setAutoWorkflows(snap.docs.map(d => d.data() as Workflow).filter(w => w.active)),
+      () => { /* ignore */ },
+    );
+    return () => unsub();
+  }, [useWorkspaceFirestore, wid]);
+
+  const handleNotificationClick = useCallback((n: AppNotification) => {
+    if (!n.read && wid) {
+      markNotificationRead(wid, n.id).catch(() => {});
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
+    }
+    if (n.link) setPage(n.link as Page);
+  }, [wid]);
+
   // ─── Auto-create admin workspace on first super admin login at admin domain ─
   // If the super admin has no workspace yet, create one and link their user profile.
   useEffect(() => {
+    // Skip entirely while impersonating. `workspace` is briefly null on first
+    // load, so this effect would fire, relink the profile to the admin
+    // workspace and call refreshProfile() — snapping the admin out of the
+    // customer workspace they just entered while the banner still claimed
+    // otherwise.
+    if (impersonation) return;
     if (!isSuperAdmin || !isAdminDomain || !user || loading || workspace) return;
     if (adminWsCreating.current) return;
     adminWsCreating.current = true;
@@ -706,7 +794,7 @@ function AppInner() {
         console.error('Failed to create admin workspace:', err);
         adminWsCreating.current = false; // allow retry
       });
-  }, [isSuperAdmin, isAdminDomain, user, loading, workspace]); // eslint-disable-line
+  }, [isSuperAdmin, isAdminDomain, user, loading, workspace, impersonation]); // eslint-disable-line
 
   // ─── Save settings to localStorage ───────────────────────────────────────
   useEffect(() => {
@@ -733,27 +821,64 @@ function AppInner() {
   }, []);
 
   // ─── Save single lead (workspace-aware) ─────────────────────────────────
-  const saveLead = useCallback(async (lead: Lead) => {
+  const saveLead = useCallback(async (lead: Lead): Promise<boolean> => {
+    const clean = deepStripUndefined(lead);
     try {
       if (useWorkspaceFirestore && wid) {
-        await setDoc(doc(db, 'workspaces', wid, 'leads', lead.id), lead);
+        await setDoc(doc(db, 'workspaces', wid, 'leads', clean.id), clean, { merge: true });
       } else {
-        await setDoc(doc(db, 'leads', lead.id), lead);
+        await setDoc(doc(db, 'leads', clean.id), clean, { merge: true });
       }
-    } catch (err) { console.error('Error saving lead:', err); }
+      return true;
+    } catch (err) { console.error('Error saving lead:', err); return false; }
   }, [useWorkspaceFirestore, wid]);
 
   // ─── Lead handlers ────────────────────────────────────────────────────────
-  const handleLeadSave = (updated: Lead) => {
+  const handleLeadSave = async (updated: Lead) => {
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
-    saveLead(updated);
+    const ok = await saveLead(updated);
     setSelectedLead(null);
-    addToast('הכרטיס נשמר בהצלחה ✓');
+    addToast(ok ? 'הכרטיס נשמר בהצלחה ✓' : 'שגיאה בשמירה — נסה שוב', ok ? 'success' : 'error');
   };
 
   const handleLeadUpdate = (updated: Lead) => {
-    setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
-    saveLead(updated);
+    // Give active automations a chance to react to this change (e.g. "a contact was
+    // logged → move to בתהליך"). Only safe, local actions are applied, and the engine
+    // returns null when nothing would change — so a rule can't retrigger on its own
+    // output and loop.
+    let finalLead = updated;
+    let firedNames: string[] = [];
+    let pendingSends: PendingSend[] = [];
+    if (autoWorkflows.length) {
+      try {
+        const res = runAutoWorkflows(updated, autoWorkflows, displayName);
+        if (res) { finalLead = res.lead; firedNames = res.applied; pendingSends = res.sends; }
+      } catch (err) {
+        console.error('[automation auto-run]', err);
+      }
+    }
+    setLeads(prev => prev.map(l => l.id === finalLead.id ? finalLead : l));
+    saveLead(finalLead);
+    if (firedNames.length) {
+      addToast(`⚡ אוטומציה הופעלה: ${firedNames.join(', ')}`, 'info');
+    }
+
+    // Messages go out on their own track, after the lead is saved — so a send
+    // that fails can never take the field updates down with it. Every outcome
+    // is reported: silence here would mean the customer believes a follow-up
+    // went out when it did not.
+    if (pendingSends.length) {
+      void dispatchAutomationSends({
+        workspaceId: wid ?? undefined, workspace, lead: finalLead, sends: pendingSends, fromName: displayName,
+      }).then(r => {
+        if (r.sent.length) addToast(`📧 נשלח: ${r.sent.join(', ')}`, 'success');
+        for (const l of r.links) {
+          addToast(`💬 ${l.rule} — ההודעה מוכנה, לחץ לפתיחת וואטסאפ`, 'info');
+          window.open(l.url, '_blank', 'noopener');
+        }
+        for (const f of r.failed) addToast(`⚠️ ${f.rule}: ${f.reason}`, 'error');
+      }).catch(err => addToast(`⚠️ שליחת ההודעות נכשלה: ${(err as Error).message}`, 'error'));
+    }
   };
 
   const handleAssignLead = (leadId: string, assignedTo: string) => {
@@ -763,16 +888,47 @@ function AppInner() {
     addToast(assignedTo ? `הליד שויך ל-${assignedTo} ✓` : 'שיוך הוסר ✓', 'success');
   };
 
+  /**
+   * Optional split of the pipeline across two screens. A lead belongs to the
+   * opportunities screen purely by its status, so moving between them is just
+   * a status change — no conversion step, no duplicate record to keep in sync.
+   */
+  const splitCfg = workspace?.pipelineSplit;
+  const splitOn = Boolean(splitCfg?.enabled && (splitCfg?.opportunityStatuses?.length ?? 0) > 0);
+  const oppStatuses = new Set(splitCfg?.opportunityStatuses ?? []);
+  const leadsForScope = (scope: 'leads' | 'opportunities'): Lead[] => {
+    if (!splitOn) return leads;
+    return scope === 'opportunities'
+      ? leads.filter(l => oppStatuses.has(String(l.status)))
+      : leads.filter(l => !oppStatuses.has(String(l.status)));
+  };
+
   const handleLeadDelete = (id: string) => {
+    const victim = leads.find(l => l.id === id);
     setLeads(prev => prev.filter(l => l.id !== id));
     setSelectedLead(null);
 
-    // Delete the lead document
-    if (useWorkspaceFirestore && wid) {
-      deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
-    } else {
-      deleteDoc(doc(db, 'leads', id)).catch(console.error);
-    }
+    // Park a copy BEFORE erasing. If parking fails we abort the delete and put
+    // the row back — losing a lead silently is the failure this exists to stop.
+    void (async () => {
+      if (useWorkspaceFirestore && wid && victim) {
+        const { moveToRecycleBin, logAudit } = await import('./lib/auditTrail');
+        const parked = await moveToRecycleBin(wid, victim, displayName);
+        if (!parked) {
+          setLeads(prev => (prev.some(l => l.id === id) ? prev : [...prev, victim]));
+          addToast('המחיקה בוטלה — לא הצלחתי לגבות את הליד', 'error');
+          return;
+        }
+        await deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
+        logAudit(wid, {
+          action: 'lead.delete', actor: displayName,
+          summary: `נמחק ליד "${victim.company || id}" (ניתן לשחזור מסל המיחזור)`,
+          targetId: id, targetName: victim.company,
+        });
+      } else {
+        await deleteDoc(doc(db, 'leads', id)).catch(console.error);
+      }
+    })();
 
     // Delete all standalone tasks linked to this lead
     const linkedTasks = standaloneTask.filter(t => t.leadId === id);
@@ -793,9 +949,15 @@ function AppInner() {
   const handleAddLead = async (lead: Lead) => {
     const leadWithTimestamp = { ...lead, createdAt: Date.now() } as Lead;
     setLeads(prev => [leadWithTimestamp, ...prev]);
-    await saveLead(leadWithTimestamp);
+    const ok = await saveLead(leadWithTimestamp);
     setShowNewLead(false);
-    addToast(`ליד חדש נוסף: ${lead.company}`, 'success');
+    if (ok) {
+      addToast(`ליד חדש נוסף: ${lead.company}`, 'success');
+    } else {
+      // Roll the optimistic row back so the UI never shows a lead that isn't stored.
+      setLeads(prev => prev.filter(l => l.id !== leadWithTimestamp.id));
+      addToast('שגיאה בשמירת הליד — נסה שוב', 'error');
+    }
   };
 
   const handleTaskComplete = (leadId: string, taskId: string) => {
@@ -850,16 +1012,33 @@ function AppInner() {
 
   const handleBulkDelete = (leadIds: string[]) => {
     const leadIdSet = new Set(leadIds);
+    const victims = leads.filter(l => leadIdSet.has(l.id));
     setLeads(prev => prev.filter(l => !leadIdSet.has(l.id)));
 
-    // Delete lead documents
-    leadIds.forEach(id => {
+    void (async () => {
       if (useWorkspaceFirestore && wid) {
-        deleteDoc(doc(db, 'workspaces', wid, 'leads', id)).catch(console.error);
+        const { moveToRecycleBin, logAudit } = await import('./lib/auditTrail');
+        let parked = 0;
+        for (const v of victims) {
+          if (await moveToRecycleBin(wid, v, displayName)) {
+            parked++;
+            await deleteDoc(doc(db, 'workspaces', wid, 'leads', v.id)).catch(console.error);
+          }
+        }
+        // Anything that could not be parked stays alive and comes back on screen.
+        if (parked < victims.length) {
+          const failed = victims.slice(parked);
+          setLeads(prev => [...prev, ...failed.filter(f => !prev.some(l => l.id === f.id))]);
+          addToast(`${failed.length} לידים לא נמחקו — הגיבוי שלהם נכשל`, 'error');
+        }
+        logAudit(wid, {
+          action: 'lead.bulk_delete', actor: displayName, count: parked,
+          summary: `נמחקו ${parked} לידים בפעולה קבוצתית (ניתנים לשחזור מסל המיחזור)`,
+        });
       } else {
-        deleteDoc(doc(db, 'leads', id)).catch(console.error);
+        leadIds.forEach(id => { void deleteDoc(doc(db, 'leads', id)).catch(console.error); });
       }
-    });
+    })();
 
     // Delete all standalone tasks linked to any of the deleted leads
     const linkedTasks = standaloneTask.filter(t => t.leadId && leadIdSet.has(t.leadId));
@@ -878,6 +1057,10 @@ function AppInner() {
   };
 
   const handleBulkStatusChange = (leadIds: string[], status: Lead['status']) => {
+    void import('./lib/auditTrail').then(({ logAudit }) => logAudit(wid, {
+      action: 'lead.bulk_status', actor: displayName, count: leadIds.length, after: String(status),
+      summary: `${leadIds.length} לידים הועברו לסטטוס "${status}"`,
+    }));
     setLeads(prev => {
       const next = prev.map(l =>
         leadIds.includes(l.id)
@@ -1041,6 +1224,22 @@ function AppInner() {
     addToast(`התוכנית עודכנה ל-${plan} ✓`, 'success');
   }, [refreshWorkspace, addToast]); // eslint-disable-line
 
+  // ─── Keep the Gmail connection alive ─────────────────────────────────────
+  // Browser OAuth tokens die after ~1h with no refresh token, which is why a
+  // mailbox connected yesterday read as "disconnected" today. Re-mint silently
+  // for as long as the app is open (see lib/gmailKeepAlive.ts).
+  useEffect(() => {
+    const wid = workspace?.id;
+    if (!wid) return;
+    let stop = () => {};
+    void (async () => {
+      const ka = await import('./lib/gmailKeepAlive');
+      ka.startGmailKeepAlive(wid, workspace?.emailConfig?.oauthClientId);
+      stop = ka.stopGmailKeepAlive;
+    })();
+    return () => stop();
+  }, [workspace?.id, workspace?.emailConfig?.oauthClientId]);
+
   // ─── Workspace field update (label / solutions) ──────────────────────────
   const handleWorkspaceFieldUpdate = useCallback(async (updates: Partial<import('./types').WorkspaceProfile>) => {
     const wid = workspace?.id;
@@ -1059,6 +1258,19 @@ function AppInner() {
     setLeads(prev => [...imported, ...prev]);
     imported.forEach(l => saveLead(l));
     addToast(`${imported.length} לידים יובאו`, 'success');
+    // An import is the single most destructive routine operation in this app —
+    // it is what flattened 253 statuses. It gets a log line with a status
+    // breakdown so the damage is legible the next morning.
+    void import('./lib/auditTrail').then(({ logAudit }) => {
+      const byStatus = imported.reduce<Record<string, number>>((a, l) => {
+        const k = String(l.status ?? '—'); a[k] = (a[k] ?? 0) + 1; return a;
+      }, {});
+      logAudit(wid, {
+        action: 'lead.import', actor: displayName, count: imported.length,
+        summary: `יובאו ${imported.length} לידים · ${Object.entries(byStatus)
+          .sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(' · ')}`,
+      });
+    });
   };
 
   const handleResetData = () => {
@@ -1101,6 +1313,11 @@ function AppInner() {
   }, [user, workspace?.onboardingComplete, isAdminDomain]); // eslint-disable-line
 
   // ─── Auth gates ──────────────────────────────────────────────────────────
+  // Public legal documents. Rendered before the auth gate on purpose: they
+  // must be reachable with no session, and must not sit behind a spinner
+  // that is waiting for one.
+  if (legalDoc) return <LegalPages doc={legalDoc} />;
+
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -1299,6 +1516,41 @@ function AppInner() {
   return (
     <ThemeProvider theme={settings.theme ?? 'light'}>
     <>
+      {/* ── Admin impersonation banner ───────────────────────────────────────
+          Always visible while a superadmin is inside someone else's workspace.
+          Without a permanent way out, "enter workspace" would be a one-way door.
+
+          LAYOUT NOTE: the container is dir="ltr" ON PURPOSE. The first version
+          was dir="rtl" with justify-between, which put the exit button against
+          the RIGHT edge — directly underneath this app's fixed right-hand
+          sidebar, so the one control that gets you out was invisible. The button
+          now sits on the physical left where nothing can cover it, and the bar
+          reserves room on the right for the sidebar. */}
+      {impersonation && (
+        <div
+          dir="ltr"
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-white"
+          style={{
+            background: 'linear-gradient(90deg,#7c3aed,#4f46e5)',
+            paddingRight: 'calc(15rem + 1rem)',
+            boxShadow: '0 2px 10px rgba(124,58,237,0.35)',
+          }}
+        >
+          <button
+            onClick={() => { stopImpersonation(); window.location.href = '/'; }}
+            className="flex-shrink-0 text-xs font-black px-4 py-2 rounded-xl transition-transform hover:scale-105 active:scale-95 flex items-center gap-1.5"
+            style={{ background: '#ffffff', color: '#5b21b6', boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}
+          >
+            <LogOut size={14} />
+            צא מהסביבה — חזור לאדמין
+          </button>
+          <div dir="rtl" className="flex-1 min-w-0 text-right text-xs font-bold truncate">
+            👁️ אתה צופה בסביבה <strong>{impersonation.workspaceName}</strong> בתור אדמין —
+            <span className="font-normal"> שינויים שתבצע ישפיעו על הנתונים האמיתיים של הלקוח</span>
+          </div>
+        </div>
+      )}
+
       {/* ── Email verification banner (within grace period) ─────────────────── */}
       {user && !emailVerified && inGracePeriod && (
         <EmailVerificationBanner
@@ -1319,6 +1571,8 @@ function AppInner() {
         onRefresh={() => addToast(fbReady ? 'מחובר ל-Firebase ✓' : 'טוען...', 'info')}
         overdueBadge={totalBadge}
         tokenLowAlert={tokenLowAlert}
+        notifications={notifications}
+        onNotificationClick={handleNotificationClick}
         userInitials={displayInitials}
         userName={displayName}
         allowedPages={
@@ -1329,10 +1583,29 @@ function AppInner() {
                 const pages = Array.isArray(wsPages) && wsPages.length > 0
                   ? wsPages
                   : (profile?.allowedPages ?? []);
-                return pages.filter((p: Page) => p !== 'admin');
+                const withSplit = splitOn
+                  ? [...pages, 'opportunities' as Page]
+                  : pages.filter((p: Page) => p !== 'opportunities');
+                return withSplit.filter((p: Page) => p !== 'admin');
               })()
-            // Super admin / dev bypass: full access
-            : (profile?.allowedPages ?? (bypassAuth ? ['home','dashboard','overview','analytics','team','ai','kanban','tasks','settings','content','deals','agents','workflows','admin','billing','integrations','email-agent','marketing-agent'] as Page[] : []))
+            // Impersonating a customer: show the pages THEY are allowed, not the
+            // admin's own full set. Seeing exactly what the customer sees is the
+            // whole point of entering their workspace — an admin looking at a
+            // full menu can't tell which pages the customer is missing.
+            : impersonation
+            ? ([...((workspace?.allowedPages ?? []) as Page[]), ...(splitOn ? ['opportunities' as Page] : [])])
+                .filter((p: Page) => p !== 'admin')
+            // Super admin / dev bypass: full access, derived from the Page
+            // registry rather than from a stored list.
+            //
+            // It used to read `profile?.allowedPages ?? []`, which assumes the
+            // super admin has a Firestore profile document. When that document
+            // is missing — as it is for this account — the fallback produced an
+            // empty array and the entire navigation menu disappeared, leaving
+            // only the admin console. A super admin's access is defined by being
+            // a super admin; it must not depend on a document that may never
+            // have been written.
+            : ALL_PAGES.filter(p => p !== 'opportunities' || splitOn)
         }
         isAdmin={isAdmin || bypassAuth}
         isSuperAdmin={isWorkspaceUser ? false : isSuperAdmin}
@@ -1370,7 +1643,7 @@ function AppInner() {
         )}
         {page === 'dashboard' && (
           <Dashboard
-            leads={leads}
+            leads={leadsForScope('leads')}
             onLeadClick={setSelectedLead}
             onNoteClick={setSelectedLead}
             onTaskComplete={handleTaskComplete}
@@ -1391,6 +1664,37 @@ function AppInner() {
             onOpenAi={openAiWithQuery}
             statusConfigs={statusConfigs}
             onOpenStatusEditor={() => setShowStatusEditor(true)}
+            onWorkspaceUpdate={handleWorkspaceFieldUpdate}
+            onNavigate={(p) => setPage(p as Page)}
+          />
+        )}
+        {/* Same screen, other half of the pipeline. Reusing Dashboard rather
+            than forking it means every future improvement lands on both. */}
+        {page === 'opportunities' && (
+          <Dashboard
+            leads={leadsForScope('opportunities')}
+            onLeadClick={setSelectedLead}
+            onNoteClick={setSelectedLead}
+            onTaskComplete={handleTaskComplete}
+            onToast={addToast}
+            onBulkStatusChange={handleBulkStatusChange}
+            onBulkDelete={handleBulkDelete}
+            compact={settings.compactMode}
+            workspace={workspace ?? undefined}
+            onOpenLeadsWizard={workspace ? () => setShowLeadsWizard(true) : undefined}
+            onImportLeads={handleImportLeads}
+            currentUser={displayName}
+            onCreateTask={handleStandaloneAdd}
+            onUpdateLead={handleLeadUpdate}
+            onUpdateStandaloneTask={handleStandaloneEdit}
+            team={team}
+            standaloneTask={standaloneTask}
+            insights={aiInsights}
+            onOpenAi={openAiWithQuery}
+            statusConfigs={statusConfigs}
+            onOpenStatusEditor={() => setShowStatusEditor(true)}
+            onWorkspaceUpdate={handleWorkspaceFieldUpdate}
+            onNavigate={(p) => setPage(p as Page)}
           />
         )}
         {page === 'overview' && (
@@ -1416,6 +1720,7 @@ function AppInner() {
             onStandaloneEdit={handleStandaloneEdit}
             onLeadTaskEdit={handleLeadTaskEdit}
             onPageChange={setPage}
+            onToast={addToast}
           />
         )}
         {page === 'settings' && (isWorkspaceUser || isAdminWorkspace) && workspace && (
@@ -1430,6 +1735,9 @@ function AppInner() {
             onWorkspaceUpdate={refreshWorkspace}
             settings={settings}
             onSettingsChange={handleSettingsChange}
+            statusConfigs={statusConfigs}
+            onSaveStatusConfigs={handleSaveStatusConfigs}
+            onWorkspaceFieldUpdate={handleWorkspaceFieldUpdate}
             integrationsPanel={
               <Integrations
                 leads={leads}
@@ -1484,44 +1792,22 @@ function AppInner() {
             onUpdateLead={handleLeadUpdate}
             onToast={addToast}
             workspaceId={wid ?? undefined}
+            statusConfigs={statusConfigs}
+            workspace={workspace ?? undefined}
           />
         )}
-        {page === 'workflows' && (() => {
-          // Redirect: show workflows inside email-agent tab
-          if (typeof window !== 'undefined') {
-            setTimeout(() => { setPage('email-agent'); setEmailAgentDefaultTab('workflows'); }, 0);
-          }
-          return null;
-        })()}
-        {page === 'analytics' && (
-          <Analytics
+        {page === 'workflows' && (
+          <AutomationStudio
+            workspaceId={wid ?? undefined}
             leads={leads}
             team={team}
-            standaloneTask={standaloneTask}
             currentUser={displayName}
-            onLeadClick={setSelectedLead}
-            workspaceId={wid ?? undefined}
-          />
-        )}
-        {/* 'integrations' page redirects to Settings > Integrations tab via useEffect */}
-        {page === 'content' && (
-          <ContentHub
-            workspace={workspace ?? undefined}
-            currentUser={displayName}
-            onNavigateToBilling={() => setPage('billing')}
+            statuses={statusConfigs.map(s => s.label)}
+            sources={workspace?.leadSources ?? []}
+            standaloneTasks={standaloneTask}
+            onCreateTask={handleStandaloneAdd}
             onToast={addToast}
           />
-        )}
-        {page === 'ai-studio' && (
-          <AiStudio
-            workspace={workspace ?? undefined}
-            currentUser={displayName}
-            onNavigateToBilling={() => setPage('billing')}
-            onToast={addToast}
-          />
-        )}
-        {page === 'deals' && (
-          <Deals leads={leads} team={team} currentUser={displayName} onLeadClick={setSelectedLead} onToast={addToast} />
         )}
         {page === 'admin' && !isWorkspaceUser && (bypassAuth || isSuperAdmin) && (
           <AdminPanel onToast={addToast} />
@@ -1531,6 +1817,7 @@ function AppInner() {
         )}
         {page === 'email-agent' && (
           <EmailAgent
+            leads={leads}
             workspaceId={wid ?? undefined}
             workspace={workspace ?? undefined}
             onToast={addToast}
@@ -1545,6 +1832,9 @@ function AppInner() {
                 onUpdateLead={handleLeadUpdate}
                 onToast={addToast}
                 workspaceId={wid ?? undefined}
+                statusConfigs={statusConfigs}
+                leadSources={workspace?.leadSources}
+                team={team}
               />
             }
           />
@@ -1591,6 +1881,7 @@ function AppInner() {
           onClose={() => setShowNewLead(false)}
           onAdd={handleAddLead}
           workspaceSolutions={workspace?.businessSolutions ?? []}
+          workspaceSources={workspace?.leadSources ?? []}
           currentUser={displayName}
           existingLeads={leads}
           statusConfigs={statusConfigs}
