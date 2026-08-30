@@ -30,6 +30,7 @@ import type { ChatBlock } from './ChatBlocks';
 import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
+import { useDraggableWindow } from '../lib/useDraggableWindow';
 
 const ACCENT = '#c026d3';       // fuchsia — distinct from the sales copilot's teal
 const WON_STATUSES = ['לקוח פעיל', 'נסגר', 'עסקה נסגרה'];
@@ -141,6 +142,7 @@ function analyseChannels(leads: Lead[]): ChannelRow[] {
 export default function MarketingCopilot({
   leads, workspace, workspaceId, currentUser, onToast, onNavigate, onClose,
 }: Props) {
+  const { backdropProps, panelProps, handleProps } = useDraggableWindow('marketing');
   /* Session lives in the shared store: closing the window keeps the history and
      lets a running plan/image generation finish in the background. */
   const session = useChatSession<ChatMsg>('marketing');
@@ -485,14 +487,15 @@ ${socialLine}
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"
-      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} onClick={onClose}>
-      <div dir="rtl" onClick={e => e.stopPropagation()}
+      {...backdropProps} onClick={backdropProps.onClick === undefined ? undefined : onClose}>
+      <div dir="rtl" onClick={e => e.stopPropagation()} ref={panelProps.ref}
         className="w-full sm:max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxHeight: '92vh', height: '92vh' }}>
+        style={{ maxHeight: '92vh', height: '92vh', ...panelProps.style }}>
 
         {/* Header */}
         <div className="px-5 py-3.5 flex items-center justify-between flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg,#a21caf,#db2777)' }}>
+          {...handleProps}
+          style={{ background: 'linear-gradient(135deg,#a21caf,#db2777)', ...handleProps.style }}>
           <div className="flex items-center gap-1">
             <button onClick={onClose} className="text-white/80 hover:text-white p-1"><X size={18} /></button>
             <button

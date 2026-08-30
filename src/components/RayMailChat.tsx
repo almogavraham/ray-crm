@@ -34,6 +34,7 @@ import {
 import type { GmailMessage } from '../lib/gmailAgent';
 import type { EmailAgentConfig } from '../types';
 import { appendMessage, setMessages, setOpen, useChatSession } from '../lib/chatSessionStore';
+import { useDraggableWindow } from '../lib/useDraggableWindow';
 
 interface Msg {
   role: 'user' | 'assistant';
@@ -52,6 +53,7 @@ export default function RayMailChat({
   onToast: (m: string, t?: 'success' | 'error' | 'info') => void;
   onClose: () => void;
 }) {
+  const { backdropProps, panelProps, handleProps } = useDraggableWindow('mail');
   const session = useChatSession<Msg>('mail');
   const msgs = session.msgs;
   const [input, setInput] = useState('');
@@ -229,14 +231,15 @@ export default function RayMailChat({
 
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"
-      style={{ background: 'rgba(2,6,23,0.55)' }} dir="rtl" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()}
+      {...backdropProps} dir="rtl" onClick={backdropProps.onClick === undefined ? undefined : onClose}>
+      <div onClick={e => e.stopPropagation()} ref={panelProps.ref}
         className="w-full sm:max-w-2xl h-[92vh] sm:h-[85vh] rounded-t-3xl sm:rounded-3xl flex flex-col overflow-hidden"
-        style={{ background: '#0b1220', border: '1px solid rgba(255,255,255,0.10)' }}>
+        style={{ background: '#0b1220', border: '1px solid rgba(255,255,255,0.10)', ...panelProps.style }}>
 
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg,#0369a1,#0891b2)' }}>
+          {...handleProps}
+          style={{ background: 'linear-gradient(135deg,#0369a1,#0891b2)', ...handleProps.style }}>
           <button onClick={onClose} className="p-1.5 rounded-lg text-white/90 hover:bg-white/15">
             <X size={17} />
           </button>

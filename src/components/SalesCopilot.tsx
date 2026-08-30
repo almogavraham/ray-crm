@@ -28,6 +28,7 @@ import type { ChatBlock } from './ChatBlocks';
 import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
+import { useDraggableWindow } from '../lib/useDraggableWindow';
 
 const ACCENT = '#0f766e';
 
@@ -173,6 +174,7 @@ export default function SalesCopilot({
   workspaceId, oauthClientId,
   onUpdateLead, onCreateTask, onLeadClick, onNavigate, onToast, onClose,
 }: Props) {
+  const { backdropProps, panelProps, handleProps } = useDraggableWindow('sales');
   /* The conversation lives in the shared store, not here — so closing the
      window neither loses the history nor kills a request already in flight. */
   const session  = useChatSession<ChatMsg>('sales');
@@ -510,14 +512,15 @@ create_task | change_status | flag_lead | mark_hot | set_followup | open_lead | 
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"
-      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} onClick={onClose}>
-      <div dir="rtl" onClick={e => e.stopPropagation()}
+      {...backdropProps} onClick={backdropProps.onClick === undefined ? undefined : onClose}>
+      <div dir="rtl" onClick={e => e.stopPropagation()} ref={panelProps.ref}
         className="w-full sm:max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxHeight: '92vh', height: '92vh' }}>
+        style={{ maxHeight: '92vh', height: '92vh', ...panelProps.style }}>
 
         {/* Header */}
         <div className="px-5 py-3.5 flex items-center justify-between flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg,#0f766e,#0891b2)' }}>
+          {...handleProps}
+          style={{ background: 'linear-gradient(135deg,#0f766e,#0891b2)', ...handleProps.style }}>
           <div className="flex items-center gap-1">
             <button onClick={onClose} className="text-white/80 hover:text-white p-1"><X size={18} /></button>
             <button

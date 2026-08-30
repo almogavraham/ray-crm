@@ -22,6 +22,7 @@ import type { TriggerType, WFActionType, Workflow, WorkflowCondition, WorkflowAc
 import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
+import { useDraggableWindow } from '../lib/useDraggableWindow';
 
 const GREETING: ChatMsg = {
   role: 'assistant',
@@ -62,6 +63,7 @@ interface Props {
 const uid = () => `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
 
 export default function AutomationChat({ leads, statuses, sources, team, onSave, onClose, seedPrompt }: Props) {
+  const { backdropProps, panelProps, handleProps } = useDraggableWindow('automation');
   /* Session lives in the shared store — closing the window keeps both the
      conversation and the live draft, and lets a running turn finish. */
   const session = useChatSession<ChatMsg>('automation');
@@ -246,14 +248,15 @@ create_task {"description","priority":"high|medium|low"} · change_status {"stat
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"
-      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} onClick={onClose}>
-      <div dir="rtl" onClick={e => e.stopPropagation()}
+      {...backdropProps} onClick={backdropProps.onClick === undefined ? undefined : onClose}>
+      <div dir="rtl" onClick={e => e.stopPropagation()} ref={panelProps.ref}
         className="w-full sm:max-w-2xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxHeight: '92vh', height: '92vh' }}>
+        style={{ maxHeight: '92vh', height: '92vh', ...panelProps.style }}>
 
         {/* Header */}
         <div className="px-5 py-3.5 flex items-center justify-between flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg,#7c3aed,#6366f1)' }}>
+          {...handleProps}
+          style={{ background: 'linear-gradient(135deg,#7c3aed,#6366f1)', ...handleProps.style }}>
           <div className="flex items-center gap-1">
             <button onClick={onClose} className="text-white/80 hover:text-white p-1"><X size={18} /></button>
             <button
