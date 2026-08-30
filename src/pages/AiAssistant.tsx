@@ -20,6 +20,7 @@ import { getMilestoneProgress, MILESTONE_DEFS } from '../lib/insightEngine';
 import { getAnthropicProxy } from '../lib/anthropicClient';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { doc, getDoc, setDoc, collection, onSnapshot, getDocs, query, orderBy, limit, addDoc } from 'firebase/firestore';
+import { buildLeadContext } from '../lib/leadContext';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ToolAction {
@@ -356,6 +357,7 @@ function buildSystemBlocks(
   accounts: AccountData[] = [],
   workspace?: import('../types').WorkspaceProfile | null,
   statusConfigs: StatusConfig[] = DEFAULT_STATUS_CONFIGS,
+  question = '',
 ) {
   const today = new Date().toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const ai = workspace?.aiProfile;
@@ -470,15 +472,13 @@ ${ai?.commonObjections ? `🛡️ התנגדויות נפוצות: ${ai.commonOb
     return Math.round(score);
   };
 
-  const leadsSummary = leads.slice(0, 80).map(l => {
-    const tasksOpen = l.tasks.filter(t => !t.completed).length;
-    const solutions = l.solutions.map(s => s.name).join(', ') || 'אין';
-    const budget = l.budget > 0 ? `₪${l.budget.toLocaleString()}/חודש` : 'לא ידוע';
-    const hotScore = computeHotScoreForPrompt(l);
-    const isHot = hotScore >= 45 && !['לקוח פעיל','לא רלוונטי'].includes(l.status);
-    const lastAct = l.activityLog?.length ? ` | פעילות אחרונה:${new Date(l.activityLog[l.activityLog.length-1].timestamp).toLocaleDateString('he-IL')}` : '';
-    return `[${l.id}] ${isHot ? '🔥' : ''}${l.company} | ${l.contactName} | ${l.status} | תקציב:${budget} | שירותים:${solutions} | ציון:${l.aiScore}% | חם:${hotScore} | משימות:${tasksOpen}${l.waitingContent ? ' | ⏳ממתין לתוכן' : ''}${lastAct}`;
-  }).join('\n');
+  // The old summary was one line per lead, capped at 80, carrying no notes and
+  // no activity-log content — so the assistant could not answer anything about
+  // what had actually happened with a customer, and silently ignored lead 81
+  // onward. buildLeadContext is what the copilots already use: a compact record
+  // for every lead, plus full cards — activity log included — for the ones the
+  // question points at.
+  const leadsSummary = buildLeadContext(leads, question).text;
 
   // Build client accounts context (files + proposals)
   const accountsContext = accounts
@@ -1931,7 +1931,7 @@ export default function AiAssistant({
     setStreamingText('');
 
     const client = getAnthropicProxy();
-    const baseBlocks = buildSystemBlocks(leads, currentUser, accounts, workspace, statusConfigs);
+    const baseBlocks = buildSystemBlocks(leads, currentUser, accounts, workspace, statusConfigs, text);
     // Inject page context so RAY knows where the user is and what data is visible
     const PAGE_LABELS: Record<string, string> = {
       home: 'דף הבית', dashboard: 'רשימת לידים', kanban: 'לוח קנבן',

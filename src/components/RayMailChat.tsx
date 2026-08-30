@@ -29,8 +29,9 @@ import { speak, stopSpeaking, isSpeechSupported, hasHebrewVoice, readableEmailTe
 import { composeFromSpeech, loadStyleLearning } from '../lib/voiceCompose';
 import type { ComposedEmail, StyleLearning } from '../lib/voiceCompose';
 import {
-  getActiveToken, fetchUnreadEmails, sendGmailReply, loadAgentConfig, askAboutEmails,
+  fetchUnreadEmails, sendGmailReply, loadAgentConfig, askAboutEmails,
 } from '../lib/gmailAgent';
+import { getLiveGmailToken } from '../lib/gmailKeepAlive';
 import type { GmailMessage } from '../lib/gmailAgent';
 import type { EmailAgentConfig } from '../types';
 import { appendMessage, setMessages, setOpen, useChatSession } from '../lib/chatSessionStore';
@@ -47,9 +48,11 @@ interface Msg {
 const POLL_MS = 60_000;
 
 export default function RayMailChat({
-  workspaceId, onToast, onClose,
+  workspaceId, clientId, onToast, onClose,
 }: {
   workspaceId?: string;
+  /** OAuth client id, so a lapsed token can be re-minted without a popup. */
+  clientId?: string;
   onToast: (m: string, t?: 'success' | 'error' | 'info') => void;
   onClose: () => void;
 }) {
@@ -110,7 +113,7 @@ export default function RayMailChat({
 
   /* ── Watch the inbox ──────────────────────────────────────────────────── */
   const checkMail = useCallback(async (announce: boolean) => {
-    const token = getActiveToken();
+    const token = await getLiveGmailToken(workspaceId, clientId);
     if (!token) return;
     try {
       const unread = await fetchUnreadEmails(token, 10);
@@ -129,7 +132,7 @@ export default function RayMailChat({
       // A polling failure must not spam the conversation on every tick.
       console.error('[RayMail] inbox poll failed', e);
     }
-  }, [push]);
+  }, [push, workspaceId, clientId]);
 
   useEffect(() => {
     void checkMail(false);
@@ -181,7 +184,7 @@ export default function RayMailChat({
 
   /* ── Free-form questions about the inbox ──────────────────────────────── */
   const askInbox = async (question: string) => {
-    const token = getActiveToken();
+    const token = await getLiveGmailToken(workspaceId, clientId);
     if (!token) { setError('אין חיבור פעיל ל-Gmail — התחבר בלשונית ההגדרות של סוכן המכירות'); return; }
     setBusy(true); setError('');
     try {
@@ -211,7 +214,7 @@ export default function RayMailChat({
 
   const send = async () => {
     if (!draft || !active) return;
-    const token = getActiveToken();
+    const token = await getLiveGmailToken(workspaceId, clientId);
     if (!token) { setError('אין חיבור פעיל ל-Gmail — התחבר מחדש ונסה שוב'); return; }
     if (!window.confirm(`לשלוח את התשובה אל ${active.from}?`)) return;
     setSending(true); setError('');
@@ -227,7 +230,9 @@ export default function RayMailChat({
     } finally { setSending(false); }
   };
 
-  const connected = !!getActiveToken();
+  // A configured account IS a connection. Reporting "not connected" because an
+  // hour-old token lapsed is what made the user reconnect needlessly.
+  const connected = (config?.accounts?.length ?? 0) > 0;
 
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"

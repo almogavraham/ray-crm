@@ -1831,6 +1831,7 @@ export default function Dashboard({
       {showMailChat && (
         <RayMailChat
           workspaceId={workspace?.id}
+          clientId={workspace?.emailConfig?.oauthClientId}
           onToast={(m, t) => onToast?.(m, t ?? 'info')}
           onClose={() => setShowMailChat(false)}
         />

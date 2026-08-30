@@ -25,7 +25,7 @@
  * exchanging the code in a Cloud Function that holds the client secret.
  */
 
-import { loadAgentConfig, saveAgentConfig, requestGmailTokenSilent } from './gmailAgent';
+import { loadAgentConfig, saveAgentConfig, requestGmailTokenSilent, getActiveToken } from './gmailAgent';
 import type { EmailAgentConfig } from '../types';
 
 /** Re-mint when fewer than this many ms remain, so callers never race expiry. */
@@ -112,6 +112,30 @@ export async function refreshGmailTokens(
   })();
 
   return inFlight;
+}
+
+/**
+ * The token to use right now: the cached one if it is still live, otherwise a
+ * silently re-minted one.
+ *
+ * Every surface should call this instead of `getActiveToken()`. That accessor is
+ * synchronous, so it can only report the in-memory token — and it returns null
+ * the moment that token ages out, which is why a mailbox that was connected an
+ * hour ago reported itself disconnected. Consent has not been withdrawn in that
+ * situation; only the short-lived token has lapsed, and it can be replaced with
+ * no popup.
+ *
+ * Returns null only when consent is genuinely gone — revoked, or signed out.
+ */
+export async function getLiveGmailToken(
+  wid?: string | null,
+  clientIdFallback?: string,
+): Promise<string | null> {
+  const cached = getActiveToken();
+  if (cached) return cached;
+  if (!wid) return null;
+  const ok = await refreshGmailTokens(wid, clientIdFallback);
+  return ok ? getActiveToken() : null;
 }
 
 /** Call before any operation that needs a live token right now. */

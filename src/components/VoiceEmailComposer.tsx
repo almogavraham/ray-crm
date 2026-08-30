@@ -22,7 +22,8 @@ import {
   composeFromSpeech, learnFromSentMail, loadStyleLearning, saveStyleLearning,
 } from '../lib/voiceCompose';
 import type { ComposedEmail, StyleLearning, SuggestedEmail } from '../lib/voiceCompose';
-import { getActiveToken, sendGmailNew } from '../lib/gmailAgent';
+import { sendGmailNew } from '../lib/gmailAgent';
+import { getLiveGmailToken } from '../lib/gmailKeepAlive';
 import type { EmailAgentConfig, Lead } from '../types';
 
 interface Props {
@@ -122,7 +123,7 @@ export default function VoiceEmailComposer({ workspaceId, config, leads = [], is
     const to = toEmail.trim();
     if (!to) { setError('אין כתובת נמען'); return; }
 
-    const token = getActiveToken();
+    const token = await getLiveGmailToken(workspaceId, config?.accounts?.[0]?.clientId);
     if (!token) {
       setError('אין חיבור פעיל ל-Gmail — התחבר בלשונית ההגדרות, או העתק את המייל ושלח ידנית');
       return;
@@ -152,7 +153,7 @@ export default function VoiceEmailComposer({ workspaceId, config, leads = [], is
 
   const learn = async () => {
     if (!workspaceId) return;
-    const token = getActiveToken();
+    const token = await getLiveGmailToken(workspaceId, config?.accounts?.[0]?.clientId);
     if (!token) { onToast('צריך חיבור פעיל ל-Gmail כדי ללמוד מהמיילים שלך', 'error'); return; }
     setLearnBusy('מתחיל…');
     try {
