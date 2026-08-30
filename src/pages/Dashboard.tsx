@@ -1755,89 +1755,56 @@ export default function Dashboard({
       </>)}
 
 
-      {/* ── Floating automation-chat button ──
-          Rendered through a portal straight onto <body> so no ancestor can ever
-          turn `position: fixed` into "fixed relative to a transformed parent". */}
-      {createPortal(
-        <button
-          onClick={() => setShowAutoChat(true)}
-          title="בונה האוטומציות החכם — שוחח ובנה אוטומציה"
-          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
-          style={{
-            // PHYSICAL left/bottom on purpose: the app renders RTL, where
-            // `inset-inline-start` resolves to the RIGHT edge — directly underneath
-            // the sidebar, which hid this button completely. Stacked above the
-            // existing round FAB in the bottom-left corner so they don't overlap.
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 11rem)',
-            left: '1.25rem',
-            background: 'linear-gradient(135deg,#7c3aed,#6366f1)',
-            boxShadow: '0 8px 28px rgba(124,58,237,0.45)',
-          }}>
-          <Sparkles size={17} />
-          <span>בנה אוטומציה</span>
-          <ChatBadge {...autoBadge} />
-        </button>,
-        document.body,
-      )}
+      {/* ── The four smart chats, as one row centred at the top ──
+          Previously four separately positioned buttons stacked up the
+          bottom-left corner, which meant every new chat pushed the stack further
+          up the screen and each one carried its own magic offset. One flex row
+          owns the layout instead, so adding a fifth chat needs no arithmetic.
 
-      {/* ── Floating Sales Copilot button (primary) ── */}
-      {createPortal(
-        <button
-          onClick={() => setShowCopilot(true)}
-          title="RAY Copilot — שותף המכירות החכם שלך"
-          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
-          style={{
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 15.5rem)',
-            left: '1.25rem',
-            background: 'linear-gradient(135deg,#0f766e,#0891b2)',
-            boxShadow: '0 8px 28px rgba(13,148,136,0.45)',
-          }}>
-          <Sparkles size={17} />
-          <span>RAY Copilot</span>
-          <ChatBadge {...salesBadge} />
-        </button>,
-        document.body,
-      )}
+          Rendered through a portal straight onto <body> so no ancestor can turn
+          `position: fixed` into "fixed relative to a transformed parent", and
+          centred with a physical left/translate rather than a logical property,
+          because under dir="rtl" logical inset properties resolve to the right
+          edge — where the sidebar sits.
 
-      {/* ── Floating Marketing Copilot button — stacked directly above the
-             sales copilot, as requested. Same portal trick, same physical
-             `left` (RTL turns `inset-inline-start` into the right edge). ── */}
+          The general AI assistant keeps its own launcher and is deliberately not
+          part of this group. */}
       {createPortal(
-        <button
-          onClick={() => setShowMktChat(true)}
-          title="RAY Marketing — מנהל השיווק החכם שלך"
-          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
+        <div
+          className="fixed z-50 flex items-center gap-2 flex-wrap justify-center px-2"
           style={{
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20rem)',
-            left: '1.25rem',
-            background: 'linear-gradient(135deg,#a21caf,#db2777)',
-            boxShadow: '0 8px 28px rgba(192,38,211,0.45)',
+            top: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            maxWidth: 'min(96vw, 900px)',
           }}>
-          <Megaphone size={17} />
-          <span>RAY Marketing</span>
-          <ChatBadge {...mktBadge} />
-        </button>,
-        document.body,
-      )}
-
-      {/* RAY MAIL — fourth in the stack. Physical `left` for the same reason as
-          the others: under dir="rtl" a logical start property lands on the right,
-          where the fixed sidebar covers it. */}
-      {createPortal(
-        <button
-          onClick={() => setShowMailChat(true)}
-          title="RAY MAIL — העוזר האישי שלך למיילים"
-          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
-          style={{
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 24.5rem)',
-            left: '1.25rem',
-            background: 'linear-gradient(135deg,#0369a1,#0891b2)',
-            boxShadow: '0 8px 28px rgba(8,145,178,0.45)',
-          }}>
-          <Mail size={17} />
-          <span>RAY MAIL</span>
-          <ChatBadge {...mailBadge} />
-        </button>,
+          {([
+            { key: 'mail',   label: 'RAY MAIL',       icon: Mail,      badge: mailBadge,
+              title: 'RAY MAIL — העוזר האישי שלך למיילים',
+              bg: 'linear-gradient(135deg,#0369a1,#0891b2)', shadow: 'rgba(8,145,178,0.45)',
+              open: () => setShowMailChat(true) },
+            { key: 'sales',  label: 'RAY Copilot',    icon: Sparkles,  badge: salesBadge,
+              title: 'RAY Copilot — שותף המכירות החכם שלך',
+              bg: 'linear-gradient(135deg,#0f766e,#0891b2)', shadow: 'rgba(13,148,136,0.45)',
+              open: () => setShowCopilot(true) },
+            { key: 'mkt',    label: 'RAY Marketing',  icon: Megaphone, badge: mktBadge,
+              title: 'RAY Marketing — מנהל השיווק החכם שלך',
+              bg: 'linear-gradient(135deg,#a21caf,#db2777)', shadow: 'rgba(192,38,211,0.45)',
+              open: () => setShowMktChat(true) },
+            { key: 'auto',   label: 'בנה אוטומציה',   icon: Sparkles,  badge: autoBadge,
+              title: 'בונה האוטומציות החכם — שוחח ובנה אוטומציה',
+              bg: 'linear-gradient(135deg,#7c3aed,#6366f1)', shadow: 'rgba(124,58,237,0.45)',
+              open: () => setShowAutoChat(true) },
+          ] as const).map(b => (
+            <button key={b.key} onClick={b.open} title={b.title}
+              className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl text-white font-bold text-[13px] transition-transform hover:scale-105 active:scale-95"
+              style={{ background: b.bg, boxShadow: `0 8px 28px ${b.shadow}` }}>
+              <b.icon size={16} />
+              <span>{b.label}</span>
+              <ChatBadge {...b.badge} />
+            </button>
+          ))}
+        </div>,
         document.body,
       )}
 
