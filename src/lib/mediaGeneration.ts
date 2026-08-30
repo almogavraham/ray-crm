@@ -144,6 +144,25 @@ export async function generateImage(
   return url;
 }
 
+/**
+ * Is this failure "the account cannot pay for this", rather than a bad request?
+ *
+ * Worth its own predicate because the response to it is different in kind: no
+ * other model on the same key can succeed either, so retrying the cascade just
+ * produces one error toast per model and still no image. The provider wording
+ * varies and does not always contain "billing" or "quota" — Google's current
+ * message is "Your prepayment credits are depleted", which every keyword check
+ * in this codebase missed.
+ */
+export function isOutOfCredits(message: string): boolean {
+  const m = String(message ?? '').toLowerCase();
+  return [
+    'prepayment', 'credits are depleted', 'insufficient', 'billing',
+    'quota', 'resource_exhausted', 'permission_denied',
+    'exceeded your current quota', 'payment required',
+  ].some(k => m.includes(k));
+}
+
 /* ── Kling video (via Cloud Function) ──────────────────────────────────────── */
 
 const fns = () => getFunctions(undefined, 'us-central1');

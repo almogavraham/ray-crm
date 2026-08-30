@@ -52,8 +52,7 @@ import {
 import type { CopyItem, AudienceProfile, CompetitorAd, CampaignBrief } from '../lib/marketingEnhancements';
 import type { ProductProfile, GeneratedMedia, PostLearning } from '../lib/mediaGeneration';
 import {
-  loadProductProfile, saveProductProfile, recordApprovedMedia, recordPublishedPost,
-} from '../lib/mediaGeneration';
+  loadProductProfile, saveProductProfile, recordApprovedMedia, recordPublishedPost, isOutOfCredits } from '../lib/mediaGeneration';
 import { db, storage } from '../lib/firebase';
 import {
   exportToPPTX, exportToGoogleSlides, requestSlidesToken, fetchSlideThumbnails,
@@ -1856,6 +1855,10 @@ export default function MarketingAgent({ workspaceId: wid, workspace, onToast, o
       let imageUrl = '';
       let lastErr  = '';
       let attempt  = 0;
+      // When the key is out of credits, no other model on it can succeed. Kept
+      // as a flag so the cascade stops rather than emitting one failure toast
+      // per model and still producing nothing.
+      let outOfCredits = false;
 
       // ── Strategy 1: Imagen 4 via :predict (fastest, highest quality) ────────
       const imagenModels = ['imagen-4.0-fast-generate-001', 'imagen-4.0-generate-001'];
@@ -1872,7 +1875,8 @@ export default function MarketingAgent({ workspaceId: wid, workspace, onToast, o
           if (!ok) {
             const msg = (d.error as Record<string,string>)?.message ?? `HTTP ${status}`;
             lastErr = msg;
-            const skip = status === 404 || status === 400 || msg.includes('not found') || msg.includes('INVALID_ARGUMENT') || msg.includes('billing') || msg.includes('quota') || msg.includes('PERMISSION_DENIED');
+            if (isOutOfCredits(msg)) { outOfCredits = true; break; }
+            const skip = status === 404 || status === 400 || msg.includes('not found') || msg.includes('INVALID_ARGUMENT');
             onToast?.(`${model}: ${msg.substring(0, 60)} — מנסה הבא...`, 'info');
             if (skip) continue;
             throw new Error(msg);
@@ -1892,7 +1896,7 @@ export default function MarketingAgent({ workspaceId: wid, workspace, onToast, o
       }
 
       // ── Strategy 2: Gemini image models via :generateContent ─────────────────
-      if (!imageUrl) {
+      if (!imageUrl && !outOfCredits) {
         const geminiModels = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image'];
         for (const model of geminiModels) {
           if (imageUrl) break;
@@ -1910,6 +1914,7 @@ export default function MarketingAgent({ workspaceId: wid, workspace, onToast, o
             if (!gOk) {
               const msg = (data.error as Record<string,string>)?.message ?? `HTTP ${gStatus}`;
               lastErr = msg;
+              if (isOutOfCredits(msg)) { outOfCredits = true; break; }
               onToast?.(`${model}: ${msg.substring(0,60)} — מנסה הבא...`, 'info'); continue;
             }
             const cands = data.candidates as Array<Record<string,Record<string,Array<Record<string,Record<string,string>>>>>> | undefined;
@@ -1926,7 +1931,25 @@ export default function MarketingAgent({ workspaceId: wid, workspace, onToast, o
         }
       }
 
-      if (!imageUrl) throw new Error(lastErr || 'כל המודלים נכשלו');
+      if (!imageUrl) {
+        // Every keyed engine failed. Rather than leave the user with nothing,
+        // fall back to the free engine — it needs no key and no balance. Said
+        // out loud, because the result is a different model than they picked.
+        try {
+          onToast?.(outOfCredits
+            ? 'נגמרו הקרדיטים ב-Google AI Studio — מייצר במנוע החינמי במקום'
+            : 'המנועים של Google לא הגיבו — מייצר במנוע החינמי במקום', 'info');
+          const { pollinationsImage, notPersisted } = await import('../lib/marketingAutopilot');
+          imageUrl = await pollinationsImage(effectivePrompt, wid);
+          if (notPersisted.has(imageUrl)) {
+            onToast?.('התמונה נוצרה אך לא נשמרה — Firebase Storage לא מוגדר בפרויקט. היא תיעלם ברענון ולא ניתן לפרסם אותה.', 'error');
+          }
+        } catch (fallbackErr) {
+          throw new Error(outOfCredits
+            ? 'נגמרו הקרדיטים ב-Google AI Studio, וגם המנוע החינמי לא זמין כרגע. טען קרדיטים ב-aistudio.google.com או נסה שוב בעוד כמה דקות.'
+            : (lastErr || (fallbackErr as Error).message || 'כל המודלים נכשלו'));
+        }
+      }
 
       setCampaignMedia({ url: imageUrl, type: 'image', engine: 'imagen', thumbnailUrl: imageUrl, prompt: effectivePrompt });
       addToGallery({ url: imageUrl, type: 'image', engine: 'imagen', thumbnailUrl: imageUrl, prompt: effectivePrompt });

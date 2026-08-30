@@ -284,6 +284,12 @@ ${schema}`;
 
 /* ── Media generation (Pollinations, free, no key) ────────────────────────── */
 /** Generate one image via Pollinations and upload to Storage. Returns URL. */
+/**
+ * Image URLs that exist only in this browser session because saving them
+ * failed. Callers check this before offering to publish or schedule the image.
+ */
+export const notPersisted = new Set<string>();
+
 export async function pollinationsImage(prompt: string, wid?: string): Promise<string> {
   const encoded = encodeURIComponent(prompt.slice(0, 900));
   const models = ['flux-schnell', 'turbo', 'flux'];
@@ -301,9 +307,22 @@ export async function pollinationsImage(prompt: string, wid?: string): Promise<s
       const blob = await res.blob();
       if (!blob || blob.size < 500) continue;
       if (wid) {
-        const sRef = storageRef(storage, `workspaces/${wid}/media/autopilot_${Date.now()}.jpg`);
-        await uploadBytes(sRef, blob, { contentType: blob.type || 'image/jpeg' });
-        return await getDownloadURL(sRef);
+        try {
+          const sRef = storageRef(storage, `workspaces/${wid}/media/autopilot_${Date.now()}.jpg`);
+          await uploadBytes(sRef, blob, { contentType: blob.type || 'image/jpeg' });
+          return await getDownloadURL(sRef);
+        } catch (uploadErr) {
+          // The image generated fine — only saving it failed (most often because
+          // Firebase Storage is not set up on the project, so there is no bucket).
+          // Returning the local blob shows the user what was made instead of
+          // retrying the whole generation and eventually reporting nothing at
+          // all. The URL is per-session and cannot be published; the caller is
+          // told so rather than left to discover it later.
+          console.error('[pollinationsImage] storage upload failed — returning local blob', uploadErr);
+          const local = URL.createObjectURL(blob);
+          notPersisted.add(local);
+          return local;
+        }
       }
       return URL.createObjectURL(blob);
     } catch {
