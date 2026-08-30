@@ -12,6 +12,10 @@ interface WorkflowsProps {
   onUpdateLead: (lead: Lead) => void;
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
   workspaceId?: string;
+  /** Live lead statuses / sources / team — keeps the automation builder in sync. */
+  statusConfigs?: { label: string }[];
+  leadSources?: string[];
+  team?: import('../types').TeamMember[];
 }
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -458,6 +462,7 @@ function SequenceBuilder({ workspaceId }: { workspaceId?: string }) {
 
 export default function Workflows({
   leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId,
+  statusConfigs, leadSources, team,
 }: WorkflowsProps) {
   const { isDark, c } = useTheme();
   const activeLeads = leads.filter(l => ['חדש', 'בתהליך', 'רימרקטינג'].includes(l.status)).length;
@@ -567,6 +572,9 @@ export default function Workflows({
             onUpdateLead={onUpdateLead}
             onToast={onToast}
             workspaceId={workspaceId}
+            statusConfigs={statusConfigs}
+            leadSources={leadSources}
+            team={team}
           />
         </div>
       </div>
