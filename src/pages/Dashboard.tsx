@@ -23,7 +23,8 @@ import MarketingCopilot from '../components/MarketingCopilot';
 import RayMailChat from '../components/RayMailChat';
 import { useChatBadge, setChatScope } from '../lib/chatSessionStore';
 import LeadViewBar from '../components/LeadViewBar';
-import { LeadBoardView, LeadCardsView } from '../components/LeadBoardView';
+import { LeadCardsView } from '../components/LeadBoardView';
+import Kanban from './Kanban';
 import {
   loadLeadViews, saveLeadViews, isDirty, BUILT_IN_VIEWS, EMPTY_FILTERS,
 } from '../lib/leadViews';
@@ -1371,8 +1372,20 @@ export default function Dashboard({
 
       {/* Board and cards replace BOTH the mobile list and the desktop table —
           they are already responsive, so there is no separate mobile variant. */}
+      {/* Board mode renders the real pipeline, not a lookalike. LeadBoardView was
+          a read-only stand-in; reusing Kanban here means drag-to-change-status,
+          the column styling and every capability of the pipeline page arrive at
+          once and cannot drift from it later. It receives the already-filtered
+          leads, so the saved view's filters still apply. */}
       {viewMode === 'board' && (
-        <LeadBoardView leads={filtered} statusConfigs={statusConfigs} onLeadClick={onLeadClick} />
+        <Kanban
+          leads={filtered}
+          statusConfigs={statusConfigs}
+          onLeadClick={onLeadClick}
+          onLeadSave={l => onUpdateLead?.(l)}
+          onPageChange={onNavigate}
+          workspace={workspace}
+        />
       )}
       {viewMode === 'cards' && (
         <LeadCardsView leads={paged} statusConfigs={statusConfigs} onLeadClick={onLeadClick} />

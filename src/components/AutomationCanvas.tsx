@@ -16,8 +16,8 @@
  * canvas derives it and spends the interaction budget on editing instead.
  */
 
-import { useMemo, useState } from 'react';
-import { Plus, X, Zap, GitBranch, Play, Hand } from 'lucide-react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Plus, X, Zap, GitBranch, Play, Hand, RotateCcw } from 'lucide-react';
 import {
   TRIGGER_LABELS, ACTION_LABELS, SAFE_ACTIONS, SEND_ACTIONS, VALUELESS_TRIGGERS, runsAutomatically,
   describeCondition, describeAction,
@@ -79,7 +79,21 @@ function layout(wf: Workflow) {
     auto: runsAutomatically(a.type),
   }));
 
-  return { nodes, width, height, conds, acts };
+  // A node the user dragged wins over the computed column. Everything else
+  // keeps flowing automatically, so adding a condition to a hand-arranged rule
+  // does not require re-arranging the whole board.
+  const saved = wf.board ?? {};
+  for (const n of nodes) {
+    const p2 = saved[n.id];
+    if (p2 && Number.isFinite(p2.x) && Number.isFinite(p2.y)) { n.x = p2.x; n.y = p2.y; }
+  }
+
+  // Grow the canvas around whatever the nodes ended up covering, so a node
+  // dragged past the original bounds is not clipped out of view.
+  const spanW = Math.max(width,  ...nodes.map(n => n.x + NODE_W + PAD));
+  const spanH = Math.max(height, ...nodes.map(n => n.y + NODE_H + PAD));
+
+  return { nodes, width: spanW, height: spanH, conds, acts };
 }
 
 /** Right-to-left elbow connector between two node edges. */
@@ -100,8 +114,25 @@ interface Props {
 }
 
 export default function AutomationCanvas({ workflow, statuses, sources, templates, onChange, onAskChat }: Props) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  // Live position while dragging. Committed to the workflow on release so a
+  // drag is one undoable change rather than a write per mouse-move.
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number; dx: number; dy: number } | null>(null);
+
   const [sel, setSel] = useState<string | null>(null);
-  const { nodes, width, height, conds, acts } = useMemo(() => layout(workflow), [workflow]);
+  const base = useMemo(() => layout(workflow), [workflow]);
+  // Apply the in-flight drag to the node array itself, so the connectors follow
+  // the node while it moves instead of snapping only on release.
+  const { nodes, width, height, conds, acts } = useMemo(() => {
+    if (!drag) return base;
+    const nodes2 = base.nodes.map(n => (n.id === drag.id ? { ...n, x: drag.x, y: drag.y } : n));
+    return {
+      ...base,
+      nodes: nodes2,
+      width:  Math.max(base.width,  ...nodes2.map(n => n.x + NODE_W + PAD)),
+      height: Math.max(base.height, ...nodes2.map(n => n.y + NODE_H + PAD)),
+    };
+  }, [base, drag]);
   const gate = nodes.find(n => n.id === 'gate')!;
   const editable = Boolean(onChange);
 
@@ -125,6 +156,47 @@ export default function AutomationCanvas({ workflow, statuses, sources, template
     action:  { line: 'rgba(16,185,129,0.5)',   text: 'var(--as-ok)', dot: '#10b981' },
   };
 
+  /** Client point → SVG user units. The svg is rendered at its natural size, so
+   *  this is a straight offset, but it must account for scroll and page zoom. */
+  const toSvg = useCallback((e: React.PointerEvent) => {
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r) return { x: 0, y: 0 };
+    const sx = (svgRef.current?.width.baseVal.value ?? r.width) / (r.width || 1);
+    const sy = (svgRef.current?.height.baseVal.value ?? r.height) / (r.height || 1);
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  }, []);
+
+  const startDrag = useCallback((e: React.PointerEvent, n: Node) => {
+    if (!onChange) return;                       // read-only board stays static
+    const p = toSvg(e);
+    setDrag({ id: n.id, x: n.x, y: n.y, dx: p.x - n.x, dy: p.y - n.y });
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  }, [onChange, toSvg]);
+
+  const moveDrag = useCallback((e: React.PointerEvent) => {
+    if (!drag) return;
+    const p = toSvg(e);
+    // Never let a node go negative: SVG has no negative canvas, so it would be
+    // dragged permanently out of reach.
+    setDrag(d => (d ? { ...d, x: Math.max(0, p.x - d.dx), y: Math.max(0, p.y - d.dy) } : d));
+  }, [drag, toSvg]);
+
+  const endDrag = useCallback((e: React.PointerEvent) => {
+    if (!drag || !onChange) return;
+    try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    onChange({ ...workflow, board: { ...(workflow.board ?? {}), [drag.id]: { x: Math.round(drag.x), y: Math.round(drag.y) } } });
+    setDrag(null);
+  }, [drag, onChange, workflow]);
+
+  /** Reset to the automatic layout — an escape hatch from a messy board. */
+  const resetBoard = useCallback(() => {
+    if (!onChange) return;
+    const next = { ...workflow };
+    delete next.board;
+    onChange(next);
+  }, [onChange, workflow]);
+
   return (
     <div className="space-y-3" dir="rtl">
       {/* Column legend — names the three stages once so the board needs no caption */}
@@ -141,7 +213,9 @@ export default function AutomationCanvas({ workflow, statuses, sources, template
             'radial-gradient(circle at 1px 1px, var(--as-line-2) 1px, transparent 0) 0 0 / 22px 22px, var(--as-ground-2)',
           border: '1px solid var(--as-line)',
         }}>
-        <svg width={width} height={height} style={{ display: 'block', minWidth: '100%' }}>
+        <svg ref={svgRef} width={width} height={height}
+          onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+          style={{ display: 'block', minWidth: '100%', touchAction: drag ? 'none' : undefined }}>
           <defs>
             <marker id="ac-arrow" viewBox="0 0 10 10" refX="9" refY="5"
               markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -164,7 +238,10 @@ export default function AutomationCanvas({ workflow, statuses, sources, template
             const c = COLORS[n.kind];
             const on = sel === n.id;
             return (
-              <g key={n.id} onClick={() => setSel(on ? null : n.id)} style={{ cursor: 'pointer' }}>
+              <g key={n.id}
+                onClick={() => { if (!drag) setSel(on ? null : n.id); }}
+                onPointerDown={e => startDrag(e, n)}
+                style={{ cursor: onChange ? (drag?.id === n.id ? 'grabbing' : 'grab') : 'pointer' }}>
                 <rect x={n.x} y={n.y} width={NODE_W} height={NODE_H} rx="10"
                   fill={on ? 'var(--as-surf-2)' : 'var(--as-surf)'}
                   stroke={on ? c.dot : 'var(--as-line)'} strokeWidth={on ? 1.5 : 1} />
@@ -215,6 +292,13 @@ export default function AutomationCanvas({ workflow, statuses, sources, template
 
       {editable && (
         <div className="flex items-center gap-2 justify-end flex-wrap">
+          {onChange && Object.keys(workflow.board ?? {}).length > 0 && (
+            <button onClick={resetBoard} title="החזר את הפריסה האוטומטית"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold"
+              style={{ background: 'var(--as-surf)', border: '1px solid var(--as-line)', color: 'var(--as-text-2)' }}>
+              <RotateCcw size={12} />סדר מחדש
+            </button>
+          )}
           {onAskChat && (
             <button onClick={() => onAskChat(`שפר את האוטומציה "${workflow.name}" — מה חסר בה?`)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold"

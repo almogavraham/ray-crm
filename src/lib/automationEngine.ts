@@ -46,6 +46,12 @@ export interface Workflow {
   createdAt: string; runCount: number; lastRunAt?: string;
   /** When true the rule is applied the moment a lead changes, with no approval step. */
   autoRun?: boolean;
+  /**
+   * Hand-placed node positions on the studio board, keyed by canvas node id.
+   * Absent ids fall back to the computed layout, so a rule that gains a
+   * condition still places the new node sensibly instead of stacking it at 0,0.
+   */
+  board?: Record<string, { x: number; y: number }>;
 }
 
 /**

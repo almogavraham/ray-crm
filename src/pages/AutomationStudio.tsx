@@ -135,11 +135,6 @@ export default function AutomationStudio({
       {/* Header */}
       <div className="px-5 md:px-8 pt-7 pb-4" style={rule}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
-          <button onClick={() => askChat('')}
-            className="flex items-center gap-2 px-4 py-2.5 text-[12px] font-bold text-white flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', borderRadius: 10 }}>
-            <Sparkles size={14} />בנה עם הצ'אט
-          </button>
           <div className="text-right">
             <div className="text-[10px] font-mono tracking-[0.18em] mb-1" style={{ color: 'var(--as-text-3)' }}>
               AUTOMATION STUDIO
@@ -151,10 +146,15 @@ export default function AutomationStudio({
               כללים, תבניות הודעה ומשימות — במקום אחד. תאר מה אתה רוצה שיקרה, והצ'אט יבנה.
             </p>
           </div>
+          <button onClick={() => askChat('')}
+            className="flex items-center gap-2 px-4 py-2.5 text-[12px] font-bold text-white flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', borderRadius: 10 }}>
+            <Sparkles size={14} />בנה עם הצ'אט
+          </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 mt-5 flex-wrap justify-end">
+        <div className="flex items-center gap-1 mt-5 flex-wrap justify-start">
           {TABS.map(t => {
             const on = tab === t.key;
             return (
