@@ -17,7 +17,25 @@ interface SendEmailPayload {
   subject:   string;
   htmlBody:  string;
   textBody?: string;
+  /** Send from the RAY platform mailbox rather than the workspace's own. */
+  preferPlatform?: boolean;
+  /** Where replies should go. For platform mail this is the no-reply address. */
+  replyTo?:  string;
+  /** Overrides the display name on the From header. */
+  fromNameOverride?: string;
+  /** Adds auto-response-suppression headers. */
+  noReply?:  boolean;
 }
+
+/**
+ * Address that invitations tell recipients not to reply to.
+ *
+ * Deliberately only used as Reply-To and in the body — NOT as the From address.
+ * Gmail/Office 365 rewrite From to the authenticated mailbox unless the address
+ * is a verified alias on that account, so setting it here would produce a From
+ * that silently differs from what we asked for. See docs in the Cloud Function.
+ */
+export const RAY_NOREPLY = 'noreply@ray-crm.com';
 
 /** Call the Cloud Function to send an email (gmail / outlook). */
 async function callSendEmail(payload: SendEmailPayload): Promise<void> {
@@ -141,6 +159,10 @@ export async function sendInviteEmail(params: {
       <p style="margin-top: 16px; color: #64748b; font-size: 13px;">
         או העתק קישור: <a href="${params.inviteLink}">${params.inviteLink}</a>
       </p>
+      <hr style="margin-top: 24px; border: none; border-top: 1px solid #e2e8f0;" />
+      <p style="color: #94a3b8; font-size: 12px;">
+        הודעה זו נשלחה אוטומטית מ-RAY CRM. אין להשיב להודעה זו — תיבת ${RAY_NOREPLY} אינה מנוטרת.
+      </p>
     </div>
   `;
   await callSendEmail({
@@ -148,5 +170,11 @@ export async function sendInviteEmail(params: {
     to:          params.toEmail,
     subject,
     htmlBody:    html,
+    // An invitation comes from the product, not from whoever's mailbox happens
+    // to be wired to this workspace — and it must not be replyable.
+    preferPlatform:   true,
+    fromNameOverride: 'RAY CRM',
+    replyTo:          RAY_NOREPLY,
+    noReply:          true,
   });
 }

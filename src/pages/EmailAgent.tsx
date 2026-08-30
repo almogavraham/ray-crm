@@ -9,10 +9,11 @@ import {
   Star, Target, Zap, Shield, Clock, TrendingUp, Globe,
   Search, Trash2, Info, ChevronRight, Loader2, Tag,
   CheckCheck, PlugZap, Rocket, ArrowUpRight, Bot, ThumbsUp,
-  BadgeCheck, Activity, Flame, GitBranch,
+  BadgeCheck, Activity, Flame, GitBranch, Mic,
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import type { WorkspaceProfile } from '../types';
+import type { WorkspaceProfile, Lead } from '../types';
+import VoiceEmailComposer from '../components/VoiceEmailComposer';
 import {
   loadAgentConfig, saveAgentConfig, loadKnowledge, addKnowledgeEntry,
   deleteKnowledgeEntry, updateKnowledgeEntry,
@@ -41,6 +42,7 @@ import type {
 import type {
   WhatsAppConfig, WhatsAppConversation, WhatsAppMessage,
 } from '../lib/whatsappAgent';
+import { oauthOriginsForDisplay } from '../lib/oauthOrigins';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 const DEFAULT_CONFIG: EmailAgentConfig = {
@@ -101,6 +103,13 @@ const PROVIDER_META: Record<EmailProvider, { label: string; color: string; logo:
 };
 
 /* ── RAY CRM built-in Google OAuth Client ID ─────────────────────────────── */
+/**
+ * Fallback Google client, used only when the workspace has not configured its
+ * own. A workspace that sets `emailConfig.oauthClientId` MUST win over this:
+ * its client is the one whose consent screen and authorised origins the admin
+ * actually controls, and pinning everyone to the shared client is what made
+ * "connect my mailbox" silently attach the wrong project.
+ */
 const RAY_CRM_GOOGLE_CLIENT_ID = '1006025078719-76fhqfnov6orhb6oaro8t8l2skeijmkf.apps.googleusercontent.com';
 
 /* ── in-memory token map (accountId → token) ─────────────────────────────── */
@@ -109,15 +118,17 @@ const _liveTokens: Record<string, string> = {};
 interface Props {
   workspaceId?: string;
   workspace?:   WorkspaceProfile;
+  /** Used by the voice composer to attach an email to a lead for context. */
+  leads?:       Lead[];
   onToast?: (msg: string, type: 'success' | 'error' | 'info') => void;
   onNavigate?: (page: string) => void;
   workflowsPanel?: ReactNode;
   defaultTab?: 'inbox' | 'search' | 'templates' | 'sequences' | 'analytics' | 'accounts' | 'whatsapp' | 'agent' | 'knowledge' | 'settings' | 'workflows';
 }
 
-export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate, workflowsPanel, defaultTab }: Props) {
+export default function EmailAgent({ workspaceId, workspace, leads, onToast, onNavigate, workflowsPanel, defaultTab }: Props) {
   const { c, isDark } = useTheme();
-  const [tab, setTab]           = useState<'inbox' | 'search' | 'analytics' | 'agent' | 'knowledge' | 'settings' | 'workflows'>(
+  const [tab, setTab]           = useState<'inbox' | 'compose' | 'search' | 'analytics' | 'agent' | 'knowledge' | 'settings' | 'workflows'>(
     (defaultTab === 'templates' || defaultTab === 'sequences' ? 'workflows' :
      defaultTab === 'accounts' || defaultTab === 'whatsapp' ? 'settings' :
      defaultTab) ?? 'inbox'
@@ -311,7 +322,9 @@ export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate
 
   /* ── Connect account ───────────────────────────────────────────────────── */
   const handleConnect = async () => {
-    const clientIdToUse = addProvider === 'gmail' ? RAY_CRM_GOOGLE_CLIENT_ID : addClientId.trim();
+    const clientIdToUse = addProvider === 'gmail'
+      ? (workspace?.emailConfig?.oauthClientId || RAY_CRM_GOOGLE_CLIENT_ID)
+      : addClientId.trim();
     if (!clientIdToUse) { onToast?.('הכנס Client ID', 'error'); return; }
     setConnecting(true);
     try {
@@ -375,7 +388,12 @@ export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate
     try {
       let token = '';
       if (account.provider === 'gmail') {
-        token = await requestGmailToken(account.clientId, account.email);
+        // Use the workspace's CURRENT client id, not the one frozen onto the
+        // account when it was first connected: if the OAuth client was recreated
+        // (new project, new consent screen) the stored id is stale and the
+        // reconnect fails against a client that no longer grants these scopes.
+        const clientIdNow = workspace?.emailConfig?.oauthClientId || account.clientId;
+        token = await requestGmailToken(clientIdNow, account.email);
       } else {
         const res = await requestOutlookToken(account.clientId, account.tenantId ?? 'common');
         token = res.token;
@@ -977,6 +995,7 @@ export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate
         style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${c.cardBorder}` }}>
         {([
           { id: 'inbox',     label: `תיבת דואר${pendingDrafts.length ? ` (${pendingDrafts.length})` : ''}`, icon: Mail },
+          { id: 'compose',   label: 'כתיבה קולית', icon: Mic },
           { id: 'search',    label: 'חיפוש AI', icon: Search },
           { id: 'analytics', label: 'אנליטיקס', icon: TrendingUp },
           { id: 'agent',     label: 'אישיות הסוכן', icon: Brain },
@@ -1177,6 +1196,16 @@ export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate
       )}
 
       {/* ══ SEARCH AI TAB ════════════════════════════════════════════════════ */}
+      {tab === 'compose' && (
+        <VoiceEmailComposer
+          workspaceId={workspaceId}
+          config={config}
+          leads={leads}
+          isDark={isDark}
+          onToast={(m, t) => onToast?.(m, t ?? 'info')}
+        />
+      )}
+
       {tab === 'search' && (
         <div className="space-y-4" dir="rtl">
 
@@ -3055,19 +3084,30 @@ export default function EmailAgent({ workspaceId, workspace, onToast, onNavigate
                             body: <span>מתפריט הצד: <strong>APIs & Services → Library</strong> ← חפש <strong>"Gmail API"</strong> ← לחץ עליו ← <strong>Enable</strong></span>,
                           },
                           {
-                            n: 4, icon: '🔑',
+                            n: 4, icon: '🛡️',
+                            title: 'הגדר מסך הסכמה (OAuth consent screen)',
+                            body: <span><strong>APIs & Services → OAuth consent screen</strong> ← בחר <strong>Internal</strong> אם המייל שלך שייך ל-Google Workspace של הארגון.<br/>
+                              <span className="text-[10px] text-emerald-600 mt-1 block">
+                                חשוב: Internal חוסך אישור אבטחה של Google לקריאת מיילים. אם תבחר External תיתקע בבדיקה יקרה.
+                              </span>
+                            </span>,
+                          },
+                          {
+                            n: 5, icon: '🔑',
                             title: 'צור OAuth Client ID',
                             body: <span><strong>APIs & Services → Credentials</strong> ← <strong>"+ Create Credentials"</strong> ← בחר <strong>"OAuth client ID"</strong> ← Application type: <strong>"Web application"</strong></span>,
                           },
                           {
-                            n: 5, icon: '🔗',
+                            n: 6, icon: '🔗',
                             title: 'הוסף Authorized JS Origins',
-                            body: <span>תחת "Authorized JavaScript origins" לחץ <strong>+ Add URI</strong> והוסף:<br/>
-                              <code className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-[11px] font-mono mt-1 inline-block">{window.location.origin}</code>
+                            body: <span>תחת "Authorized JavaScript origins" לחץ <strong>+ Add URI</strong> והוסף את <strong>כולן</strong> (אחרת החיבור יעבוד בכתובת אחת ויישבר באחרת):<br/>
+                              {oauthOriginsForDisplay().map(o => (
+                                <code key={o} className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-[11px] font-mono mt-1 ml-1 inline-block">{o}</code>
+                              ))}
                             </span>,
                           },
                           {
-                            n: 6, icon: '📋',
+                            n: 7, icon: '📋',
                             title: 'העתק את ה-Client ID',
                             body: <span>לחץ <strong>Create</strong> ← תראה חלון עם Client ID ← לחץ על סמל ההעתקה ← הדבק בשדה למטה<br/>
                               <span className="text-[10px] text-slate-400 mt-1 block">הפורמט: <code className="font-mono">123456789-xxxxx.apps.googleusercontent.com</code></span>

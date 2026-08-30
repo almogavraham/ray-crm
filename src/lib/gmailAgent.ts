@@ -47,7 +47,16 @@ const GMAIL_SCOPES = [
 ].join(' ');
 
 /* ─── Gmail OAuth — request access token (interactive) ──────────────────── */
-export async function requestGmailToken(clientId: string, loginHint?: string): Promise<string> {
+export async function requestGmailToken(
+  clientId: string,
+  loginHint?: string,
+  /**
+   * Force Google to show the account chooser. Without this, a browser with one
+   * signed-in Google session silently reuses it — so a user trying to SWITCH
+   * mailboxes just gets reconnected to the same wrong account with no way out.
+   */
+  forceChooser = false,
+): Promise<string> {
   await loadGisScript();
 
   return new Promise((resolve, reject) => {
@@ -61,7 +70,7 @@ export async function requestGmailToken(clientId: string, loginHint?: string): P
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: GMAIL_SCOPES,
-      hint: loginHint,
+      ...(forceChooser ? { prompt: 'select_account' } : { hint: loginHint }),
       callback: (resp: { access_token?: string; error?: string; expires_in?: number }) => {
         if (resp.error || !resp.access_token) {
           reject(new Error(resp.error ?? 'OAuth failed'));
@@ -227,11 +236,58 @@ export async function sendGmailReply(
   const raw = btoa(unescape(encodeURIComponent(emailLines.join('\r\n'))))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-  await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+  // The response was previously discarded, so an expired token or a rejected
+  // recipient resolved exactly like a successful send and the UI reported the
+  // mail as delivered. Gmail's error body carries the real reason; surface it.
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw, threadId }),
   });
+  if (!res.ok) throw new Error(await gmailError(res));
+}
+
+/** Gmail's error payload, reduced to something worth showing a person. */
+async function gmailError(res: Response): Promise<string> {
+  let detail = '';
+  try {
+    const data = await res.json();
+    detail = data?.error?.message ?? '';
+  } catch { /* non-JSON error body */ }
+  if (res.status === 401 || res.status === 403) {
+    return `אין הרשאה לשלוח (${res.status}) — ייתכן שחיבור ה-Gmail פג. התחבר מחדש בהגדרות.${detail ? ` [${detail}]` : ''}`;
+  }
+  return `Gmail החזיר שגיאה ${res.status}${detail ? `: ${detail}` : ''}`;
+}
+
+/**
+ * Send a NEW email, not a reply.
+ *
+ * `sendGmailReply` cannot serve this: it forces a `Re:` prefix onto the subject
+ * and requires a threadId to attach to. A first email has neither.
+ */
+export async function sendGmailNew(
+  token: string,
+  to: string,
+  subject: string,
+  body: string,
+): Promise<void> {
+  const lines = [
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+    'Content-Type: text/plain; charset=utf-8',
+    'MIME-Version: 1.0',
+    '',
+    body,
+  ];
+  const raw = btoa(unescape(encodeURIComponent(lines.join('\r\n'))))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw }),
+  });
+  if (!res.ok) throw new Error(await gmailError(res));
 }
 
 /* ─── Firestore helpers ──────────────────────────────────────────────────── */
