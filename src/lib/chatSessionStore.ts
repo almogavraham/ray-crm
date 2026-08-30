@@ -19,7 +19,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-export type ChatId = 'sales' | 'marketing' | 'automation';
+export type ChatId = 'sales' | 'marketing' | 'automation' | 'mail';
 
 export interface ChatSession<M = unknown> {
   msgs: M[];

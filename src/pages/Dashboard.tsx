@@ -20,6 +20,7 @@ import CardCustomizePanel from '../components/CardCustomizePanel';
 import AutomationChat from '../components/AutomationChat';
 import SalesCopilot from '../components/SalesCopilot';
 import MarketingCopilot from '../components/MarketingCopilot';
+import RayMailChat from '../components/RayMailChat';
 import { useChatBadge, setChatScope } from '../lib/chatSessionStore';
 import LeadViewBar from '../components/LeadViewBar';
 import { LeadBoardView, LeadCardsView } from '../components/LeadBoardView';
@@ -590,6 +591,7 @@ export default function Dashboard({
   const [showAutoChat, setShowAutoChat] = useState(false);
   const [showCopilot,  setShowCopilot]  = useState(false);
   const [showMktChat,  setShowMktChat]  = useState(false);
+  const [showMailChat, setShowMailChat] = useState(false);
 
   /* Chat sessions are stored per workspace so one client's conversation can
      never surface in another's window. */
@@ -661,6 +663,7 @@ export default function Dashboard({
   useEffect(() => { setChatScope(workspace?.id); }, [workspace?.id]);
   const salesBadge = useChatBadge('sales');
   const mktBadge   = useChatBadge('marketing');
+  const mailBadge  = useChatBadge('mail');
   const autoBadge  = useChatBadge('automation');
 
   // App Password (SMTP) can only SEND; reading an inbox needs OAuth. The copilot
@@ -1802,6 +1805,35 @@ export default function Dashboard({
           <ChatBadge {...mktBadge} />
         </button>,
         document.body,
+      )}
+
+      {/* RAY MAIL — fourth in the stack. Physical `left` for the same reason as
+          the others: under dir="rtl" a logical start property lands on the right,
+          where the fixed sidebar covers it. */}
+      {createPortal(
+        <button
+          onClick={() => setShowMailChat(true)}
+          title="RAY MAIL — העוזר האישי שלך למיילים"
+          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
+          style={{
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 24.5rem)',
+            left: '1.25rem',
+            background: 'linear-gradient(135deg,#0369a1,#0891b2)',
+            boxShadow: '0 8px 28px rgba(8,145,178,0.45)',
+          }}>
+          <Mail size={17} />
+          <span>RAY MAIL</span>
+          <ChatBadge {...mailBadge} />
+        </button>,
+        document.body,
+      )}
+
+      {showMailChat && (
+        <RayMailChat
+          workspaceId={workspace?.id}
+          onToast={(m, t) => onToast?.(m, t ?? 'info')}
+          onClose={() => setShowMailChat(false)}
+        />
       )}
 
       {showMktChat && (
