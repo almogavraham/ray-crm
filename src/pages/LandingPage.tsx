@@ -9,6 +9,8 @@ import {
   Database, ArrowRight, Play, ChevronDown, Award, HeartHandshake,
 } from 'lucide-react';
 import { useLang } from '../contexts/LangContext';
+import { useScrollParallax } from '../hooks/useScrollParallax';
+import { useScrollReveal } from '../hooks/useScrollReveal';
 
 interface LandingPageProps {
   onSignIn: () => void;
@@ -18,21 +20,63 @@ interface LandingPageProps {
   workspaceSlug?: string;
 }
 
-/* ─── useInView hook ────────────────────────────────────────────────────────── */
-function useInView(threshold = 0.12) {
-  const ref = useRef<HTMLElement>(null);
-  const [inView, setInView] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) setInView(true); },
-      { threshold }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [threshold]);
-  return [ref, inView] as const;
+/* ─── Parallax background orbs — drop into any section marked data-parallax ──── */
+const ORB_PALETTES: Record<string, [string, string]> = {
+  indigo:  ['rgba(99,102,241,0.20)',  'rgba(139,92,246,0.12)'],
+  violet:  ['rgba(168,85,247,0.18)',  'rgba(99,102,241,0.10)'],
+  emerald: ['rgba(16,185,129,0.16)',  'rgba(6,182,212,0.10)'],
+  amber:   ['rgba(245,158,11,0.16)',  'rgba(249,115,22,0.09)'],
+  cyan:    ['rgba(6,182,212,0.16)',   'rgba(99,102,241,0.09)'],
+};
+import ContactSection from '../components/ContactSection';
+import CookieBanner from '../components/CookieBanner';
+import AccessibilityWidget from '../components/AccessibilityWidget';
+
+function ParallaxOrbs({ variant = 'indigo' }: { variant?: keyof typeof ORB_PALETTES }) {
+  const [c1, c2] = ORB_PALETTES[variant];
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+      <div data-depth="-90" data-scale="0.35" className="absolute -top-24 -right-24 w-[420px] h-[420px] rounded-full"
+        style={{ background: `radial-gradient(circle, ${c1} 0%, transparent 70%)` }} />
+      <div data-depth="66" data-scale="-0.2" className="absolute -bottom-20 -left-20 w-[360px] h-[360px] rounded-full"
+        style={{ background: `radial-gradient(circle, ${c2} 0%, transparent 70%)` }} />
+      <div data-depth="-48" className="absolute top-1/2 left-1/3 w-[220px] h-[220px] rounded-full opacity-60"
+        style={{ background: `radial-gradient(circle, ${c1} 0%, transparent 65%)` }} />
+    </div>
+  );
+}
+
+/* ─── Reveal — bidirectional "arrives on scroll" wrapper ───────────────────────
+ * Drop-in replacement for the old one-shot useInView+className pattern: plays
+ * its entrance every time it crosses into view, scrolling down OR back up
+ * (unlike a fade-once-and-stay reveal). `from` picks which edge it flies in
+ * from — use 'left'/'right' to make two things arrive from opposite sides.
+ * ──────────────────────────────────────────────────────────────────────────── */
+type RevealDir = 'up' | 'down' | 'left' | 'right' | 'scale';
+const REVEAL_HIDDEN: Record<RevealDir, string> = {
+  up:    'translateY(64px) scale(0.96)',
+  down:  'translateY(-64px) scale(0.96)',
+  left:  'translateX(-84px) scale(0.97)',
+  right: 'translateX(84px) scale(0.97)',
+  scale: 'scale(0.82)',
+};
+function Reveal({ children, from = 'up', delay = 0, duration = 750, className = '', style, revealedTransform = 'translate(0,0) scale(1)' }: {
+  children: React.ReactNode; from?: RevealDir; delay?: number; duration?: number;
+  className?: string; style?: React.CSSProperties; revealedTransform?: string;
+}) {
+  const [ref, inView] = useScrollReveal<HTMLDivElement>();
+  return (
+    <div ref={ref} className={className}
+      style={{
+        ...style,
+        opacity: inView ? 1 : 0,
+        transform: inView ? revealedTransform : REVEAL_HIDDEN[from],
+        transition: `opacity ${duration}ms cubic-bezier(.16,1,.3,1) ${delay}ms, transform ${duration}ms cubic-bezier(.16,1,.3,1) ${delay}ms`,
+        willChange: 'transform, opacity',
+      }}>
+      {children}
+    </div>
+  );
 }
 
 /* ─── Animated counter ──────────────────────────────────────────────────────── */
@@ -77,6 +121,7 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
     { label: 'תכונות', href: '#features' },
     { label: 'איך זה עובד', href: '#how' },
     { label: 'תמחור', href: '#pricing' },
+    { label: 'יצירת קשר', href: '#contact' },
   ];
 
   return (
@@ -180,71 +225,30 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
 /* ─── Hero ──────────────────────────────────────────────────────────────────── */
 function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => void }) {
   const { t, dir } = useLang();
-  const [displayed, setDisplayed] = useState('');
-  const [isLocked, setIsLocked] = useState(false);
-  const scrambleWords = ['לידים', 'קמפיינים', 'עסקאות', 'לקוחות'];
-  const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*<>/\\|~=+?';
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    let wIdx = 0;
-
-    const rnd = () => GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
-
-    const reveal = (word: string, onDone: () => void) => {
-      let iter = 0;
-      const total = word.length * 6;
-      const step = () => {
-        const locked = Math.floor(iter / 6);
-        let out = '';
-        for (let i = 0; i < word.length; i++) out += i < locked ? word[i] : rnd();
-        setDisplayed(out);
-        setIsLocked(false);
-        iter++;
-        if (iter <= total) { timer = setTimeout(step, 38); }
-        else { setDisplayed(word); setIsLocked(true); timer = setTimeout(onDone, 2400); }
-      };
-      step();
-    };
-
-    const hide = (word: string, onDone: () => void) => {
-      let iter = 0;
-      const step = () => {
-        let out = '';
-        for (let i = 0; i < word.length; i++) out += rnd();
-        setDisplayed(out);
-        setIsLocked(false);
-        iter++;
-        if (iter < word.length * 3) { timer = setTimeout(step, 28); }
-        else { setDisplayed(''); timer = setTimeout(onDone, 180); }
-      };
-      step();
-    };
-
-    const cycle = () => {
-      const word = scrambleWords[wIdx];
-      reveal(word, () => hide(word, () => { wIdx = (wIdx + 1) % scrambleWords.length; cycle(); }));
-    };
-
-    timer = setTimeout(cycle, 600);
-    return () => clearTimeout(timer);
-  }, []); // eslint-disable-line
 
   return (
-    <section className="relative min-h-screen flex items-center pt-16 overflow-hidden lp-aurora-bg" dir={dir}>
+    <section className="relative min-h-screen flex items-center pt-16 overflow-hidden lp-aurora-bg" dir={dir} data-parallax="on">
 
       {/* Animated background mesh */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
 
-        {/* Large gradient orbs — drifting animation */}
-        <div className="absolute -top-48 -right-48 w-[700px] h-[700px] rounded-full lp-orb-drift"
-          style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.22) 0%, rgba(139,92,246,0.10) 45%, transparent 70%)', animationDelay: '0s' }} />
-        <div className="absolute top-1/3 -left-56 w-[600px] h-[600px] rounded-full lp-orb-drift-2"
-          style={{ background: 'radial-gradient(circle, rgba(16,185,129,0.15) 0%, rgba(6,182,212,0.08) 45%, transparent 70%)', animationDelay: '-4s' }} />
-        <div className="absolute -bottom-32 right-1/4 w-[500px] h-[500px] rounded-full lp-orb-drift"
-          style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.16) 0%, rgba(99,102,241,0.08) 45%, transparent 70%)', animationDelay: '-8s' }} />
-        <div className="absolute top-2/3 right-1/3 w-[350px] h-[350px] rounded-full lp-orb-drift-2"
-          style={{ background: 'radial-gradient(circle, rgba(6,182,212,0.12) 0%, transparent 70%)', animationDelay: '-2s' }} />
+        {/* Large gradient orbs — ambient drift (inner) + scroll parallax (outer) */}
+        <div data-depth="-70" data-scale="0.3" className="absolute -top-48 -right-48 w-[700px] h-[700px]">
+          <div className="w-full h-full rounded-full lp-orb-drift"
+            style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.22) 0%, rgba(139,92,246,0.10) 45%, transparent 70%)', animationDelay: '0s' }} />
+        </div>
+        <div data-depth="56" className="absolute top-1/3 -left-56 w-[600px] h-[600px]">
+          <div className="w-full h-full rounded-full lp-orb-drift-2"
+            style={{ background: 'radial-gradient(circle, rgba(16,185,129,0.15) 0%, rgba(6,182,212,0.08) 45%, transparent 70%)', animationDelay: '-4s' }} />
+        </div>
+        <div data-depth="-48" data-scale="-0.25" className="absolute -bottom-32 right-1/4 w-[500px] h-[500px]">
+          <div className="w-full h-full rounded-full lp-orb-drift"
+            style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.16) 0%, rgba(99,102,241,0.08) 45%, transparent 70%)', animationDelay: '-8s' }} />
+        </div>
+        <div data-depth="38" className="absolute top-2/3 right-1/3 w-[350px] h-[350px]">
+          <div className="w-full h-full rounded-full lp-orb-drift-2"
+            style={{ background: 'radial-gradient(circle, rgba(6,182,212,0.12) 0%, transparent 70%)', animationDelay: '-2s' }} />
+        </div>
 
         {/* Dot grid */}
         <div className="absolute inset-0 opacity-[0.28]"
@@ -254,56 +258,72 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
             maskImage: 'radial-gradient(ellipse 90% 70% at 50% 30%, black 40%, transparent 100%)',
           }} />
 
-        {/* Floating tech cards — glassmorphism */}
-        <div className="absolute top-[18%] right-[6%] hidden lg:block lp-float"
-          style={{ animationDelay: '0s', animationDuration: '6s' }}>
-          <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-52 cursor-default">
-            <div className="w-9 h-9 rounded-xl bg-emerald-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
-              <TrendingUp size={16} className="text-emerald-600" />
-            </div>
-            <div>
-              <div className="text-[11px] text-slate-400 font-medium">המרה חודשית</div>
-              <div className="text-slate-900 font-black text-sm">+34% ↑</div>
+        {/* Animated tech line-grid */}
+        <div className="lp-tech-grid absolute inset-0 opacity-[0.5]"
+          style={{ maskImage: 'radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 100%)', WebkitMaskImage: 'radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 100%)' }} />
+
+        {/* Sweeping light beams */}
+        <div className="lp-beam-sweep absolute top-[22%] -left-1/3 w-2/3 h-24 rounded-full" style={{ animationDelay: '0s' }} />
+        <div className="lp-beam-sweep absolute top-[58%] -left-1/3 w-2/3 h-16 rounded-full" style={{ animationDelay: '3.5s' }} />
+
+        {/* Horizontal scanline */}
+        <div className="lp-scanline absolute left-0 right-0 h-px" style={{ top: '0%' }} />
+
+        {/* Floating tech cards — glassmorphism. Outer div = scroll parallax depth,
+            inner div = ambient idle float — nested transforms compose cleanly. */}
+        <div data-depth="-115" data-rotate="-3" className="absolute top-[18%] right-[6%] hidden lg:block">
+          <div className="lp-float" style={{ animationDelay: '0s', animationDuration: '6s' }}>
+            <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-52 cursor-default">
+              <div className="w-9 h-9 rounded-xl bg-emerald-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <TrendingUp size={16} className="text-emerald-600" />
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-400 font-medium">המרה חודשית</div>
+                <div className="text-slate-900 font-black text-sm">+34% ↑</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="absolute top-[38%] left-[4%] hidden lg:block lp-float"
-          style={{ animationDelay: '1.5s', animationDuration: '7s' }}>
-          <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-56 cursor-default">
-            <div className="w-9 h-9 rounded-xl bg-indigo-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
-              <Brain size={16} className="text-indigo-600" />
-            </div>
-            <div>
-              <div className="text-[11px] text-slate-400 font-medium">AI ניתח ליד</div>
-              <div className="text-slate-900 font-bold text-xs">פוטנציאל: <span className="text-indigo-600">גבוה מאוד</span></div>
+        <div data-depth="90" data-rotate="4" className="absolute top-[38%] left-[4%] hidden lg:block">
+          <div className="lp-float" style={{ animationDelay: '1.5s', animationDuration: '7s' }}>
+            <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-56 cursor-default">
+              <div className="w-9 h-9 rounded-xl bg-indigo-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <Brain size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-400 font-medium">AI ניתח ליד</div>
+                <div className="text-slate-900 font-bold text-xs">פוטנציאל: <span className="text-indigo-600">גבוה מאוד</span></div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="absolute bottom-[20%] right-[8%] hidden lg:block lp-float"
-          style={{ animationDelay: '0.8s', animationDuration: '5.5s' }}>
-          <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-48 cursor-default">
-            <div className="w-9 h-9 rounded-xl bg-amber-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
-              <Bell size={16} className="text-amber-600" />
-            </div>
-            <div>
-              <div className="text-[11px] text-slate-400 font-medium">תזכורת חכמה</div>
-              <div className="text-slate-800 font-bold text-xs">פולו-אפ ל-Acme</div>
+        <div data-depth="-80" data-rotate="-3.5" className="absolute bottom-[20%] right-[8%] hidden lg:block">
+          <div className="lp-float" style={{ animationDelay: '0.8s', animationDuration: '5.5s' }}>
+            <div className="lp-glass rounded-2xl p-3.5 flex items-center gap-3 w-48 cursor-default">
+              <div className="w-9 h-9 rounded-xl bg-amber-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <Bell size={16} className="text-amber-600" />
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-400 font-medium">תזכורת חכמה</div>
+                <div className="text-slate-800 font-bold text-xs">פולו-אפ ל-Acme</div>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Extra floating card — bottom left */}
-        <div className="absolute bottom-[32%] left-[7%] hidden xl:block lp-float"
-          style={{ animationDelay: '2.2s', animationDuration: '8s' }}>
-          <div className="lp-glass rounded-2xl p-3 flex items-center gap-2.5 w-44 cursor-default">
-            <div className="w-8 h-8 rounded-xl bg-violet-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
-              <Zap size={13} className="text-violet-600 fill-violet-400" />
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-400 font-medium">פעולה אוטומטית</div>
-              <div className="text-slate-800 font-bold text-[11px]">מייל נשלח ✓</div>
+        <div data-depth="100" data-rotate="5" className="absolute bottom-[32%] left-[7%] hidden xl:block">
+          <div className="lp-float" style={{ animationDelay: '2.2s', animationDuration: '8s' }}>
+            <div className="lp-glass rounded-2xl p-3 flex items-center gap-2.5 w-44 cursor-default">
+              <div className="w-8 h-8 rounded-xl bg-violet-100/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <Zap size={13} className="text-violet-600 fill-violet-400" />
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-400 font-medium">פעולה אוטומטית</div>
+                <div className="text-slate-800 font-bold text-[11px]">מייל נשלח ✓</div>
+              </div>
             </div>
           </div>
         </div>
@@ -319,22 +339,11 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
             סוכן מכירות ושיווק AI — ניהול לידים חכם לעסקים של ישראל
           </div>
 
-          {/* H1 — Poppins + gradient */}
+          {/* H1 — Poppins + gradient, static (no rotating words) */}
           <h1 className="lp-fade-up lp-delay-100 text-[clamp(2.6rem,7vw,5rem)] font-black leading-[1.07] tracking-[-0.04em] mb-6"
             style={{ fontFamily: "'Poppins', sans-serif" }}>
-            <span className="lp-gradient-heading">סוכן מכירות ושיווק AI</span>
-            <br />
-            <span className="text-slate-500 font-black">שמנהל את ה</span><span
-              className={isLocked ? 'lp-aurora-text' : ''}
-              style={isLocked ? {} : { color: '#818cf8', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
-              {displayed}
-              <span className="inline-block align-middle ms-1"
-                style={{ width: '3px', height: '0.85em', background: isLocked ? '#6366f1' : '#34d399', borderRadius: '2px', display: 'inline-block', animation: 'lp-blink 0.7s step-end infinite', boxShadow: isLocked ? '0 0 8px rgba(99,102,241,0.6)' : '0 0 8px rgba(52,211,153,0.8)' }} />
-            </span>
-            <br className="sm:hidden" />
-            <span className="relative inline-block">
-              <span className="relative z-10 lp-gradient-heading"> שלך.</span>
-              <span className="absolute bottom-1 right-0 left-0 h-3 bg-indigo-100/70 rounded-full -z-0" />
+            <span className="lp-gradient-heading" style={{ textShadow: '0 0 30px rgba(99,102,241,0.25)' }}>
+              סוכן מכירות ושיווק AI
             </span>
           </h1>
 
@@ -487,7 +496,6 @@ function Hero({ onSignUp, onSignIn }: { onSignUp: () => void; onSignIn: () => vo
 /* ─── Stats Strip ───────────────────────────────────────────────────────────── */
 function StatsStrip() {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
 
   const stats = [
     { value: 3, suffix: 'x', label: 'יותר עסקאות נסגרות', icon: TrendingUp, color: '#6366f1' },
@@ -497,14 +505,15 @@ function StatsStrip() {
   ];
 
   return (
-    <section ref={ref as React.RefObject<HTMLElement>} className="py-16 border-y" dir={dir}
+    <section className="relative py-16 border-y" dir={dir} data-parallax="on"
       style={{ background: 'linear-gradient(135deg, #f8faff 0%, #faf5ff 50%, #f0fdf8 100%)' }}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+      <ParallaxOrbs variant="violet" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
           {stats.map((s, i) => (
-            <div key={s.label}
-              className={`lp-shimmer-hover relative text-center rounded-2xl p-6 transition-all duration-600 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 120}ms`, background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.9)', boxShadow: `0 4px 24px ${s.color}18` }}>
+            <Reveal key={s.label} from={i % 2 === 0 ? 'left' : 'right'} delay={i * 90}
+              className="lp-shimmer-hover relative text-center rounded-2xl p-6"
+              style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.9)', boxShadow: `0 4px 24px ${s.color}18` }}>
               <div className="relative inline-flex items-center justify-center w-12 h-12 rounded-2xl mb-4 mx-auto"
                 style={{ backgroundColor: `${s.color}15` }}>
                 <s.icon size={22} style={{ color: s.color }} />
@@ -514,225 +523,7 @@ function StatsStrip() {
                 <Counter target={s.value} suffix={s.suffix} />
               </div>
               <div className="text-sm font-semibold" style={{ color: '#475569' }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Problem Section ───────────────────────────────────────────────────────── */
-function ProblemSection() {
-  const { dir } = useLang();
-  const [ref, inView] = useInView();
-  const [ref2, inView2] = useInView();
-
-  const oldWayPains = [
-    { icon: Clock, color: '#ef4444', title: 'Excel ו-Sheets — עדיין?', desc: 'מנהלים לידים בגיליונות, קמפיינים בקבצים, לקוחות בווטסאפ — ומאבדים את הראש.' },
-    { icon: Repeat, color: '#f59e0b', title: 'שיווק בלי מדידה = בזבוז', desc: 'מוציאים תקציב על מודעות בלי לדעת מה מביא לקוחות. כל קמפיין הרגשה, לא נתונים.' },
-    { icon: AlertTriangle, color: '#8b5cf6', title: 'לידים שנופלים בין הכסאות', desc: 'כשאין אוטומציה, לידים לא מקבלים מענה בזמן — ונסגרים אצל המתחרה.' },
-  ];
-
-  const aiRoles = [
-    { icon: Brain, color: '#6366f1', title: 'אנליסט לידים AI', desc: 'מדרג כל ליד 0–100 ומזהה בדיוק היכן להשקיע זמן.', tag: 'Sales AI' },
-    { icon: Sparkles, color: '#10b981', title: 'יוצר קמפיינים', desc: 'יוצר קמפיינים שלמים — תמונות, טקסט ופרסום — בדקות.', tag: 'Marketing AI' },
-    { icon: MessageSquare, color: '#f59e0b', title: 'כותב תוכן שיווקי', desc: 'פוסטים, מיילים, הודעות WhatsApp ותסריטי וידאו מותאמים.', tag: 'Content AI' },
-    { icon: BarChart2, color: '#ec4899', title: 'מנהל דוחות חי', desc: 'ROI, שיעור סגירה, ביצועי קמפיינים — הכל בזמן אמת.', tag: 'Analytics' },
-    { icon: Target, color: '#06b6d4', title: 'יועץ אסטרטגי', desc: 'מזהה הזדמנויות ומציע פעולות ספציפיות לשיפור ביצועים.', tag: 'Strategy' },
-    { icon: Zap, color: '#8b5cf6', title: 'מנהל אוטומציות', desc: 'ליד נכנס? מיד שולח ברכה, מקצה נציג ומתזמן פולו-אפ.', tag: 'Automation' },
-  ];
-
-  return (
-    <section className="py-24" dir={dir} style={{ background: 'linear-gradient(180deg, #f8faff 0%, #f5f0ff 100%)' }}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
-
-        {/* ── Header ── */}
-        <div className="text-center mb-14">
-          <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-xs font-bold tracking-wide">
-            <AlertTriangle size={12} />
-            הדרך הישנה כבר לא מספיקה
-          </div>
-          <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] font-black leading-tight tracking-tight mb-4"
-            style={{ fontFamily: "'Poppins', sans-serif" }}>
-            <span className="lp-gradient-heading">מכירות + שיווק בכלים נפרדים</span>
-            <br />
-            <span style={{ color: '#475569' }}>= כסף שנשפך לפח</span>
-          </h2>
-          <p className="text-lg max-w-2xl mx-auto leading-relaxed" style={{ color: '#475569', fontFamily: "'Open Sans', sans-serif" }}>
-            כשהשיווק לא מדבר עם המכירות, לידים אובדים, תקציפ מתבזבז ולקוחות נסגרים אצל המתחרה.
-          </p>
-        </div>
-
-        {/* ── Old Way Pains ── */}
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid md:grid-cols-3 gap-4 mb-12">
-          {oldWayPains.map((p, i) => (
-            <div key={p.title}
-              className={`lp-shimmer-hover relative bg-white rounded-2xl p-6 transition-all duration-500 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 120}ms`, border: '1px solid rgba(239,68,68,0.15)', boxShadow: '0 4px 20px rgba(239,68,68,0.06)' }}>
-              <div className="absolute top-4 left-4 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-400 border border-red-100">הדרך הישנה ✗</div>
-              <div className="mt-6 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ backgroundColor: `${p.color}12` }}>
-                  <p.icon size={18} style={{ color: p.color }} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm mb-1.5" style={{ color: '#1e1b4b' }}>{p.title}</h3>
-                  <p className="text-xs leading-relaxed" style={{ color: '#64748b' }}>{p.desc}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* ── Transition badge ── */}
-        <div className="relative text-center my-12">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-dashed border-indigo-200" />
-          </div>
-          <div className="relative inline-flex items-center gap-3 bg-white border-2 border-indigo-300 rounded-2xl px-6 py-3.5 shadow-xl shadow-indigo-100">
-            <div className="relative w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center">
-              <Brain size={17} className="text-white" />
-              <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" style={{ animation: 'lp-pulse-dot 1.5s ease-in-out infinite' }} />
-            </div>
-            <div className="text-right">
-              <div className="text-xs font-black text-indigo-700 leading-none">RAY — פלטפורם המכירות והשיווק שלך</div>
-              <div className="text-[10px] text-indigo-400 mt-0.5">עובד 24/7 · מכירות + שיווק · ממקום אחד</div>
-            </div>
-            <Sparkles size={14} className="text-indigo-400" />
-          </div>
-        </div>
-
-        {/* ── AI Roles ── */}
-        <div ref={ref2 as React.RefObject<HTMLElement>} className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-14">
-          {aiRoles.map((r, i) => (
-            <div key={r.title}
-              className={`group lp-shimmer-hover bg-white rounded-2xl p-5 transition-all duration-500 cursor-default ${inView2 ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 80}ms`, border: '1px solid rgba(99,102,241,0.12)', boxShadow: '0 2px 12px rgba(99,102,241,0.06)' }}>
-              <div className="flex items-start gap-3">
-                <div className="relative w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform duration-300 group-hover:scale-110"
-                  style={{ backgroundColor: `${r.color}14`, border: `1px solid ${r.color}28` }}>
-                  <r.icon size={19} style={{ color: r.color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full tracking-wide"
-                      style={{ background: `${r.color}12`, color: r.color }}>
-                      {r.tag}
-                    </span>
-                    <h3 className="font-bold text-sm" style={{ color: '#1e1b4b' }}>{r.title}</h3>
-                  </div>
-                  <p className="text-xs leading-relaxed text-right" style={{ color: '#64748b' }}>{r.desc}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="text-center">
-          <div className="inline-flex flex-col items-center gap-2" style={{ color: '#94a3b8' }}>
-            <p className="text-sm font-medium">ראה את כל הפיצ׳רים</p>
-            <div className="w-px h-10 bg-gradient-to-b from-indigo-300 to-transparent" />
-            <div className="w-2.5 h-2.5 rounded-full bg-indigo-400" style={{ animation: 'lp-pulse-dot 1.5s ease-in-out infinite' }} />
-          </div>
-        </div>
-
-      </div>
-    </section>
-  );
-}
-
-/* ─── Features ──────────────────────────────────────────────────────────────── */
-function Features() {
-  const { dir } = useLang();
-  const [ref, inView] = useInView();
-  const [activeTab, setActiveTab] = useState<'sales' | 'marketing'>('sales');
-
-  const salesFeatures = [
-    { icon: GitBranch, color: '#6366f1', title: 'פייפליין Kanban חכם', desc: 'ראה כל ליד, כל שלב, בזמן אמת. גרור בין עמודות, עקוב אחר שווי, ותקבל תמונה מלאה של המכירות.', badge: 'Pipeline', highlight: ['Drag & Drop', 'שווי עסקאות', 'Kanban + List'] },
-    { icon: Brain, color: '#8b5cf6', title: 'דירוג לידים AI', desc: 'הבינה המלאכותית מדרגת כל ליד 0–100 לפי פוטנציאל סגירה ומציעה בדיוק מה לעשות ומתי.', badge: 'AI Scoring', highlight: ['ציון 0–100', 'המלצות פעולה', 'תחזית סגירה'] },
-    { icon: MessageSquare, color: '#10b981', title: 'פולו-אפ אוטומטי', desc: 'ה-AI כותב הודעות WhatsApp ומיילים מותאמים אישית לכל ליד — ושולח בזמן הנכון אוטומטית.', badge: 'Outreach', highlight: ['WhatsApp AI', 'Email Auto', 'מעקב פתיחות'] },
-    { icon: Bell, color: '#f59e0b', title: 'משימות והתראות', desc: 'אף ליד לא יישכח. תזכורות חכמות, Overdue alerts, ומשימות אוטומטיות לכל שלב בפייפליין.', badge: 'Tasks', highlight: ['תזכורות', 'Overdue', 'אוטומציות'] },
-    { icon: BarChart3, color: '#ec4899', title: 'אנליטיקת מכירות', desc: 'ROI לפי מקור ליד, Funnel analysis, שיעורי המרה — נתונים שמניעים החלטות, לא טבלאות.', badge: 'Analytics', highlight: ['ROI לפי מקור', 'Funnel', 'תחזית הכנסה'] },
-    { icon: Users, color: '#3b82f6', title: 'ניהול צוות', desc: 'הקצה לידים לנציגים, עקוב אחר ביצועי כל אחד, נהל הרשאות — כולם מסונכרנים בזמן אמת.', badge: 'Team', highlight: ['הקצאה חכמה', 'ביצועים', 'הרשאות'] },
-  ];
-
-  const marketingFeatures = [
-    { icon: Sparkles, color: '#6366f1', title: 'יוצר קמפיינים AI', desc: 'בנה קמפיין שלם — קהל יעד, תקציב, קריאייטיב ומסרים — בעזרת AI, בדקות ספורות.', badge: 'Campaigns', highlight: ['קמפיין AI', 'פייסבוק', 'Instagram'] },
-    { icon: Brain, color: '#8b5cf6', title: 'סטודיו מדיה AI', desc: 'צור תמונות עם Dall-E ו-Imagen, סרטוני וידאו עם Veo, ואווטארים AI עם HeyGen — ישירות מהמערכת.', badge: 'Media Studio', highlight: ['Dall-E', 'Google Veo', 'HeyGen AI'] },
-    { icon: MessageSquare, color: '#10b981', title: 'כתיבת תוכן שיווקי', desc: 'AI כותב פוסטים, מיילים, תסריטי וידאו, מודעות ופרסומות — מותאמים לקהל ולפלטפורמה.', badge: 'Content AI', highlight: ['פוסטים', 'מודעות', 'סקריפטים'] },
-    { icon: Mail, color: '#f59e0b', title: 'Email ו-WhatsApp Marketing', desc: 'שלח קמפיינים ישירים לרשימת הלקוחות שלך — עם segmentation, אוטומציה ומעקב תוצאות.', badge: 'Direct', highlight: ['Segmentation', 'אוטומציה', 'מעקב קליקים'] },
-    { icon: Target, color: '#ec4899', title: 'ניהול קהלים', desc: 'בנה קהלי יעד מדויקים, צור Lookalike Audiences והפעל retargeting מתוך המערכת.', badge: 'Audiences', highlight: ['Lookalike', 'Retargeting', 'Segmentation'] },
-    { icon: BarChart2, color: '#06b6d4', title: 'מדדי שיווק ו-ROI', desc: 'ראה כמה כל קמפיין הביא, מאיזה מקור הגיעו הלידים הטובים ביותר — ומה הרוויח על כל ₪ שהוצאת.', badge: 'Marketing ROI', highlight: ['Cost per Lead', 'A/B Testing', 'Attribution'] },
-  ];
-
-  const features = activeTab === 'sales' ? salesFeatures : marketingFeatures;
-  const tabColor = activeTab === 'sales' ? '#6366f1' : '#8b5cf6';
-
-  return (
-    <section id="features" className="py-28 lp-aurora-bg" dir={dir}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
-
-        <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full border text-xs font-bold tracking-wide"
-            style={{ background: 'rgba(99,102,241,0.08)', borderColor: 'rgba(99,102,241,0.25)', color: '#6366f1' }}>
-            <Layers size={12} />
-            שני סוכנים · פלטפורמה אחת
-          </div>
-          <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] font-black leading-tight tracking-tight mb-4"
-            style={{ fontFamily: "'Poppins', sans-serif" }}>
-            <span className="lp-gradient-heading">כל מה שהעסק שלך צריך</span>
-            <br />
-            <span style={{ color: '#94a3b8' }}>במקום אחד.</span>
-          </h2>
-          <p className="text-lg max-w-2xl mx-auto leading-relaxed mb-10" style={{ color: '#475569', fontFamily: "'Open Sans', sans-serif" }}>
-            סוכן המכירות וסוכן השיווק עובדים יחד — מכניסים לידים, מטפחים ומסגרים עסקאות, הכל אוטומטית.
-          </p>
-
-          {/* Tab switcher */}
-          <div className="inline-flex items-center gap-1 p-1.5 rounded-2xl" style={{ background: 'rgba(255,255,255,0.85)', border: '1px solid rgba(99,102,241,0.15)', backdropFilter: 'blur(12px)', boxShadow: '0 4px 20px rgba(99,102,241,0.1)' }}>
-            {([
-              { id: 'sales', label: 'סוכן המכירות', icon: Target, color: '#6366f1', bg: 'linear-gradient(135deg,#6366f1,#4f46e5)' },
-              { id: 'marketing', label: 'סוכן השיווק', icon: Sparkles, color: '#8b5cf6', bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)' },
-            ] as const).map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all duration-300"
-                style={activeTab === tab.id
-                  ? { background: tab.bg, color: '#fff', boxShadow: `0 6px 24px ${tab.color}40` }
-                  : { color: '#64748b' }}>
-                <tab.icon size={15} />
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 lp-tab-content" key={activeTab}>
-          {features.map((f, i) => (
-            <div key={f.title}
-              className={`lp-feature-card lp-shimmer-hover rounded-2xl p-7 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transition: `opacity 0.5s ease ${i * 70}ms, transform 0.5s ease ${i * 70}ms` }}>
-              <div className="flex items-start justify-between mb-5">
-                <div className="lp-icon-wrap w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
-                  style={{ backgroundColor: `${f.color}14`, border: `1px solid ${f.color}25` }}>
-                  <f.icon size={21} style={{ color: f.color }} />
-                </div>
-                <span className="text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-lg font-mono"
-                  style={{ color: tabColor, backgroundColor: `${tabColor}10` }}>
-                  {f.badge}
-                </span>
-              </div>
-              <h3 className="font-bold text-[15px] mb-2.5 leading-snug" style={{ color: '#1e1b4b' }}>{f.title}</h3>
-              <p className="text-sm leading-relaxed mb-5" style={{ color: '#475569' }}>{f.desc}</p>
-              <div className="flex flex-wrap gap-1.5">
-                {f.highlight.map(h => (
-                  <span key={h} className="text-[10px] font-semibold px-2.5 py-1 rounded-lg border"
-                    style={{ background: `${tabColor}09`, color: tabColor, borderColor: `${tabColor}22` }}>
-                    {h}
-                  </span>
-                ))}
-              </div>
-            </div>
+            </Reveal>
           ))}
         </div>
       </div>
@@ -743,8 +534,6 @@ function Features() {
 /* ─── AI Section ────────────────────────────────────────────────────────────── */
 function AISection({ onSignUp }: { onSignUp: () => void }) {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
-  const [ref2, inView2] = useInView();
 
   const salesAI = [
     { icon: UserCheck, color: '#6366f1', title: 'דירוג לידים 0–100', desc: 'כל ליד מקבל ציון AI לפי נתונים, מקור ותגובות.' },
@@ -761,9 +550,10 @@ function AISection({ onSignUp }: { onSignUp: () => void }) {
   ];
 
   return (
-    <section className="py-28 overflow-hidden" dir={dir}
+    <section className="relative py-28 overflow-hidden" dir={dir} data-parallax="on"
       style={{ background: 'linear-gradient(160deg, #faf5ff 0%, #f0f4ff 50%, #f5fffb 100%)' }}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+      <ParallaxOrbs variant="violet" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
 
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full border text-xs font-bold tracking-wide"
@@ -782,11 +572,12 @@ function AISection({ onSignUp }: { onSignUp: () => void }) {
           </p>
         </div>
 
-        {/* Two agent panels */}
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid lg:grid-cols-2 gap-8 mb-16">
+        {/* Two agent panels — converge toward each other from opposite sides */}
+        <div className="grid lg:grid-cols-2 gap-8 mb-16">
 
           {/* Sales Agent panel */}
-          <div className={`lp-agent-card transition-all duration-700 ${inView ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-10'}`}
+          <Reveal from="right" duration={700}
+            className="lp-agent-card"
             style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(99,102,241,0.03) 100%)', border: '1px solid rgba(99,102,241,0.2)', padding: '2rem' }}>
             <div className="flex items-center gap-3 mb-6">
               <div className="relative w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg,#6366f1,#4f46e5)', boxShadow: '0 8px 24px rgba(99,102,241,0.35)' }}>
@@ -800,22 +591,23 @@ function AISection({ onSignUp }: { onSignUp: () => void }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               {salesAI.map((f, i) => (
-                <div key={f.title}
-                  className={`lp-shimmer-hover bg-white rounded-xl p-4 transition-all duration-500 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}
-                  style={{ transitionDelay: `${i * 80}ms`, border: `1px solid ${f.color}18`, boxShadow: `0 2px 12px ${f.color}10` }}>
+                <Reveal key={f.title} from="up" delay={i * 80} duration={500}
+                  className="lp-shimmer-hover bg-white rounded-xl p-4"
+                  style={{ border: `1px solid ${f.color}18`, boxShadow: `0 2px 12px ${f.color}10` }}>
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-2" style={{ background: `${f.color}14` }}>
                     <f.icon size={14} style={{ color: f.color }} />
                   </div>
                   <div className="font-bold text-[11px] mb-1" style={{ color: '#1e1b4b' }}>{f.title}</div>
                   <div className="text-[10px] leading-relaxed" style={{ color: '#64748b' }}>{f.desc}</div>
-                </div>
+                </Reveal>
               ))}
             </div>
-          </div>
+          </Reveal>
 
           {/* Marketing Agent panel */}
-          <div className={`lp-agent-card transition-all duration-700 ${inView ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-10'}`}
-            style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.08) 0%, rgba(139,92,246,0.03) 100%)', border: '1px solid rgba(139,92,246,0.2)', padding: '2rem', transitionDelay: '150ms' }}>
+          <Reveal from="left" duration={700} delay={100}
+            className="lp-agent-card"
+            style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.08) 0%, rgba(139,92,246,0.03) 100%)', border: '1px solid rgba(139,92,246,0.2)', padding: '2rem' }}>
             <div className="flex items-center gap-3 mb-6">
               <div className="relative w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', boxShadow: '0 8px 24px rgba(139,92,246,0.35)' }}>
                 <Sparkles size={22} className="text-white" />
@@ -828,18 +620,18 @@ function AISection({ onSignUp }: { onSignUp: () => void }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               {marketingAI.map((f, i) => (
-                <div key={f.title}
-                  className={`lp-shimmer-hover bg-white rounded-xl p-4 transition-all duration-500 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}
-                  style={{ transitionDelay: `${(i + 4) * 80}ms`, border: `1px solid ${f.color}18`, boxShadow: `0 2px 12px ${f.color}10` }}>
+                <Reveal key={f.title} from="up" delay={i * 80} duration={500}
+                  className="lp-shimmer-hover bg-white rounded-xl p-4"
+                  style={{ border: `1px solid ${f.color}18`, boxShadow: `0 2px 12px ${f.color}10` }}>
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-2" style={{ background: `${f.color}14` }}>
                     <f.icon size={14} style={{ color: f.color }} />
                   </div>
                   <div className="font-bold text-[11px] mb-1" style={{ color: '#1e1b4b' }}>{f.title}</div>
                   <div className="text-[10px] leading-relaxed" style={{ color: '#64748b' }}>{f.desc}</div>
-                </div>
+                </Reveal>
               ))}
             </div>
-          </div>
+          </Reveal>
         </div>
 
         {/* CTA */}
@@ -860,7 +652,6 @@ function AISection({ onSignUp }: { onSignUp: () => void }) {
 /* ─── Game Changer Section ──────────────────────────────────────────────────── */
 function GameChanger() {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
 
   const points = [
     {
@@ -893,8 +684,9 @@ function GameChanger() {
   ];
 
   return (
-    <section className="py-28 bg-white" dir={dir}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+    <section className="relative py-28 bg-white overflow-hidden" dir={dir} data-parallax="on">
+      <ParallaxOrbs variant="emerald" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
 
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold tracking-wide">
@@ -912,15 +704,11 @@ function GameChanger() {
           </p>
         </div>
 
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid md:grid-cols-3 gap-6">
+        <div className="grid md:grid-cols-3 gap-6">
           {points.map((p, i) => (
-            <div key={p.num}
-              className={`relative overflow-hidden rounded-3xl p-8 transition-all duration-600 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}
-              style={{
-                background: `linear-gradient(135deg, ${p.color}08 0%, ${p.color}04 100%)`,
-                border: `1px solid ${p.color}20`,
-                transitionDelay: `${i * 150}ms`,
-              }}>
+            <Reveal key={p.num} from={i === 0 ? 'right' : i === 2 ? 'left' : 'up'} delay={i * 130} duration={650}
+              className="relative overflow-hidden rounded-3xl p-8"
+              style={{ background: `linear-gradient(135deg, ${p.color}08 0%, ${p.color}04 100%)`, border: `1px solid ${p.color}20` }}>
               {/* Big number bg */}
               <div className="absolute top-4 start-4 text-[7rem] font-black leading-none select-none pointer-events-none"
                 style={{ color: `${p.color}08` }}>
@@ -941,7 +729,7 @@ function GameChanger() {
                 <h3 className="text-slate-900 font-black text-xl mb-3 leading-snug">{p.title}</h3>
                 <p className="text-slate-600 text-sm leading-relaxed">{p.desc}</p>
               </div>
-            </div>
+            </Reveal>
           ))}
         </div>
 
@@ -982,7 +770,6 @@ function GameChanger() {
 /* ─── How It Works ──────────────────────────────────────────────────────────── */
 function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
 
   const steps = [
     {
@@ -1020,9 +807,10 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
   ];
 
   return (
-    <section id="how" className="py-28" dir={dir}
+    <section id="how" className="relative py-28 overflow-hidden" dir={dir} data-parallax="on"
       style={{ background: 'linear-gradient(160deg, #f8faff 0%, #f5f7fa 100%)' }}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+      <ParallaxOrbs variant="amber" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
 
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold tracking-wide">
@@ -1039,11 +827,10 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
           </p>
         </div>
 
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {steps.map((s, i) => (
-            <div key={s.num}
-              className={`relative bg-white border border-slate-200 rounded-3xl p-8 transition-all duration-500 hover:shadow-xl hover:border-slate-300 ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 150}ms` }}>
+            <Reveal key={s.num} from="up" delay={i * 140} duration={600}
+              className="relative bg-white border border-slate-200 rounded-3xl p-8 transition-shadow hover:shadow-xl hover:border-slate-300">
 
               {/* Connector line between cards */}
               {i < 3 && (
@@ -1077,7 +864,7 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
                   </div>
                 ))}
               </div>
-            </div>
+            </Reveal>
           ))}
         </div>
 
@@ -1097,7 +884,6 @@ function HowItWorks({ onSignUp }: { onSignUp: () => void }) {
 /* ─── Pricing ───────────────────────────────────────────────────────────────── */
 function Pricing({ onSignUp }: { onSignUp: () => void }) {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
 
   const plans = [
     {
@@ -1130,8 +916,9 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
   ];
 
   return (
-    <section id="pricing" className="py-28 bg-white" dir={dir}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+    <section id="pricing" className="relative py-28 bg-white overflow-hidden" dir={dir} data-parallax="on">
+      <ParallaxOrbs variant="indigo" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
 
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 mb-5 px-4 py-2 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-bold tracking-wide">
@@ -1144,16 +931,15 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
           <p className="text-slate-500 text-lg">עסק שסוגר עסקה אחת נוספת בחודש משלם את התוכנית שלו פי 10.</p>
         </div>
 
-        <div ref={ref as React.RefObject<HTMLElement>}
-          className="grid md:grid-cols-3 gap-5 items-stretch max-w-5xl mx-auto">
+        <div className="grid md:grid-cols-3 gap-5 items-stretch max-w-5xl mx-auto">
           {plans.map((plan, i) => (
-            <div key={plan.name}
-              className={`relative flex flex-col rounded-3xl p-7 transition-all duration-500 ${
+            <Reveal key={plan.name} from={i === 0 ? 'right' : i === 2 ? 'left' : 'up'} delay={i * 120} duration={600}
+              revealedTransform={plan.highlight ? 'translate(0,0) scale(1.02)' : 'translate(0,0) scale(1)'}
+              className={`relative flex flex-col rounded-3xl p-7 transition-shadow ${
                 plan.highlight
-                  ? 'bg-indigo-600 shadow-2xl shadow-indigo-300/40 scale-[1.02]'
+                  ? 'bg-indigo-600 shadow-2xl shadow-indigo-300/40'
                   : 'bg-white border border-slate-200 hover:shadow-lg hover:border-indigo-100'
-              } ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 120}ms` }}>
+              }`}>
 
               {plan.badge && (
                 <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-white text-indigo-700 text-[10px] font-black tracking-wide shadow-md border border-indigo-100 whitespace-nowrap">
@@ -1196,7 +982,7 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                   </div>
                 ))}
               </div>
-            </div>
+            </Reveal>
           ))}
         </div>
 
@@ -1211,7 +997,6 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
 /* ─── Testimonials / social proof ───────────────────────────────────────────── */
 function Testimonials() {
   const { dir } = useLang();
-  const [ref, inView] = useInView();
 
   const reviews = [
     { name: 'רן כהן', role: 'מנכ"ל סוכנות שיווק', text: 'מאז שעברנו ל-RAY, אנחנו סוגרים 40% יותר עסקאות. סוכן השיווק מביא לידים וסוכן המכירות סוגר — הכל אוטומטי.', stars: 5, tag: 'מכירות + שיווק', color: '#6366f1' },
@@ -1220,8 +1005,9 @@ function Testimonials() {
   ];
 
   return (
-    <section className="py-24" dir={dir} style={{ background: 'linear-gradient(180deg, #f8faff 0%, #fff 100%)' }}>
-      <div className="max-w-7xl mx-auto px-5 sm:px-8">
+    <section className="relative py-24 overflow-hidden" dir={dir} data-parallax="on" style={{ background: 'linear-gradient(180deg, #f8faff 0%, #fff 100%)' }}>
+      <ParallaxOrbs variant="cyan" />
+      <div className="relative max-w-7xl mx-auto px-5 sm:px-8">
         <div className="text-center mb-12">
           <div className="flex items-center justify-center gap-0.5 mb-4">
             {[...Array(5)].map((_, i) => <Star key={i} size={20} className="text-amber-400 fill-amber-400" />)}
@@ -1230,11 +1016,11 @@ function Testimonials() {
           <p className="text-sm" style={{ color: '#64748b' }}>עסקים אמיתיים, תוצאות אמיתיות</p>
         </div>
 
-        <div ref={ref as React.RefObject<HTMLElement>} className="grid md:grid-cols-3 gap-5">
+        <div className="grid md:grid-cols-3 gap-5">
           {reviews.map((r, i) => (
-            <div key={r.name}
-              className={`lp-shimmer-hover relative bg-white rounded-2xl p-7 transition-all duration-500 hover:-translate-y-2 hover:shadow-xl ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${i * 120}ms`, border: `1px solid ${r.color}18`, boxShadow: `0 4px 20px ${r.color}10` }}>
+            <Reveal key={r.name} from={i === 0 ? 'right' : i === 2 ? 'left' : 'up'} delay={i * 120} duration={600}
+              className="lp-shimmer-hover relative bg-white rounded-2xl p-7 hover:shadow-xl transition-shadow"
+              style={{ border: `1px solid ${r.color}18`, boxShadow: `0 4px 20px ${r.color}10` }}>
               <span className="absolute top-5 start-5 text-[9px] font-black px-2.5 py-1 rounded-full"
                 style={{ background: `${r.color}12`, color: r.color }}>
                 {r.tag}
@@ -1253,7 +1039,7 @@ function Testimonials() {
                   <div className="text-xs" style={{ color: '#94a3b8' }}>{r.role}</div>
                 </div>
               </div>
-            </div>
+            </Reveal>
           ))}
         </div>
       </div>
@@ -1265,16 +1051,16 @@ function Testimonials() {
 function CTABanner({ onSignUp }: { onSignUp: () => void }) {
   const { dir } = useLang();
   return (
-    <section className="py-24" dir={dir}>
+    <section className="relative py-24" dir={dir} data-parallax="on">
       <div className="max-w-7xl mx-auto px-5 sm:px-8">
         <div className="relative overflow-hidden rounded-3xl"
           style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #6d28d9 50%, #4338ca 100%)' }}>
 
           {/* Background elements */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <div className="absolute -top-20 -right-20 w-96 h-96 rounded-full opacity-20"
+            <div data-depth="-72" data-scale="0.3" className="absolute -top-20 -right-20 w-96 h-96 rounded-full opacity-20"
               style={{ background: 'radial-gradient(circle, #a5b4fc, transparent)' }} />
-            <div className="absolute -bottom-20 -left-20 w-96 h-96 rounded-full opacity-15"
+            <div data-depth="56" className="absolute -bottom-20 -left-20 w-96 h-96 rounded-full opacity-15"
               style={{ background: 'radial-gradient(circle, #c4b5fd, transparent)' }} />
             <div className="absolute inset-0 opacity-10"
               style={{
@@ -1376,10 +1162,11 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
         </div>
 
         <div className="pt-8 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-slate-600 text-xs">© 2025 RAY CRM. כל הזכויות שמורות.</p>
+          <p className="text-slate-600 text-xs">© 2026 RAY CRM. כל הזכויות שמורות.</p>
           <div className="flex items-center gap-5 text-slate-600 text-xs">
-            <a href="#" className="hover:text-slate-400 transition-colors">פרטיות</a>
-            <a href="#" className="hover:text-slate-400 transition-colors">תנאי שימוש</a>
+            <a href="/privacy" className="hover:text-slate-400 transition-colors">מדיניות פרטיות</a>
+            <a href="/terms" className="hover:text-slate-400 transition-colors">תנאי שימוש</a>
+            <a href="/accessibility" className="hover:text-slate-400 transition-colors">הצהרת נגישות</a>
             <div className="flex items-center gap-1.5 font-mono">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               All systems operational
@@ -1399,23 +1186,32 @@ function useLandingT() {
 
 /* ─── Page ──────────────────────────────────────────────────────────────────── */
 export default function LandingPage({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }: LandingPageProps) {
+  useScrollParallax();
   const { dir } = useLang();
   const t = useLandingT();
 
   return (
     <div className="min-h-screen bg-white" dir={dir}>
+      <a href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:right-3 focus:z-[80]
+                   focus:bg-indigo-600 focus:text-white focus:px-4 focus:py-2 focus:rounded-lg focus:font-bold">
+        דלג לתוכן הראשי
+      </a>
       <Navbar onSignIn={onSignIn} onSignUp={onSignUp} isLoggedIn={isLoggedIn} isSuperAdmin={isSuperAdmin} workspaceSlug={workspaceSlug} />
+      <main id="main-content">
       <Hero onSignUp={onSignUp} onSignIn={onSignIn} />
       <StatsStrip />
-      <ProblemSection />
-      <Features />
       <AISection onSignUp={onSignUp} />
       <GameChanger />
       <HowItWorks onSignUp={onSignUp} />
       <Testimonials />
       <Pricing onSignUp={onSignUp} />
       <CTABanner onSignUp={onSignUp} />
+      <ContactSection />
+      </main>
       <Footer onSignIn={onSignIn} onSignUp={onSignUp} />
+      <CookieBanner />
+      <AccessibilityWidget />
     </div>
   );
 }

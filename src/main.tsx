@@ -3,6 +3,15 @@ import type { ReactNode, ErrorInfo } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { initConsent } from './lib/consent'
+import { initA11y } from './components/AccessibilityWidget'
+
+// Before first render: re-apply a stored accessibility preference so the page
+// never flashes at the default size for someone who needs it larger, and put
+// the visitor's cookie decision back in force so no gated tag can slip through
+// on a return visit.
+initA11y()
+initConsent()
 
 class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) { super(props); this.state = { error: null }; }

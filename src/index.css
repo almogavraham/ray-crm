@@ -292,6 +292,43 @@ body {
   100% { opacity: 0; transform: scaleX(1) translateX(100%); }
 }
 
+/* ── Hi-tech hero overlays (light theme) ──────────────────────────────── */
+@keyframes lp-grid-pan { from { background-position: 0 0; } to { background-position: 34px 34px; } }
+.lp-tech-grid {
+  background-image:
+    linear-gradient(rgba(99,102,241,0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99,102,241,0.14) 1px, transparent 1px);
+  background-size: 34px 34px;
+  animation: lp-grid-pan 7s linear infinite;
+}
+@keyframes lp-beam-sweep {
+  0%   { transform: translateX(-40%) skewX(-16deg); opacity: 0; }
+  35%  { opacity: 0.7; }
+  100% { transform: translateX(140%) skewX(-16deg); opacity: 0; }
+}
+.lp-beam-sweep {
+  background: linear-gradient(90deg, transparent, rgba(129,140,248,0.45), rgba(34,211,238,0.30), transparent);
+  filter: blur(2px);
+  animation: lp-beam-sweep 7s ease-in-out infinite;
+}
+@keyframes lp-scan {
+  0%   { top: -8%; opacity: 0; }
+  12%  { opacity: 0.55; }
+  88%  { opacity: 0.55; }
+  100% { top: 108%; opacity: 0; }
+}
+.lp-scanline {
+  background: linear-gradient(90deg, transparent, rgba(99,102,241,0.28), transparent);
+  animation: lp-scan 9s linear infinite;
+}
+
+/* Scroll-parallax layers (see src/hooks/useScrollParallax.ts) — always GPU-only. */
+[data-depth] { will-change: transform; }
+@media (prefers-reduced-motion: reduce) {
+  [data-depth] { transform: none !important; }
+  .lp-tech-grid, .lp-beam-sweep, .lp-scanline { animation: none !important; }
+}
+
 .lp-float          { animation: lp-float 5s ease-in-out infinite; }
 .lp-float-slow     { animation: lp-float-slow 7s ease-in-out infinite; }
 .lp-spin-slow      { animation: lp-spin-slow 20s linear infinite; }
@@ -881,3 +918,182 @@ html.light-theme .crm-page [style*="rgba(15,23,42"] {
   background: #ffffff !important;
   border-color: #e2e8f0 !important;
 }
+
+/* ── AUTOMATION STUDIO ──────────────────────────────────────────────────────
+   The studio carries its own palette instead of inheriting the blanket
+   .crm-page light-theme fixes above. Those rules rewrite *any* light inline
+   colour to slate — they cannot tell white-on-white from white-on-indigo — so
+   a page with a deliberate palette has to restate it at higher specificity.
+   Every colour in the studio comes from these tokens; nothing is hardcoded. */
+.auto-studio {
+  --as-ground:   #080a0f;
+  --as-ground-2: #0b0e14;
+  --as-well:     rgba(0,0,0,0.28);
+  --as-surf:     rgba(255,255,255,0.035);
+  --as-surf-2:   rgba(255,255,255,0.075);
+  --as-line:     rgba(255,255,255,0.09);
+  --as-line-2:   rgba(255,255,255,0.17);
+  --as-text:     rgba(255,255,255,0.90);
+  --as-text-2:   rgba(255,255,255,0.62);
+  --as-text-3:   rgba(255,255,255,0.38);
+  --as-text-4:   rgba(255,255,255,0.24);
+  --as-ok:       #6ee7b7;
+  --as-info:     #a5b4fc;
+  --as-accent:   #c4b5fd;
+  --as-danger:   #f87171;
+  --as-warn:     #fbbf24;
+}
+html.light-theme .auto-studio {
+  --as-ground:   #ffffff;
+  --as-ground-2: #f8fafc;
+  --as-well:     #f1f5f9;
+  /* Cards and canvas nodes must sit *above* the board, so in light mode the
+     surface is the white one and the ground is the tinted one — the inverse of
+     the dark palette, where the surface is the lighter overlay. */
+  --as-surf:     #ffffff;
+  --as-surf-2:   #f1f5f9;
+  --as-line:     #e2e8f0;
+  --as-line-2:   #cbd5e1;
+  --as-text:     #0f172a;
+  --as-text-2:   #475569;
+  --as-text-3:   #94a3b8;
+  --as-text-4:   #cbd5e1;
+  /* The dark palette's pastels are unreadable on white — these are the same
+     hues at a weight that actually holds contrast against a light ground. */
+  --as-ok:       #047857;
+  --as-info:     #4338ca;
+  --as-accent:   #6d28d9;
+  --as-danger:   #b91c1c;
+  --as-warn:     #b45309;
+}
+
+/* Beat the blanket !important overrides without weakening them elsewhere. */
+html.light-theme .crm-page .auto-studio [style*="var(--as-text)"] { color: var(--as-text) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-text-2)"] { color: var(--as-text-2) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-text-3)"] { color: var(--as-text-3) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-text-4)"] { color: var(--as-text-4) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-ok)"] { color: var(--as-ok) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-info)"] { color: var(--as-info) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-accent)"] { color: var(--as-accent) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-danger)"] { color: var(--as-danger) !important; }
+html.light-theme .crm-page .auto-studio [style*="var(--as-warn)"] { color: var(--as-warn) !important; }
+html.light-theme .crm-page .auto-studio input,
+html.light-theme .crm-page .auto-studio textarea,
+html.light-theme .crm-page .auto-studio select {
+  background-color: var(--as-surf) !important;
+  border-color: var(--as-line) !important;
+  color: var(--as-text) !important;
+}
+/* White text on a saturated button stays white in both themes. */
+html.light-theme .crm-page .auto-studio .text-white { color: #fff !important; }
+
+/* ── ACCESSIBILITY ADJUSTMENTS ──────────────────────────────────────────────
+   Driven by AccessibilityWidget. Every class below has to change something a
+   visitor can perceive — a toggle that only looks compliant is worse than
+   absent, because it tells someone who needs the adjustment that this is as
+   good as the site gets. */
+
+:root { --a11y-font-scale: 1; }
+
+/* Scale from the root so the whole rem-based type ramp moves together, rather
+   than enlarging body copy while headings and buttons stay put. */
+html { font-size: calc(16px * var(--a11y-font-scale)); }
+
+html.a11y-readable body,
+html.a11y-readable button,
+html.a11y-readable input,
+html.a11y-readable textarea,
+html.a11y-readable select {
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+  letter-spacing: 0.01em;
+}
+
+html.a11y-underline a { text-decoration: underline !important; text-underline-offset: 2px; }
+
+html.a11y-grayscale body { filter: grayscale(1); }
+
+/* High contrast: force a black-on-white ground and remove the decorative
+   gradients and translucency the marketing page leans on, which are exactly
+   what fails a contrast check. */
+html.a11y-contrast body,
+html.a11y-contrast section,
+html.a11y-contrast header,
+html.a11y-contrast footer,
+html.a11y-contrast main,
+html.a11y-contrast div {
+  background-image: none !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+html.a11y-contrast h1, html.a11y-contrast h2, html.a11y-contrast h3,
+html.a11y-contrast h4, html.a11y-contrast p, html.a11y-contrast span,
+html.a11y-contrast li, html.a11y-contrast label { color: #000000 !important; }
+html.a11y-contrast a { color: #00309e !important; text-decoration: underline !important; }
+html.a11y-contrast button,
+html.a11y-contrast input, html.a11y-contrast textarea, html.a11y-contrast select {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  border: 2px solid #000000 !important;
+}
+html.a11y-contrast img, html.a11y-contrast svg { filter: contrast(1.25); }
+
+/* Stop motion. Also honoured automatically for anyone whose OS asks for it. */
+html.a11y-stop-motion *,
+html.a11y-stop-motion *::before,
+html.a11y-stop-motion *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html.a11y-big-cursor,
+html.a11y-big-cursor * {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'><path d='M6 2 L6 38 L15 29 L21 43 L28 40 L22 26 L34 26 Z' fill='white' stroke='black' stroke-width='2.5' stroke-linejoin='round'/></svg>") 4 2, auto !important;
+}
+
+/* A visible focus ring is the whole basis of keyboard navigation; several
+   component styles in this file clear outlines, so it is restored here. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid #4f46e5 !important;
+  outline-offset: 2px !important;
+  border-radius: 4px;
+}
+
+/* Screen-reader-only text that becomes visible when focused — used by the
+   "skip to main content" link. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border-width: 0;
+}
+.focus\:not-sr-only:focus {
+  position: static; width: auto; height: auto; padding: inherit; margin: inherit;
+  overflow: visible; clip: auto; white-space: normal;
+}
+
+/* In contrast mode every button is forced to white-on-black-border, which also
+   flattens the accessibility toggles themselves — leaving a sighted user unable
+   to see which adjustments are on, inside the mode meant to help them. Pressed
+   state is restored by inverting it. */
+html.a11y-contrast [aria-pressed="true"] {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+/* The label lives in a child span, and the blanket contrast rule for spans
+   is more specific than the button, so it has to be inverted too —
+   otherwise the pressed toggle renders black text on black. */
+html.a11y-contrast [aria-pressed="true"] svg,
+html.a11y-contrast [aria-pressed="true"] span,
+html.a11y-contrast [aria-pressed="true"] * { color: #ffffff !important; }
