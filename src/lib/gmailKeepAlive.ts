@@ -25,7 +25,9 @@
  * exchanging the code in a Cloud Function that holds the client secret.
  */
 
-import { loadAgentConfig, saveAgentConfig, requestGmailTokenSilent, getActiveToken } from './gmailAgent';
+import {
+  loadAgentConfig, saveAgentConfig, requestGmailTokenSilent, getActiveToken, adoptToken,
+} from './gmailAgent';
 import type { EmailAgentConfig } from '../types';
 
 /** Re-mint when fewer than this many ms remain, so callers never race expiry. */
@@ -76,6 +78,10 @@ export async function refreshGmailTokens(
         const healthy = acct.cachedTokenExpiry
           && acct.cachedTokenExpiry - Date.now() > REFRESH_MARGIN_MS;
         if (healthy && !force) {
+          // Adopt the cached token into memory. Reporting "live" without doing
+          // this was the deadlock: the account looked healthy so no new token
+          // was minted, while getActiveToken() had nothing to return.
+          if (acct.cachedToken) adoptToken(acct.cachedToken, acct.cachedTokenExpiry!);
           anyLive = true; liveEmail ??= acct.email;
           continue;
         }

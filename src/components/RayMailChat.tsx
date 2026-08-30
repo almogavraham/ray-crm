@@ -29,7 +29,7 @@ import { speak, stopSpeaking, isSpeechSupported, hasHebrewVoice, readableEmailTe
 import { composeFromSpeech, loadStyleLearning } from '../lib/voiceCompose';
 import type { ComposedEmail, StyleLearning } from '../lib/voiceCompose';
 import {
-  fetchUnreadEmails, sendGmailReply, loadAgentConfig, askAboutEmails,
+  fetchUnreadEmails, searchEmails, sendGmailReply, loadAgentConfig, askAboutEmails,
 } from '../lib/gmailAgent';
 import { getLiveGmailToken } from '../lib/gmailKeepAlive';
 import type { GmailMessage } from '../lib/gmailAgent';
@@ -64,6 +64,7 @@ export default function RayMailChat({
   const [error, setError] = useState('');
 
   const [mails, setMails] = useState<GmailMessage[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [active, setActive] = useState<GmailMessage | null>(null);
   const [draft, setDraft] = useState<ComposedEmail | null>(null);
   const [sending, setSending] = useState(false);
@@ -71,6 +72,11 @@ export default function RayMailChat({
   const [reading, setReading] = useState(false);
   const [hebrewVoice, setHebrewVoice] = useState<boolean | null>(null);
   const [config, setConfig] = useState<EmailAgentConfig | null>(null);
+  // Three states, because "connected" and "can actually read mail" are not the
+  // same thing. Showing a stored account as connected while every fetch failed
+  // is what made the app claim an empty inbox that was not empty.
+  const [auth, setAuth] = useState<'checking' | 'live' | 'reauth' | 'none'>('checking');
+  const [reconnecting, setReconnecting] = useState(false);
   const [learning, setLearning] = useState<StyleLearning | null>(null);
 
   const speakRef = useRef<{ stop: () => void } | null>(null);
@@ -114,10 +120,22 @@ export default function RayMailChat({
   /* ── Watch the inbox ──────────────────────────────────────────────────── */
   const checkMail = useCallback(async (announce: boolean) => {
     const token = await getLiveGmailToken(workspaceId, clientId);
-    if (!token) return;
+    if (!token) {
+      setAuth((config?.accounts?.length ?? 0) > 0 ? 'reauth' : 'none');
+      return;
+    }
     try {
-      const unread = await fetchUnreadEmails(token, 10);
-      setMails(unread);
+      // Read the inbox, not only what is unread. Asking for is:unread meant a
+      // mailbox whose mail had all been opened reported itself as empty — which
+      // is true of the query and useless as an answer.
+      const [inbox, unread] = await Promise.all([
+        searchEmails(token, 'in:inbox', 15),
+        fetchUnreadEmails(token, 10),
+      ]);
+      setAuth('live');
+      setMails(inbox.length ? inbox : unread);
+      setUnreadCount(unread.length);
+      // Announcements still key on unread — an already-read mail is not news.
       if (!announce) { unread.forEach(m => seenRef.current.add(m.id)); return; }
       for (const m of unread) {
         if (seenRef.current.has(m.id)) continue;
@@ -129,10 +147,15 @@ export default function RayMailChat({
         });
       }
     } catch (e) {
-      // A polling failure must not spam the conversation on every tick.
+      // A polling failure must not spam the conversation on every tick — but it
+      // must not read as "no mail" either. Gmail answers 401 for a token it no
+      // longer accepts, which needs a real reconnect, not a retry.
       console.error('[RayMail] inbox poll failed', e);
+      const msg = (e as Error).message ?? '';
+      setAuth(/401|403|invalid|unauthor/i.test(msg) ? 'reauth' : 'live');
+      setError(`לא הצלחתי לקרוא את תיבת הדואר: ${msg}`);
     }
-  }, [push, workspaceId, clientId]);
+  }, [push, workspaceId, clientId, config]);
 
   useEffect(() => {
     void checkMail(false);
@@ -230,9 +253,27 @@ export default function RayMailChat({
     } finally { setSending(false); }
   };
 
-  // A configured account IS a connection. Reporting "not connected" because an
-  // hour-old token lapsed is what made the user reconnect needlessly.
-  const connected = (config?.accounts?.length ?? 0) > 0;
+  const reconnect = async () => {
+    const cid = clientId ?? config?.accounts?.[0]?.clientId;
+    if (!cid) { setError('חסר Client ID — הגדר אותו בסוכן מכירות AI ← הגדרות'); return; }
+    setReconnecting(true); setError('');
+    try {
+      // Interactive on purpose. The background refresh needs a popup Google
+      // opens for it, and a browser blocks popups that no click asked for —
+      // which is exactly why the silent renewal kept failing.
+      const { requestGmailToken } = await import('../lib/gmailAgent');
+      await requestGmailToken(cid, config?.accounts?.[0]?.email);
+      if (workspaceId) {
+        const { refreshGmailTokens } = await import('../lib/gmailKeepAlive');
+        await refreshGmailTokens(workspaceId, cid, true);
+      }
+      setAuth('live');
+      await checkMail(false);
+      onToast('החיבור ל-Gmail חודש ✓', 'success');
+    } catch (e) {
+      setError(`ההתחברות נכשלה: ${(e as Error).message}`);
+    } finally { setReconnecting(false); }
+  };
 
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4"
@@ -264,16 +305,34 @@ export default function RayMailChat({
               RAY MAIL <Mail size={16} />
             </div>
             <div className="text-white/80 text-[11px] truncate">
-              {connected ? `${mails.length} מיילים שלא נקראו` : 'לא מחובר ל-Gmail'}
+              {auth === 'live'     ? `${mails.length} מיילים בתיבה${unreadCount ? ` · ${unreadCount} לא נקראו` : ''}`
+             : auth === 'reauth'   ? 'החיבור פג — נדרשת התחברות מחדש'
+             : auth === 'checking' ? 'בודק חיבור…'
+             :                       'לא מחובר ל-Gmail'}
             </div>
           </div>
         </div>
 
-        {!connected && (
+        {auth === 'reauth' && (
+          <div className="px-4 py-2.5 text-[12px] flex items-center gap-2 flex-wrap"
+            style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
+            <AlertCircle size={14} className="flex-shrink-0" />
+            <span className="flex-1 min-w-[180px]">
+              החיבור ל-Gmail פג ולא ניתן לחדש אותו ברקע — הדפדפן חוסם את חלון ההרשאה
+              של Google כשלא לחצת עליו בעצמך.
+            </span>
+            <button onClick={() => void reconnect()} disabled={reconnecting}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-60"
+              style={{ background: '#d97706' }}>
+              {reconnecting ? 'מתחבר…' : 'התחבר מחדש'}
+            </button>
+          </div>
+        )}
+        {auth === 'none' && (
           <div className="px-4 py-2.5 text-[12px] flex items-center gap-2"
             style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
             <AlertCircle size={14} className="flex-shrink-0" />
-            אין חיבור פעיל ל-Gmail. התחבר בסוכן מכירות AI ← הגדרות, ואז חזור לכאן.
+            אין חשבון Gmail מחובר. חבר אחד בסוכן מכירות AI ← הגדרות, ואז חזור לכאן.
           </div>
         )}
         {hebrewVoice === false && (

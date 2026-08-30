@@ -462,6 +462,22 @@ export async function checkAndProcessEmails(
   return processed;
 }
 
+/**
+ * Install a token that was obtained elsewhere — in practice the one cached in
+ * Firestore by a previous session.
+ *
+ * Without this the module could only ever use a token minted in the current
+ * page load. On reload the cached token was ignored, and the keep-alive skipped
+ * re-minting because that cached token still looked healthy, so `getActiveToken`
+ * returned null for the whole hour: connected, with a live token on disk, and
+ * every surface reading zero mail.
+ */
+export function adoptToken(token: string, expiresAt: number): void {
+  if (!token || expiresAt <= Date.now()) return;
+  _accessToken = token;
+  _tokenExpiry = expiresAt;
+}
+
 /* ─── Re-export token state for UI ──────────────────────────────────────── */
 export function getActiveToken(): string | null {
   return isTokenValid() ? _accessToken : null;
