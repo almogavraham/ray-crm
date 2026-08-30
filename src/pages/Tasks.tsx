@@ -8,8 +8,22 @@ import {
   Pencil, CalendarPlus, Check, Sparkles,
   MessageCircle, Mail, Square, CheckSquare,
 } from 'lucide-react';
-import type { Lead, StandaloneTask, Task, TaskPriority, KanbanStatus, TeamMember } from '../types';
+import type { Lead, StandaloneTask, Task, TaskPriority, KanbanStatus, TeamMember, TaskType } from '../types';
+
+// Activity-type metadata (icons/labels) — shared by the create/edit modals and task cards.
+const TASK_TYPE_META: Record<TaskType, { label: string; emoji: string }> = {
+  call:     { label: 'שיחה',    emoji: '📞' },
+  email:    { label: 'מייל',    emoji: '✉️' },
+  whatsapp: { label: 'וואטסאפ', emoji: '💬' },
+  meeting:  { label: 'פגישה',   emoji: '📅' },
+  followup: { label: 'מעקב',    emoji: '🔄' },
+  proposal: { label: 'הצעה',    emoji: '📄' },
+  other:    { label: 'כללי',    emoji: '📌' },
+};
+const TASK_TYPE_ORDER: TaskType[] = ['call','email','whatsapp','meeting','followup','proposal','other'];
 import { useLang } from '../contexts/LangContext';
+import TasksAIPanel from '../components/TasksAIPanel';
+import TasksCalendar from '../components/TasksCalendar';
 import { useTheme } from '../contexts/ThemeContext';
 
 /* ─── date helpers ────────────────────────────────────────────────────────── */
@@ -80,9 +94,10 @@ interface UnifiedTask {
   standaloneId?: string; // original StandaloneTask id
   leadTaskOriginalId?: string; // original task id (without the "lead-{leadId}-" prefix)
   kanbanStatus?: KanbanStatus;
+  type?: TaskType;
 }
 
-type ViewMode      = 'list' | 'board';
+type ViewMode      = 'list' | 'board' | 'calendar';
 type OwnerFilter   = 'all' | 'mine' | 'delegated';
 type DateFilter    = 'all' | 'overdue' | 'today' | 'upcoming' | 'completed';
 type PriorityFlt   = 'all' | TaskPriority;
@@ -102,6 +117,23 @@ function buildGCalUrl(task: { description: string; date: string; time: string; n
   } catch { return 'https://calendar.google.com/calendar/r'; }
 }
 
+/* ─── Outlook Calendar URL builder ───────────────────────────────────────── */
+function buildOutlookUrl(task: { description: string; date: string; time: string; notes?: string; lead?: Lead }): string {
+  try {
+    const start = new Date(`${task.date}T${task.time || '09:00'}:00`);
+    const end   = new Date(start.getTime() + 60 * 60000);
+    const title = task.lead ? `${task.description} — ${task.lead.company}` : task.description;
+    const p = new URLSearchParams({
+      path: '/calendar/action/compose', rru: 'addevent',
+      subject: title,
+      startdt: start.toISOString(),
+      enddt: end.toISOString(),
+      ...(task.notes ? { body: task.notes } : {}),
+    });
+    return `https://outlook.office.com/calendar/0/deeplink/compose?${p.toString()}`;
+  } catch { return 'https://outlook.office.com/calendar'; }
+}
+
 /* ─── TasksProps ──────────────────────────────────────────────────────────── */
 interface TasksProps {
   leads: Lead[];
@@ -118,6 +150,7 @@ interface TasksProps {
   onStandaloneEdit: (task: StandaloneTask) => void;
   onLeadTaskEdit: (leadId: string, task: Task) => void;
   onPageChange?: (page: string) => void;
+  onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -127,6 +160,7 @@ export default function Tasks({
   leads, team, currentUser, standaloneTask,
   onLeadClick, onLeadTaskComplete, onLeadTaskDelete, onLeadAddTask,
   onStandaloneAdd, onStandaloneComplete, onStandaloneDelete, onStandaloneEdit, onLeadTaskEdit, onPageChange,
+  onToast,
 }: TasksProps) {
   const { t } = useLang();
   const { isDark, c } = useTheme();
@@ -161,6 +195,7 @@ export default function Tasks({
         isStandalone: false,
         leadTaskOriginalId: t.id,
         kanbanStatus: t.kanbanStatus,
+        type: t.type,
       }))
     );
     const sTasks: UnifiedTask[] = standaloneTask.map(t => ({
@@ -178,6 +213,7 @@ export default function Tasks({
       isStandalone: true,
       standaloneId: t.id,
       kanbanStatus: t.kanbanStatus,
+      type: t.type,
     }));
     return [...leadTasks, ...sTasks];
   }, [leads, standaloneTask, currentUser]);
@@ -241,6 +277,7 @@ export default function Tasks({
     const statusGroups: { key: string; label: string; emoji: string; accent: string; tasks: UnifiedTask[] }[] = [
       { key: 'todo',       label: 'לביצוע',  emoji: '📋', accent: '#6366f1', tasks: [] },
       { key: 'inprogress', label: 'בתהליך',  emoji: '⚡', accent: '#f97316', tasks: [] },
+      { key: 'waiting',    label: 'ממתין ללקוח', emoji: '⏳', accent: '#eab308', tasks: [] },
       { key: 'done',       label: 'הושלם',   emoji: '✅', accent: '#10b981', tasks: [] },
       { key: 'cancelled',  label: 'בוטל',    emoji: '❌', accent: '#64748b', tasks: [] },
     ];
@@ -257,12 +294,13 @@ export default function Tasks({
 
   const kanbanCols: { key: KanbanStatus; label: string; emoji: string; accent: string; headerBg: string; colBg: string; count: number; tasks: UnifiedTask[] }[] = useMemo(() => {
     const byPrio = (a: UnifiedTask, b: UnifiedTask) => ({ high:0, medium:1, low:2 }[a.priority] - { high:0, medium:1, low:2 }[b.priority]);
-    const cols: KanbanStatus[] = ['todo','inprogress','done','cancelled'];
+    const cols: KanbanStatus[] = ['todo','inprogress','waiting','done','cancelled'];
     return cols.map(col => {
       const tasks = all.filter(t => getKanbanCol(t) === col).sort(byPrio);
       const meta: Record<KanbanStatus, { label: string; emoji: string; accent: string; headerBg: string; colBg: string }> = {
         todo:        { label:'לביצוע',   emoji:'📋', accent:'#6366f1', headerBg:'rgba(99,102,241,0.12)',  colBg:'rgba(99,102,241,0.04)' },
         inprogress:  { label:'בתהליך',   emoji:'⚡', accent:'#f97316', headerBg:'rgba(249,115,22,0.12)',  colBg:'rgba(249,115,22,0.04)' },
+        waiting:     { label:'ממתין ללקוח', emoji:'⏳', accent:'#eab308', headerBg:'rgba(234,179,8,0.12)', colBg:'rgba(234,179,8,0.04)' },
         done:        { label:'הושלם',    emoji:'✅', accent:'#10b981', headerBg:'rgba(16,185,129,0.12)',   colBg:'rgba(16,185,129,0.04)' },
         cancelled:   { label:'בוטל',    emoji:'❌', accent:'#64748b', headerBg:'rgba(100,116,139,0.1)',   colBg:'rgba(100,116,139,0.03)' },
       };
@@ -391,6 +429,18 @@ export default function Tasks({
         }}
       >
 
+        {/* ── AI task assistant (natural-language creation + morning briefing) ── */}
+        <TasksAIPanel
+          leads={leads}
+          openTasks={all.filter(t => !t.completed).map(t => ({
+            description: t.description, date: t.date, priority: t.priority,
+            completed: t.completed, leadCompany: t.lead?.company,
+          }))}
+          currentUser={currentUser}
+          onCreateTask={onStandaloneAdd}
+          onToast={onToast}
+        />
+
         {/* ── Header ───────────────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
@@ -412,6 +462,13 @@ export default function Tasks({
                   ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: c.textPrimary }
                   : { color: c.textMuted }}>
                 <Kanban size={14} /> לוח
+              </button>
+              <button onClick={() => setViewMode('calendar')}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors"
+                style={viewMode === 'calendar'
+                  ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff' }
+                  : { color: c.textMuted }}>
+                <CalendarClock size={14} /> לוח שנה
               </button>
             </div>
             <button
@@ -595,6 +652,21 @@ export default function Tasks({
           />
         )}
 
+        {/* ── CALENDAR VIEW ────────────────────────────────────────────── */}
+        {viewMode === 'calendar' && (
+          <TasksCalendar
+            tasks={all.map(t => ({
+              id: t.id, description: t.description, date: t.date,
+              priority: t.priority, completed: t.completed, type: t.type,
+              leadCompany: t.lead?.company,
+            }))}
+            onTaskClick={(id) => {
+              const task = all.find(t => t.id === id);
+              if (task) handleEdit(task);
+            }}
+          />
+        )}
+
         {/* ── LIST VIEW ────────────────────────────────────────────────── */}
         {viewMode === 'list' && (
           <>
@@ -678,6 +750,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
   const [date,          setDate]         = useState(() => new Date().toISOString().split('T')[0]);
   const [time,          setTime]         = useState('09:00');
   const [priority,      setPriority]     = useState<TaskPriority>('medium');
+  const [taskType,      setTaskType]     = useState<TaskType>('followup');
   const [assignedTo,    setAssignedTo]   = useState(currentUser);
   const [selectedLead,  setSelectedLead] = useState<Lead | null>(null);
   const [leadSearch,    setLeadSearch]   = useState('');
@@ -707,6 +780,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
         date, time,
         completed: false,
         priority,
+        type: taskType,
         assignedTo,
         assignedBy: currentUser,
         ...(notes.trim() ? { notes: notes.trim() } : {}),
@@ -718,6 +792,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
         description: desc.trim(),
         date, time,
         priority,
+        type: taskType,
         completed: false,
         assignedTo,
         assignedBy: currentUser,
@@ -918,6 +993,26 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                 </button>
               );
             })}
+          </div>
+
+          {/* Task type */}
+          <div>
+            <label className="block text-sm font-semibold mb-1.5 text-right" style={{ color: c.textSecondary }}>סוג משימה</label>
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              {TASK_TYPE_ORDER.map(tp => {
+                const m = TASK_TYPE_META[tp];
+                const active = taskType === tp;
+                return (
+                  <button key={tp} onClick={() => setTaskType(tp)}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={active
+                      ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: '1px solid transparent' }
+                      : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textSecondary }}>
+                    {m.emoji} {m.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Priority */}
@@ -1325,6 +1420,7 @@ function KanbanCard({
           }}
           dir="rtl"
         >
+          {task.type && <span title={TASK_TYPE_META[task.type].label}>{TASK_TYPE_META[task.type].emoji} </span>}
           {task.description}
         </p>
 
@@ -1490,6 +1586,7 @@ function BoardTaskCard({ task, onComplete, onDelete, onEdit, onLeadClick, isComp
         </button>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium leading-snug" style={{ color: task.completed ? 'rgba(255,255,255,0.3)' : 'white', textDecoration: task.completed ? 'line-through' : 'none' }}>
+            {task.type && <span title={TASK_TYPE_META[task.type].label}>{TASK_TYPE_META[task.type].emoji} </span>}
             {task.description}
           </p>
           {task.notes && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: c.textMuted }}>{task.notes}</p>}
@@ -1520,6 +1617,12 @@ function BoardTaskCard({ task, onComplete, onDelete, onEdit, onLeadClick, isComp
             style={{ background: 'rgba(99,102,241,0.15)', color: c.accentText }}
             title="הוסף ל-Google Calendar">
             <CalendarPlus size={9}/> GCal
+          </a>
+          <a href={buildOutlookUrl(task)} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
+            style={{ background: 'rgba(14,165,233,0.15)', color: '#0ea5e9' }}
+            title="הוסף ל-Outlook Calendar">
+            <CalendarPlus size={9}/> Outlook
           </a>
           {task.lead && (
             <button onClick={() => task.lead && onLeadClick(task.lead)}
@@ -1831,6 +1934,15 @@ function TaskRow({ task, onComplete, onDelete, onEdit, onLeadClick, isCompleting
               onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.25)'; e.currentTarget.style.background = 'transparent'; }}>
               <CalendarPlus size={14}/>
             </a>
+            {/* Outlook Calendar */}
+            <a href={buildOutlookUrl(task)} target="_blank" rel="noreferrer"
+              title="הוסף ל-Outlook Calendar"
+              className="p-1.5 rounded-lg transition-all"
+              style={{ color: c.textMuted }}
+              onMouseEnter={e => { e.currentTarget.style.color = '#0ea5e9'; e.currentTarget.style.background = 'rgba(14,165,233,0.1)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.25)'; e.currentTarget.style.background = 'transparent'; }}>
+              <CalendarPlus size={14}/>
+            </a>
             {/* Edit (all tasks) */}
             <button onClick={() => onEdit(task)} title="ערוך משימה"
               className="p-1.5 rounded-lg transition-all"
@@ -1871,6 +1983,7 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
   const [date,       setDate]       = useState(task.date);
   const [time,       setTime]       = useState(task.time);
   const [priority,   setPriority]   = useState<TaskPriority>(task.priority);
+  const [taskType,   setTaskType]   = useState<TaskType>(task.type ?? 'followup');
   const [assignedTo, setAssignedTo] = useState(task.assignedTo);
   const [addedToGcal,setAddedToGcal] = useState(false);
 
@@ -1886,9 +1999,11 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
         id: task.leadTaskOriginalId,
         description: desc.trim(),
         date, time, priority,
+        type: taskType,
         completed: task.completed,
         assignedTo,
         assignedBy: task.assignedBy ?? currentUser,
+        ...(task.kanbanStatus ? { kanbanStatus: task.kanbanStatus } : {}),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
       };
       onSave({} as StandaloneTask, task.lead.id, leadTask);
@@ -1900,10 +2015,12 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
       date,
       time,
       priority,
+      type:        taskType,
       completed:   task.completed,
       assignedTo,
       assignedBy:  task.assignedBy ?? currentUser,
       createdAt:   new Date().toISOString(),
+      ...(task.kanbanStatus ? { kanbanStatus: task.kanbanStatus } : {}),
       ...(notes.trim()   ? { notes: notes.trim() } : {}),
       ...(task.lead?.id  ? { leadId: task.lead.id } : {}),
       ...(task.completedAt ? { completedAt: task.completedAt } : {}),
@@ -2033,6 +2150,26 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
             })}
           </div>
 
+          {/* Task type */}
+          <div>
+            <label className="block text-[11px] font-bold mb-2 uppercase tracking-wide" style={{ color: labelColor }}>סוג משימה</label>
+            <div className="flex flex-wrap gap-1.5">
+              {TASK_TYPE_ORDER.map(tp => {
+                const m = TASK_TYPE_META[tp];
+                const active = taskType === tp;
+                return (
+                  <button key={tp} onClick={() => setTaskType(tp)}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={active
+                      ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: '1px solid transparent' }
+                      : { background: '#f8fafc', border: '1.5px solid #e2e8f0', color: '#64748b' }}>
+                    {m.emoji} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Priority */}
           <div>
             <label className="block text-[11px] font-bold mb-2 uppercase tracking-wide flex items-center gap-1.5" style={{ color: labelColor }}>
@@ -2086,17 +2223,24 @@ function EditTaskModal({ task, leads, team, currentUser, onClose, onSave }: {
             </div>
           </div>
 
-          {/* Google Calendar */}
-          <div className="rounded-2xl px-4 py-3 flex items-center justify-between"
+          {/* Calendar sync — Google + Outlook */}
+          <div className="rounded-2xl px-4 py-3 flex items-center justify-between gap-2"
             style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
-            <p className="text-[10px]" style={{ color: '#6366f1' }}>שמור לפני הוספה</p>
-            <a href={previewUrl} target="_blank" rel="noreferrer"
-              onClick={() => setAddedToGcal(true)}
-              className="flex items-center gap-2 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all"
-              style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 2px 10px rgba(99,102,241,0.3)' }}>
-              <CalendarPlus size={13} />
-              {addedToGcal ? 'פתח ב-Google Calendar' : '+ Google Calendar'}
-            </a>
+            <p className="text-[10px] flex-shrink-0" style={{ color: '#6366f1' }}>שמור לפני הוספה</p>
+            <div className="flex gap-2">
+              <a href={previewUrl} target="_blank" rel="noreferrer"
+                onClick={() => setAddedToGcal(true)}
+                className="flex items-center gap-1.5 text-white px-3 py-2 rounded-xl text-xs font-bold transition-all"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 2px 10px rgba(99,102,241,0.3)' }}>
+                <CalendarPlus size={13} /> Google
+              </a>
+              <a href={buildOutlookUrl({ description: desc, date, time, notes: notes || undefined, lead: task.lead ?? leads.find(l => l.id === task.lead?.id) })}
+                target="_blank" rel="noreferrer" onClick={() => setAddedToGcal(true)}
+                className="flex items-center gap-1.5 text-white px-3 py-2 rounded-xl text-xs font-bold transition-all"
+                style={{ background: 'linear-gradient(135deg,#0ea5e9,#0284c7)', boxShadow: '0 2px 10px rgba(14,165,233,0.3)' }}>
+                <CalendarPlus size={13} /> Outlook
+              </a>
+            </div>
           </div>
 
           {/* Actions */}

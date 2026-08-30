@@ -1,12 +1,14 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
   ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
   Sparkles, MessageCircle, FileSpreadsheet, Snowflake, AlertCircle,
-  Zap, Clock, BarChart2, SlidersHorizontal, Mail, Send, PhoneOff, ShieldAlert,
-  UserCheck, UserMinus, Settings2,
+  Zap, Clock, BarChart2, SlidersHorizontal, Mail, Send, PhoneOff, ShieldAlert, Megaphone,
+  UserCheck, UserMinus, Settings2, Plus, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask, TeamMember } from '../types';
+import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask, TeamMember, CardLayoutSettings } from '../types';
+import { DEFAULT_CARD_LAYOUT, DEFAULT_CARD_SECTIONS } from '../types';
 import type { StatusConfig } from '../lib/statusConfig';
 import { DEFAULT_STATUS_CONFIGS } from '../lib/statusConfig';
 import EmailModal from '../components/EmailModal';
@@ -14,12 +16,25 @@ import ExcelImportModal from '../components/ExcelImportModal';
 import WhatsAppModal from '../components/WhatsAppModal';
 import DashboardAiPanel from '../components/DashboardAiPanel';
 import AiInsightCard from '../components/AiInsightCard';
+import CardCustomizePanel from '../components/CardCustomizePanel';
+import AutomationChat from '../components/AutomationChat';
+import SalesCopilot from '../components/SalesCopilot';
+import MarketingCopilot from '../components/MarketingCopilot';
+import { useChatBadge, setChatScope } from '../lib/chatSessionStore';
+import LeadViewBar from '../components/LeadViewBar';
+import { LeadBoardView, LeadCardsView } from '../components/LeadBoardView';
+import {
+  loadLeadViews, saveLeadViews, isDirty, BUILT_IN_VIEWS, EMPTY_FILTERS,
+} from '../lib/leadViews';
+import type { LeadView, ViewMode, LeadViewFilters } from '../lib/leadViews';
+import { collection, doc, setDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { useLang } from '../contexts/LangContext';
 import { useTheme } from '../contexts/ThemeContext';
 import type { Insight } from '../lib/insightEngine';
 
 const ALL_STATUSES: LeadStatus[] = ['חדש', 'בתהליך', 'לקוח פעיל', 'רימרקטינג', 'לא רלוונטי'];
-const ALL_SOURCES = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
+const DEFAULT_SOURCES = ['אורגני', 'פרסום ממומן', 'הפניה', 'אינסטגרם', 'פייסבוק', 'גוגל'];
 
 const NEON: Record<LeadStatus, string> = {
   'חדש':        '#6366f1',
@@ -55,6 +70,38 @@ interface DashboardProps {
   onOpenAi?: (query: string) => void;
   statusConfigs?: StatusConfig[];
   onOpenStatusEditor?: () => void;
+  onWorkspaceUpdate?: (updates: Partial<WorkspaceProfile>) => Promise<void>;
+  /** Switch the app to another page (used by the copilots to hand off). */
+  onNavigate?: (page: string) => void;
+}
+
+/**
+ * Badge on a floating chat button.
+ *
+ * Two states, because they mean different things to the user: a pulsing dot
+ * says "still working, you can walk away", a number says "the answer is ready
+ * and you haven't seen it". Both only appear while the window is closed.
+ */
+function ChatBadge({ unread, busy }: { unread: number; busy: boolean }) {
+  if (unread > 0) {
+    return (
+      <span
+        className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-black flex items-center justify-center"
+        style={{ boxShadow: '0 0 0 2px rgba(255,255,255,0.9)' }}>
+        {unread > 9 ? '9+' : unread}
+      </span>
+    );
+  }
+  if (busy) {
+    return (
+      <span className="absolute -top-1 -right-1 flex h-3 w-3">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+        <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-400"
+          style={{ boxShadow: '0 0 0 2px rgba(255,255,255,0.9)' }} />
+      </span>
+    );
+  }
+  return null;
 }
 
 // ─── Dashboard task type for the "My Day" list ──────────────────────────────
@@ -76,20 +123,40 @@ const safeStr = (v: unknown) => (v == null ? '' : String(v));
 const safeArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const safeNum = (v: unknown) => (isFinite(Number(v)) ? Number(v) : 0);
 
+/**
+ * Parse a lead's `lastUpdate` into a timestamp.
+ *
+ * Leads are stamped with `new Date().toLocaleDateString('he-IL')`, which yields
+ * DOT-separated dates ("5.8.2026") — not slashes. Handling only '/' made every
+ * freshly-created lead parse as 0, so it sorted to the very bottom of the
+ * default (lastUpdate desc) ordering and looked like it had vanished.
+ * Accepts ISO, dot- and slash-separated, and numeric timestamps.
+ */
 function parseDate(d: string | undefined): number {
   if (!d) return 0;
-  const p = d.split('/');
+  const s = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {                 // ISO
+    const ts = new Date(s.slice(0, 10) + 'T00:00:00').getTime();
+    return isNaN(ts) ? 0 : ts;
+  }
+  if (/^\d{10,}$/.test(s)) {                          // epoch millis
+    const ts = Number(s);
+    return isNaN(ts) ? 0 : ts;
+  }
+  const sep = s.includes('/') ? '/' : '.';            // he-IL uses dots
+  const p = s.split(sep);
   if (p.length !== 3) return 0;
-  const ts = new Date(`${p[2]}-${p[1]}-${p[0]}`).getTime();
+  const [day, month, yearRaw] = p.map(Number);
+  if (!day || !month || !yearRaw) return 0;
+  const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+  const ts = new Date(year, month - 1, day).getTime();
   return isNaN(ts) ? 0 : ts;
 }
 
 function daysSince(s: string) {
-  try {
-    const p = s.split('/');
-    const d = p.length === 3 ? new Date(`${p[2]}-${p[1]}-${p[0]}`) : new Date(s);
-    return Math.floor((Date.now() - d.getTime()) / 86400000);
-  } catch { return 0; }
+  const ts = parseDate(s);
+  if (!ts) return 0;
+  return Math.max(0, Math.floor((Date.now() - ts) / 86400000));
 }
 
 function isTaskDueSoon(dateStr: string) {
@@ -135,7 +202,31 @@ function getEffectiveScore(lead: Lead): number {
   return stored > 0 ? stored : estimateScore(lead);
 }
 
+function PageNav({ pageNum, totalPages, onChange }: { pageNum: number; totalPages: number; onChange: (p: number) => void }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-center gap-2 py-3">
+      <button type="button" onClick={() => onChange(Math.max(1, pageNum - 1))} disabled={pageNum === 1}
+        className="p-1.5 rounded-lg transition-all disabled:opacity-25 disabled:cursor-not-allowed"
+        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.5)' }}
+        title="עמוד קודם">
+        <ChevronRight size={13} />
+      </button>
+      <span className="text-[11px] font-bold whitespace-nowrap px-1" style={{ color: 'rgba(255,255,255,0.4)' }}>
+        עמוד {pageNum} מתוך {totalPages}
+      </span>
+      <button type="button" onClick={() => onChange(Math.min(totalPages, pageNum + 1))} disabled={pageNum === totalPages}
+        className="p-1.5 rounded-lg transition-all disabled:opacity-25 disabled:cursor-not-allowed"
+        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.5)' }}
+        title="עמוד הבא">
+        <ChevronLeft size={13} />
+      </button>
+    </div>
+  );
+}
+
 function getTemperature(lead: Lead): TempType {
+  if (lead.isHot) return 'hot';   // manual override always wins
   const stale = daysSince(lead.lastUpdate);
   const hasSoonTask = lead.tasks.some(t => !t.completed && isTaskDueSoon(t.date));
   if (hasSoonTask) return 'active';
@@ -159,10 +250,15 @@ export default function Dashboard({
   leads, onLeadClick, onNoteClick, onTaskComplete, onToast, onBulkStatusChange, onBulkDelete,
   compact = false, workspace, onOpenLeadsWizard, onImportLeads, currentUser, onCreateTask, onUpdateLead,
   onUpdateStandaloneTask, team, standaloneTask, insights = [], onOpenAi,
-  statusConfigs = DEFAULT_STATUS_CONFIGS, onOpenStatusEditor,
+  statusConfigs = DEFAULT_STATUS_CONFIGS, onOpenStatusEditor, onWorkspaceUpdate, onNavigate,
 }: DashboardProps) {
   const { t } = useLang();
   const { isDark, c } = useTheme();
+  // Use the workspace's custom lead sources (same list edited from the lead card) —
+  // falls back to the default list when the workspace hasn't customized it.
+  const ALL_SOURCES = workspace?.leadSources?.length ? workspace.leadSources : DEFAULT_SOURCES;
+  const [newSourceInput, setNewSourceInput] = useState('');
+  const [editingSources,  setEditingSources] = useState(false);
   const [search,         setSearch]         = useState('');
   const [activeStatus,   setActiveStatus]   = useState<LeadStatus | 'הכל'>('הכל');
   const [tasksExpanded,  setTasksExpanded]  = useState(false); // "היום שלי" starts collapsed on entry
@@ -179,6 +275,16 @@ export default function Dashboard({
   const [showExcelImport,setShowExcelImport]= useState(false);
   type QuickFilter = 'hot' | 'objections' | 'new' | null;
   const [quickFilter,    setQuickFilter]    = useState<QuickFilter>(null);
+  const [pageSize,       setPageSize]       = useState<number>(() => {
+    const stored = Number(localStorage.getItem('ray-crm-leads-page-size'));
+    return [20, 50, 100].includes(stored) ? stored : 50;
+  });
+  const [pageNum, setPageNum] = useState(1);
+  const changePageSize = (n: number) => {
+    setPageSize(n);
+    setPageNum(1);
+    try { localStorage.setItem('ray-crm-leads-page-size', String(n)); } catch { /* ignore */ }
+  };
 
   // ── Bulk messaging modal ────────────────────────────────────────────────────
   const [showBulkModal,   setShowBulkModal]   = useState(false);
@@ -195,6 +301,11 @@ export default function Dashboard({
   const [filterSource,       setFilterSource]       = useState('');
   const [filterNoAnswer,     setFilterNoAnswer]     = useState(false);
   const [filterUntreated,    setFilterUntreated]    = useState(false);
+
+  /* ── Saved views + display mode ─────────────────────────────────────────── */
+  const [views,     setViews]     = useState<LeadView[]>(BUILT_IN_VIEWS);
+  const [activeView, setActiveView] = useState<string>('all');
+  const [viewMode,  setViewMode]  = useState<ViewMode>('table');
 
   // ── Editing task from My Day ─────────────────────────────────────────────────
   const [editingDashTask, setEditingDashTask] = useState<DashTask | null>(null);
@@ -231,7 +342,7 @@ export default function Dashboard({
     const lastActTime  = log.length ? new Date(log[log.length - 1].timestamp).getTime() : 0;
     const lastContTime = (l as any).lastContactDate ? new Date((l as any).lastContactDate).getTime() : 0;
     const recentActivity = Math.max(lastActTime, lastContTime) >= weekAgo;
-    return recentActivity || (safeNum(l.aiScore) >= 70 && ['חדש','בתהליך'].includes(l.status));
+    return Boolean(l.isHot) || recentActivity || (safeNum(l.aiScore) >= 70 && ['חדש','בתהליך'].includes(l.status));
   }, []);
 
   // ── KPI counts ───────────────────────────────────────────────────────────────
@@ -410,18 +521,36 @@ export default function Dashboard({
     });
   }, [leads, search, activeStatus, sourceFilter, sortField, sortDir, quickFilter, filterObjection, filterSource, filterNoAnswer, filterUntreated, isHotLead]);
 
-  const exportCSV = () => {
-    const headers = ['חברה', 'איש קשר', 'טלפון', 'מייל', 'סטטוס', 'תקציב', 'מקור', 'ציון AI'];
-    const rows = filtered.map(l => [
-      safeStr(l.company), safeStr(l.contactName), safeStr(l.phone), safeStr(l.email),
-      safeStr(l.status), safeNum(l.budget), safeStr(l.source), safeNum(l.aiScore),
-    ]);
-    const csv  = [headers, ...rows].map(r => r.join(',')).join('\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'leads.csv'; a.click();
-    onToast?.('קובץ CSV יוצא בהצלחה', 'success');
+  // How many of the filtered leads to actually render on screen (20/50/100 — user-controlled).
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  // Reset to page 1 whenever the active filters/search/sort change (NOT when the
+  // underlying leads data itself refreshes via the realtime listener — that
+  // shouldn't yank the user back to page 1 mid-browse).
+  useEffect(() => { setPageNum(1); }, [search, activeStatus, sourceFilter, quickFilter, filterObjection, filterSource, filterNoAnswer, filterUntreated, sortField, sortDir]);
+  // Clamp if the current page no longer exists (e.g. leads were deleted).
+  useEffect(() => { if (pageNum > totalPages) setPageNum(totalPages); }, [pageNum, totalPages]);
+  const paged = useMemo(() => filtered.slice((pageNum - 1) * pageSize, pageNum * pageSize), [filtered, pageSize, pageNum]);
+
+  /**
+   * Full Excel export: every lead plus dedicated sheets for notes and
+   * solutions. Deliberately exports ALL leads, not the filtered view — this is
+   * the 'take my data out' button, and silently shipping a filtered subset is
+   * the kind of surprise that costs someone a report.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { exportLeadsToExcel } = await import('../lib/leadsExport');
+      const r = await exportLeadsToExcel(leads, { workspaceName: workspace?.name });
+      onToast?.(`✅ ${r.fileName} — ${r.leads} לידים · ${r.notes} הערות · ${r.solutions} פתרונות`, 'success');
+    } catch (err) {
+      console.error('[export]', err);
+      onToast?.(`ייצוא נכשל: ${(err as Error).message}`, 'error');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const toggleSelect    = (id: string) => setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -437,6 +566,156 @@ export default function Dashboard({
     if (!bulkStatus || selected.size === 0) return;
     onBulkStatusChange?.([...selected], bulkStatus as LeadStatus);
     clearSelection();
+  };
+
+  const addSourceItem = async () => {
+    if (!newSourceInput.trim() || !onWorkspaceUpdate) return;
+    if (ALL_SOURCES.includes(newSourceInput.trim())) { setNewSourceInput(''); return; }
+    const updated = [...ALL_SOURCES, newSourceInput.trim()];
+    await onWorkspaceUpdate({ leadSources: updated });
+    setNewSourceInput('');
+    onToast?.('מקור נוסף ✓', 'success');
+  };
+  const removeSourceItem = async (s: string) => {
+    if (!onWorkspaceUpdate) return;
+    const updated = ALL_SOURCES.filter(x => x !== s);
+    await onWorkspaceUpdate({ leadSources: updated });
+    if (sourceFilter === s) setSourceFilter('');
+    onToast?.('מקור הוסר', 'info');
+  };
+
+  // ── Card layout customization — same workspace.cardLayout field the lead-card's
+  // own "🎨 עיצוב" button reads/writes, so both entry points stay in sync automatically.
+  const [showCustomize, setShowCustomize] = useState(false);
+  const [showAutoChat, setShowAutoChat] = useState(false);
+  const [showCopilot,  setShowCopilot]  = useState(false);
+  const [showMktChat,  setShowMktChat]  = useState(false);
+
+  /* Chat sessions are stored per workspace so one client's conversation can
+     never surface in another's window. */
+  // Load the workspace's saved views once the workspace is known.
+  useEffect(() => {
+    if (!workspace?.id) return;
+    let alive = true;
+    void loadLeadViews(workspace.id).then(v => { if (alive) setViews(v); });
+    return () => { alive = false; };
+  }, [workspace?.id]);
+
+  /** The live filter state, in the shape a view stores. */
+  const currentFilters: LeadViewFilters = {
+    search, activeStatus: String(activeStatus), sourceFilter,
+    quickFilter: quickFilter ?? null,
+    filterObjection, filterSource, filterNoAnswer, filterUntreated,
+    sortField: String(sortField), sortDir,
+  };
+
+  const applyFilters = (f: LeadViewFilters) => {
+    setSearch(f.search);
+    setActiveStatus(f.activeStatus as LeadStatus | 'הכל');
+    setSourceFilter(f.sourceFilter);
+    setQuickFilter((f.quickFilter ?? null) as QuickFilter);
+    setFilterObjection(f.filterObjection);
+    setFilterSource(f.filterSource);
+    setFilterNoAnswer(f.filterNoAnswer);
+    setFilterUntreated(f.filterUntreated);
+    setSortField(f.sortField as SortField);
+    setSortDir(f.sortDir);
+    setPageNum(1);
+  };
+
+  const pickView = (v: LeadView) => { setActiveView(v.id); setViewMode(v.mode); applyFilters(v.filters); };
+
+  const persistViews = async (next: LeadView[]) => {
+    setViews(next);
+    if (!workspace?.id) { onToast?.('אין סביבת עבודה — התצוגה לא נשמרה', 'error'); return; }
+    try { await saveLeadViews(workspace.id, next); }
+    catch (e) { onToast?.(`שמירת התצוגה נכשלה: ${(e as Error).message}`, 'error'); }
+  };
+
+  const saveViewAs = (name: string) => {
+    const v: LeadView = {
+      id: `v_${Date.now()}`, name, mode: viewMode,
+      filters: currentFilters, createdBy: currentUser, createdAt: Date.now(),
+    };
+    void persistViews([...views, v]);
+    setActiveView(v.id);
+    onToast?.(`התצוגה "${name}" נשמרה ✓`, 'success');
+  };
+
+  const updateActiveView = () => {
+    const next = views.map(v => v.id === activeView && !v.builtIn
+      ? { ...v, mode: viewMode, filters: currentFilters } : v);
+    void persistViews(next);
+    onToast?.('התצוגה עודכנה ✓', 'success');
+  };
+
+  const deleteView = (id: string) => {
+    const v = views.find(x => x.id === id);
+    if (!v || v.builtIn) return;
+    if (!window.confirm(`למחוק את התצוגה "${v.name}"?`)) return;
+    void persistViews(views.filter(x => x.id !== id));
+    if (activeView === id) pickView(BUILT_IN_VIEWS[0]);
+    onToast?.('התצוגה נמחקה', 'info');
+  };
+
+  useEffect(() => { setChatScope(workspace?.id); }, [workspace?.id]);
+  const salesBadge = useChatBadge('sales');
+  const mktBadge   = useChatBadge('marketing');
+  const autoBadge  = useChatBadge('automation');
+
+  // App Password (SMTP) can only SEND; reading an inbox needs OAuth. The copilot
+  // is told which of the two is active so it never claims to read mail it can't.
+  // OAuth accounts live in the email-agent config doc, so they're fetched lazily
+  // when the copilot is first opened rather than on every leads-page render.
+  const [hasOauthMail, setHasOauthMail] = useState(false);
+  useEffect(() => {
+    if (!showCopilot || !workspace?.id) return;
+    let alive = true;
+    import('../lib/gmailAgent')
+      .then(m => m.loadAgentConfig(workspace.id))
+      .then(cfg => { if (alive) setHasOauthMail((cfg?.accounts?.length ?? 0) > 0); })
+      .catch(() => { /* treat as not connected */ });
+    return () => { alive = false; };
+  }, [showCopilot, workspace?.id]);
+
+  const emailMode: 'oauth' | 'smtp' | 'none' =
+    hasOauthMail ? 'oauth'
+    : (workspace?.emailConfig?.gmailUser && workspace?.emailConfig?.gmailAppPasswordSet) ? 'smtp'
+    : 'none';
+
+  /** Persist an automation drafted in the chat (same collection the builder uses). */
+  const saveChatWorkflow = async (d: {
+    name: string; description: string; conditionLogic: 'and' | 'or';
+    conditions: { id: string; type: string; value: string }[];
+    actions: { id: string; type: string; config: Record<string, string> }[];
+  }) => {
+    if (!workspace?.id) { onToast?.('אין סביבת עבודה מחוברת', 'error'); return; }
+    const id = Date.now().toString();
+    try {
+      await setDoc(doc(collection(db, 'workspaces', workspace.id, 'workflows'), id), {
+        id, name: d.name, description: d.description ?? '', active: true,
+        conditionLogic: d.conditionLogic, conditions: d.conditions, actions: d.actions,
+        createdAt: new Date().toISOString(), runCount: 0,
+      });
+      onToast?.(`⚡ האוטומציה "${d.name}" נשמרה והופעלה`, 'success');
+    } catch (err) {
+      console.error('[chat workflow save]', err);
+      onToast?.(`שגיאה בשמירת האוטומציה: ${(err as Error).message}`, 'error');
+    }
+  };
+  const cardLayout: CardLayoutSettings = {
+    ...DEFAULT_CARD_LAYOUT,
+    ...(workspace?.cardLayout ?? {}),
+    sections: (workspace?.cardLayout?.sections && workspace.cardLayout.sections.length > 0)
+      ? workspace.cardLayout.sections
+      : DEFAULT_CARD_SECTIONS,
+  };
+  const handleSaveLayout = async (newLayout: CardLayoutSettings) => {
+    setShowCustomize(false);
+    if (onWorkspaceUpdate) {
+      await onWorkspaceUpdate({ cardLayout: newLayout });
+      onToast?.('עיצוב הכרטיס עודכן ✓', 'success');
+    }
   };
 
   const needsSetup = workspace && !workspace.leadsSetupDone;
@@ -728,8 +1007,26 @@ export default function Dashboard({
 
           {/* Count */}
           <span className="text-[11px] font-bold whitespace-nowrap hidden sm:block" style={{ color: 'rgba(255,255,255,0.28)' }}>
-            {filtered.length} לידים
+            {filtered.length > pageSize ? `מציג ${paged.length} מתוך ${filtered.length}` : `${filtered.length} לידים`}
           </span>
+
+          {/* Page navigation */}
+          <PageNav pageNum={pageNum} totalPages={totalPages} onChange={setPageNum} />
+
+          {/* Page size selector */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span className="text-[10px] font-bold hidden sm:inline" style={{ color: 'rgba(255,255,255,0.25)' }}>הצג:</span>
+            {[20, 50, 100].map(n => (
+              <button key={n} type="button" onClick={() => changePageSize(n)}
+                className="px-2 py-1 rounded-lg text-[11px] font-bold transition-all flex-shrink-0"
+                style={pageSize === n
+                  ? { background: 'rgba(99,102,241,0.28)', border: '1px solid rgba(99,102,241,0.5)', color: '#a5b4fc' }
+                  : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.35)' }
+                }>
+                {n}
+              </button>
+            ))}
+          </div>
 
           {/* Spacer */}
           <div className="flex-1" />
@@ -792,10 +1089,11 @@ export default function Dashboard({
             {sourceFilter && <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#818cf8' }} />}
           </button>
 
-          <button type="button" onClick={exportCSV}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
+          <button type="button" onClick={exportExcel} disabled={exporting}
+            title="ייצוא כל הלידים לאקסל — כולל גיליון הערות וגיליון פתרונות"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 disabled:opacity-50"
             style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }}>
-            <Download size={11} />CSV
+            <Download size={11} />{exporting ? 'מייצא...' : 'אקסל'}
           </button>
 
           {onImportLeads && (
@@ -808,17 +1106,28 @@ export default function Dashboard({
           )}
 
           {onOpenLeadsWizard && (
-            <button type="button" onClick={onOpenLeadsWizard}
+            <button type="button"
+              onClick={needsSetup ? onOpenLeadsWizard : () => setShowCustomize(true)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
               style={needsSetup
                 ? { background: 'rgba(99,102,241,0.28)', border: '1px solid rgba(99,102,241,0.5)', color: '#a5b4fc', boxShadow: '0 0 12px rgba(99,102,241,0.18)' }
                 : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }
-              }>
+              }
+              title={needsSetup ? undefined : 'עורך את אותו עיצוב כרטיס שנפתח מתוך כרטיס הליד'}>
               <Sparkles size={11} />
               <span className="hidden sm:inline">{needsSetup ? 'עצב כרטיס' : 'עצב מחדש'}</span>
             </button>
           )}
         </div>
+
+        {showCustomize && (
+          <CardCustomizePanel
+            layout={cardLayout}
+            statuses={statusConfigs.map(c => c.label)}
+            onSave={handleSaveLayout}
+            onClose={() => setShowCustomize(false)}
+          />
+        )}
 
         {/* Row 2: Status tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto px-3 pb-3 scrollbar-hide" dir="rtl"
@@ -885,7 +1194,44 @@ export default function Dashboard({
                   {s || 'הכל'}
                 </button>
               ))}
+              {onWorkspaceUpdate && (
+                <button type="button" onClick={() => setEditingSources(v => !v)}
+                  className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1"
+                  style={editingSources
+                    ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.4)' }
+                    : { background: 'transparent', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <Settings2 size={11} /> {editingSources ? 'סיום' : 'ערוך מקורות'}
+                </button>
+              )}
             </div>
+
+            {editingSources && onWorkspaceUpdate && (
+              <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SOURCES.map(s => (
+                    <span key={s} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold"
+                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)' }}>
+                      {s}
+                      <button type="button" onClick={() => removeSourceItem(s)} title="הסר מקור">
+                        <X size={11} className="text-red-400 hover:text-red-300" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <input value={newSourceInput} onChange={e => setNewSourceInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && addSourceItem()}
+                    placeholder="הוסף מקור חדש..." dir="rtl"
+                    className="flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                    style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff' }} />
+                  <button type="button" onClick={addSourceItem}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
+                    style={{ background: 'rgba(99,102,241,0.9)', color: '#fff' }}>
+                    <Plus size={12} /> הוסף
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -984,7 +1330,7 @@ export default function Dashboard({
             {t('common.confirm')}
           </button>
           <div className="w-px h-5" style={{ background: 'rgba(255,255,255,0.1)' }} />
-          <button type="button" onClick={exportCSV} className="flex items-center gap-1.5 text-sm transition-colors"
+          <button type="button" onClick={exportExcel} disabled={exporting} className="flex items-center gap-1.5 text-sm transition-colors"
             style={{ color: 'rgba(255,255,255,0.35)' }}>
             <Download size={13} /> {t('common.export')}
           </button>
@@ -1005,6 +1351,31 @@ export default function Dashboard({
         </div>
       )}
 
+      {/* ── Saved views + display mode ── */}
+      <LeadViewBar
+        views={views}
+        activeId={activeView}
+        mode={viewMode}
+        filters={currentFilters}
+        dirty={isDirty(views.find(v => v.id === activeView) ?? null, currentFilters, viewMode)}
+        onPick={pickView}
+        onMode={setViewMode}
+        onSaveAs={saveViewAs}
+        onUpdate={updateActiveView}
+        onRevert={() => { const v = views.find(x => x.id === activeView); if (v) pickView(v); }}
+        onDelete={deleteView}
+      />
+
+      {/* Board and cards replace BOTH the mobile list and the desktop table —
+          they are already responsive, so there is no separate mobile variant. */}
+      {viewMode === 'board' && (
+        <LeadBoardView leads={filtered} statusConfigs={statusConfigs} onLeadClick={onLeadClick} />
+      )}
+      {viewMode === 'cards' && (
+        <LeadCardsView leads={paged} statusConfigs={statusConfigs} onLeadClick={onLeadClick} />
+      )}
+
+      {viewMode === 'table' && (<>
       {/* ── Mobile Cards ── */}
       <div className="md:hidden space-y-2">
         {filtered.length === 0 ? (
@@ -1013,7 +1384,7 @@ export default function Dashboard({
             <Search size={28} style={{ color: 'rgba(99,102,241,0.28)' }} />
             <span className="text-sm" style={{ color: 'rgba(255,255,255,0.2)' }}>{t('dashboard.noLeads')}</span>
           </div>
-        ) : filtered.map(lead => {
+        ) : paged.map(lead => {
           const neon = statusConfigs.find(c => c.label === lead.status)?.color ?? NEON[lead.status] ?? '#6366f1';
           const temp = getTemperature(lead);
           const budget = safeNum(lead.budget);
@@ -1025,8 +1396,14 @@ export default function Dashboard({
               style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.3)' }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = neon + '48'; (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 24px ${neon}18`; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(0,0,0,0.3)'; }}>
-              {/* Right NEON accent bar */}
-              <div className="absolute top-0 right-0 w-0.5 h-full" style={{ background: `linear-gradient(to bottom,${neon},${neon}40)` }} />
+              {/* Right NEON accent bar — replaced by the automation flag colour when set */}
+              <div className="absolute top-0 right-0 h-full" style={{
+                width: lead.flagColor ? '4px' : '2px',
+                background: lead.flagColor
+                  ? lead.flagColor
+                  : `linear-gradient(to bottom,${neon},${neon}40)`,
+                boxShadow: lead.flagColor ? `0 0 10px ${lead.flagColor}` : undefined,
+              }} title={lead.flagColor ? (lead.flagReason || 'סומן על-ידי אוטומציה') : undefined} />
               {/* Temperature strip */}
               {temp === 'hot'    && <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 via-red-500 to-orange-500" style={{ boxShadow: '0 0 8px #f97316' }} />}
               {temp === 'cold'   && <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-500" style={{ boxShadow: '0 0 8px #06b6d4' }} />}
@@ -1154,6 +1531,9 @@ export default function Dashboard({
           );
         })}
       </div>
+      <div className="md:hidden">
+        <PageNav pageNum={pageNum} totalPages={totalPages} onChange={setPageNum} />
+      </div>
 
       {/* ── Desktop Table ── */}
       <div className="hidden md:block rounded-xl overflow-hidden"
@@ -1199,7 +1579,7 @@ export default function Dashboard({
                   </div>
                 </td>
               </tr>
-            ) : filtered.map(lead => {
+            ) : paged.map(lead => {
               const isSelected = selected.has(lead.id);
               const budget = safeNum(lead.budget);
               const neon = statusConfigs.find(c => c.label === lead.status)?.color ?? NEON[lead.status] ?? '#6366f1';
@@ -1208,10 +1588,14 @@ export default function Dashboard({
               return (
                 <tr key={lead.id}
                   className="transition-all cursor-pointer"
+                  title={lead.flagColor ? (lead.flagReason || 'סומן על-ידי אוטומציה') : undefined}
                   style={{
                     borderBottom: '1px solid rgba(255,255,255,0.04)',
-                    borderRight: `3px solid ${neon}`,
-                    background: isSelected ? 'rgba(99,102,241,0.1)' : 'transparent',
+                    // An automation flag colour takes over the row marker so it's unmissable.
+                    borderRight: `${lead.flagColor ? 5 : 3}px solid ${lead.flagColor || neon}`,
+                    background: isSelected
+                      ? 'rgba(99,102,241,0.1)'
+                      : lead.flagColor ? `${lead.flagColor}0d` : 'transparent',
                   }}
                   onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = `${neon}08`; }}
                   onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
@@ -1349,6 +1733,118 @@ export default function Dashboard({
           </tbody>
         </table>
       </div>
+      <div className="hidden md:block">
+        <PageNav pageNum={pageNum} totalPages={totalPages} onChange={setPageNum} />
+      </div>
+      </>)}
+
+
+      {/* ── Floating automation-chat button ──
+          Rendered through a portal straight onto <body> so no ancestor can ever
+          turn `position: fixed` into "fixed relative to a transformed parent". */}
+      {createPortal(
+        <button
+          onClick={() => setShowAutoChat(true)}
+          title="בונה האוטומציות החכם — שוחח ובנה אוטומציה"
+          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
+          style={{
+            // PHYSICAL left/bottom on purpose: the app renders RTL, where
+            // `inset-inline-start` resolves to the RIGHT edge — directly underneath
+            // the sidebar, which hid this button completely. Stacked above the
+            // existing round FAB in the bottom-left corner so they don't overlap.
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 11rem)',
+            left: '1.25rem',
+            background: 'linear-gradient(135deg,#7c3aed,#6366f1)',
+            boxShadow: '0 8px 28px rgba(124,58,237,0.45)',
+          }}>
+          <Sparkles size={17} />
+          <span>בנה אוטומציה</span>
+          <ChatBadge {...autoBadge} />
+        </button>,
+        document.body,
+      )}
+
+      {/* ── Floating Sales Copilot button (primary) ── */}
+      {createPortal(
+        <button
+          onClick={() => setShowCopilot(true)}
+          title="RAY Copilot — שותף המכירות החכם שלך"
+          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
+          style={{
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 15.5rem)',
+            left: '1.25rem',
+            background: 'linear-gradient(135deg,#0f766e,#0891b2)',
+            boxShadow: '0 8px 28px rgba(13,148,136,0.45)',
+          }}>
+          <Sparkles size={17} />
+          <span>RAY Copilot</span>
+          <ChatBadge {...salesBadge} />
+        </button>,
+        document.body,
+      )}
+
+      {/* ── Floating Marketing Copilot button — stacked directly above the
+             sales copilot, as requested. Same portal trick, same physical
+             `left` (RTL turns `inset-inline-start` into the right edge). ── */}
+      {createPortal(
+        <button
+          onClick={() => setShowMktChat(true)}
+          title="RAY Marketing — מנהל השיווק החכם שלך"
+          className="fixed z-50 flex items-center gap-2 px-4 py-3 rounded-2xl text-white font-bold text-sm transition-transform hover:scale-105 active:scale-95"
+          style={{
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20rem)',
+            left: '1.25rem',
+            background: 'linear-gradient(135deg,#a21caf,#db2777)',
+            boxShadow: '0 8px 28px rgba(192,38,211,0.45)',
+          }}>
+          <Megaphone size={17} />
+          <span>RAY Marketing</span>
+          <ChatBadge {...mktBadge} />
+        </button>,
+        document.body,
+      )}
+
+      {showMktChat && (
+        <MarketingCopilot
+          leads={leads}
+          workspace={workspace}
+          workspaceId={workspace?.id}
+          currentUser={currentUser ?? ''}
+          onToast={onToast}
+          onNavigate={onNavigate}
+          onClose={() => setShowMktChat(false)}
+        />
+      )}
+
+      {showCopilot && (
+        <SalesCopilot
+          leads={leads}
+          team={team}
+          statuses={statusConfigs.map(s => s.label)}
+          currentUser={currentUser ?? ''}
+          emailMode={emailMode}
+          emailAddress={workspace?.emailConfig?.gmailUser}
+          workspaceId={workspace?.id}
+          oauthClientId={workspace?.emailConfig?.oauthClientId}
+          onUpdateLead={onUpdateLead}
+          onCreateTask={onCreateTask}
+          onLeadClick={onLeadClick}
+          onNavigate={onNavigate}
+          onToast={onToast}
+          onClose={() => setShowCopilot(false)}
+        />
+      )}
+
+      {showAutoChat && (
+        <AutomationChat
+          leads={leads}
+          statuses={statusConfigs.map(s => s.label)}
+          sources={ALL_SOURCES}
+          team={team}
+          onSave={saveChatWorkflow}
+          onClose={() => setShowAutoChat(false)}
+        />
+      )}
 
       {/* Excel Import Modal */}
       {showExcelImport && onImportLeads && (

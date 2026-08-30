@@ -22,6 +22,8 @@ import CampaignMediaCreator from '../components/CampaignMediaCreator';
 import GoogleAdsCampaigns from '../components/GoogleAdsCampaigns';
 import MediaStudio from '../components/MediaStudio';
 import type { MediaGalleryItem } from '../components/MediaStudio';
+import ContentPlanner from '../components/ContentPlanner';
+import MarketingAutopilot from '../components/MarketingAutopilot';
 import {
   PLATFORMS, loadSocialConnections, saveSocialConnection, deleteSocialConnection,
   openOAuthPopup, exchangeSocialToken, postToSocial, isConnectionValid,
@@ -124,12 +126,13 @@ interface Props {
 }
 
 /* ── Tab type ───────────────────────────────────────────────────────────────── */
-type Tab = 'campaigns' | 'google' | 'creative' | 'settings' | 'studio';
+type Tab = 'autopilot' | 'campaigns' | 'google' | 'creative' | 'settings' | 'studio';
 // Sub-tabs inside the "פרסום ברשתות" (social advertising) hub, ordered by the
 // campaign lifecycle: create → target audiences → engage (comments) → measure.
-type CampaignsSubTab = 'create' | 'audiences' | 'comments' | 'analytics';
+type CampaignsSubTab = 'create' | 'plan' | 'audiences' | 'comments' | 'analytics';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  { id: 'autopilot',  label: 'אוטופיילוט',    icon: Rocket        },
   { id: 'studio',     label: 'סטודיו',        icon: Monitor       },
   { id: 'campaigns',  label: 'פרסום ברשתות', icon: Target        },
   { id: 'google',     label: 'פרסום בגוגל',  icon: Globe         },
@@ -139,6 +142,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 
 const CAMPAIGNS_SUBTABS: { id: CampaignsSubTab; label: string; icon: React.ElementType }[] = [
   { id: 'create',    label: 'קמפיינים', icon: Target        },
+  { id: 'plan',      label: 'מתכנן תוכן', icon: Layout      },
   { id: 'audiences', label: 'קהלים',    icon: Users         },
   { id: 'comments',  label: 'תגובות',   icon: MessageSquare },
   { id: 'analytics', label: 'אנליטיקס', icon: BarChart2     },
@@ -387,7 +391,18 @@ function CommentDraftCard({
 export default function MarketingAgent({ workspaceId: wid, workspace, onToast, onNavigate }: Props) {
   const { c: tc, isDark } = useTheme();
   /* ── Tab ─────────────────────────────────────────────────────────────────── */
-  const [tab, setTab] = useState<Tab>('studio');
+  // A copilot hand-off ("open the campaign builder") parks the target tab in
+  // sessionStorage; honour it once, then clear it so a later refresh doesn't
+  // silently jump the user somewhere they didn't ask for.
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const want = sessionStorage.getItem('ray:marketing-tab');
+      sessionStorage.removeItem('ray:marketing-tab');
+      const valid: Tab[] = ['autopilot', 'studio', 'campaigns', 'google', 'creative', 'settings'];
+      if (want && (valid as string[]).includes(want)) return want as Tab;
+    } catch { /* sessionStorage unavailable in private mode */ }
+    return 'autopilot';
+  });
   const [campaignsSubTab, setCampaignsSubTab] = useState<CampaignsSubTab>('create');
   const [onboardingCollapsed, setOnboardingCollapsed] = useState(true);
 
@@ -6164,6 +6179,22 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
             </div>
           )}
         </div>
+      )}
+
+      {/* ══ AUTOPILOT TAB ════════════════════════════════════════════════ */}
+      {tab === 'autopilot' && (
+        <MarketingAutopilot wid={wid} workspace={workspace} onToast={onToast} />
+      )}
+
+      {/* ══ CONTENT PLANNER SUB-TAB ══════════════════════════════════════ */}
+      {tab === 'campaigns' && campaignsSubTab === 'plan' && (
+        <ContentPlanner
+          wid={wid}
+          workspace={workspace}
+          productProfile={productProfile}
+          onToast={onToast}
+          language={cfg.language === 'auto' ? 'he' : (cfg.language as 'he' | 'en')}
+        />
       )}
 
       {/* ══ ANALYTICS TAB ════════════════════════════════════════════════ */}

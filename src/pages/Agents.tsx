@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import {
   Bot, TrendingUp, AlertTriangle, BarChart3,
   MessageCircle, CheckCircle2, Clock, Loader2, Copy,
@@ -7,9 +7,17 @@ import {
   Users, Calendar, Target, Zap,
   FileText, Search, Plus, Trash2, Globe, Award,
   ExternalLink, Play, Settings, ToggleLeft, ChevronRight,
-  Link, Dna, X, ChevronDown,
+  Link, Dna, X, ChevronDown, Edit3,
 } from 'lucide-react';
 import type { Lead, TeamMember, StandaloneTask, TaskPriority } from '../types';
+// Canonical automation vocabulary + types live in the engine so the form builder,
+// the AI chat and the server-side scanner can never drift apart.
+import {
+  TRIGGER_LABELS, ACTION_LABELS, VALUELESS_TRIGGERS, FLAG_COLORS, CONTACT_METHODS,
+} from '../lib/automationEngine';
+import type {
+  TriggerType, WFActionType, WorkflowCondition, WorkflowAction, Workflow,
+} from '../lib/automationEngine';
 import { getAnthropicProxy } from '../lib/anthropicClient';
 import { doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -18,7 +26,12 @@ import { useTheme } from '../contexts/ThemeContext';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
-type AgentTab = 'followup' | 'forecast' | 'alerts' | 'proposal' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach' | 'mirror' | 'dna';
+/** Quote manager lives in WorkspaceSettings (it reuses that module's UI
+ *  helpers); load it on demand so it never lands in this page's chunk. */
+const ProposalManager = lazy(() =>
+  import('./WorkspaceSettings').then(m => ({ default: m.ProposalManager })));
+
+type AgentTab = 'followup' | 'forecast' | 'alerts' | 'proposal' | 'quotes' | 'enrich' | 'workflow' | 'brief' | 'marketing' | 'campaign' | 'churn' | 'templates' | 'coach' | 'mirror' | 'dna';
 
 interface AgentsProps {
   leads: Lead[];
@@ -29,6 +42,15 @@ interface AgentsProps {
   onUpdateLead: (lead: Lead) => void;
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
   workspaceId?: string;
+  /** Live lead statuses + workspace config so the automation builder stays in sync. */
+  statusConfigs?: { label: string }[];
+  workspace?: {
+    leadSources?: string[];
+    name?: string;
+    email?: string;
+    /** Defaults for the quote manager, moved here from the settings page. */
+    salesSettings?: { proposalFooter?: string; proposalValidDays?: number };
+  };
 }
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
@@ -1108,65 +1130,59 @@ function LeadEnrichment({ leads, onUpdateLead, onToast, workspaceId }: {
 /* ══════════════════════════════════════════════════════════════════════════════
    FEATURE 7 — WORKFLOW BUILDER (Advanced)
 ══════════════════════════════════════════════════════════════════════════════ */
-type TriggerType = 'days_inactive' | 'status_is' | 'score_above' | 'score_below' | 'budget_above' | 'source_is' | 'has_overdue_task';
-type WFActionType = 'create_task' | 'change_status' | 'send_whatsapp_ai' | 'send_email_ai' | 'add_note' | 'assign_to' | 'send_webhook';
-
-interface WorkflowCondition { id: string; type: TriggerType; value: string; }
-interface WorkflowAction    { id: string; type: WFActionType; config: Record<string, string>; }
-interface Workflow {
-  id: string; name: string; description?: string; active: boolean;
-  conditionLogic: 'and' | 'or';
-  conditions: WorkflowCondition[];
-  actions:    WorkflowAction[];
-  createdAt: string; runCount: number; lastRunAt?: string;
-}
 interface RunResult {
   lead: Lead;
   actionResults: { actionId: string; type: WFActionType; message?: string; subject?: string; success: boolean }[];
+}
+/** An approval request created in the background by the workflowScanner function. */
+interface PendingRun {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: 'pending_approval' | 'approved' | 'rejected';
+  leadIds: string[];
+  leadNames?: string[];
+  matchCount: number;
+  createdAt: number;
 }
 
 const WF_STATUSES = ['חדש','בתהליך','לקוח פעיל','רימרקטינג','לא רלוונטי'];
 const WF_SOURCES  = ['אורגני','פרסום ממומן','הפניה','אינסטגרם','פייסבוק','גוגל'];
 
-const TRIGGER_LABELS: Record<TriggerType, string> = {
-  days_inactive:    'ימים ללא עדכון ≥',
-  status_is:        'סטטוס הוא',
-  score_above:      'ציון AI מעל',
-  score_below:      'ציון AI מתחת ל-',
-  budget_above:     'תקציב מעל ₪',
-  source_is:        'מקור הוא',
-  has_overdue_task: 'יש משימה באיחור',
-};
-const ACTION_LABELS: Record<WFActionType, string> = {
-  create_task:      '📋 צור משימה',
-  change_status:    '🔄 שנה סטטוס',
-  send_whatsapp_ai: '💬 שלח WhatsApp (AI)',
-  send_email_ai:    '📧 שלח מייל (AI)',
-  add_note:         '📝 הוסף הערה',
-  assign_to:        '👤 שייך לאיש צוות',
-  send_webhook:     '🔗 שלח Webhook',
-};
 const ACTION_ICON: Record<WFActionType, string> = {
   create_task: '📋', change_status: '🔄', send_whatsapp_ai: '💬',
   send_email_ai: '📧', add_note: '📝', assign_to: '👤', send_webhook: '🔗',
+  mark_hot: '🔥', unmark_hot: '❄️', set_followup: '📅',
+  set_flag_color: '🎨', clear_flag_color: '⬜',
 };
 
 const mkCond = (): WorkflowCondition => ({ id: `${Date.now()}${Math.random()}`, type: 'days_inactive', value: '7' });
 const mkAct  = (): WorkflowAction    => ({ id: `${Date.now()}${Math.random()}`, type: 'create_task',   config: {} });
 
-export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId }: {
+export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead, onToast, workspaceId, statusConfigs, leadSources, team }: {
   leads: Lead[]; currentUser: string;
   onCreateTask: (task: StandaloneTask) => void;
   onUpdateLead: (lead: Lead) => void;
   onToast?: AgentsProps['onToast'];
   workspaceId?: string;
+  /** Live statuses from the leads board — keeps the builder in sync with reality. */
+  statusConfigs?: { label: string }[];
+  /** Live lead-source list (workspace.leadSources). */
+  leadSources?: string[];
+  team?: TeamMember[];
 }) {
+  // Live vocabularies — fall back to the legacy constants only when nothing was passed.
+  const statuses = statusConfigs?.length ? statusConfigs.map(s => s.label) : WF_STATUSES;
+  const sources  = leadSources?.length ? leadSources : WF_SOURCES;
+  const members  = team?.length ? team.map(m => m.name) : [];
   const [workflows,   setWorkflows]   = useState<Workflow[]>([]);
   const [loadingWf,   setLoadingWf]   = useState(true);
   const [showForm,    setShowForm]    = useState(false);
   const [running,     setRunning]     = useState<string | null>(null);
   const [runResults,  setRunResults]  = useState<RunResult[] | null>(null);
   const [previewWf,   setPreviewWf]   = useState<string | null>(null);
+  /** Approval requests filed by the background scanner (workflowScanner Cloud Function). */
+  const [pendingRuns, setPendingRuns] = useState<PendingRun[]>([]);
 
   /* form state */
   const [fName,    setFName]    = useState('');
@@ -1176,14 +1192,55 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
   const [fActions, setFActions] = useState<WorkflowAction[]>([mkAct()]);
   const [aiPrompt, setAiPrompt] = useState('');
   const [genAi,    setGenAi]    = useState(false);
+  /** When set, the form is editing this existing workflow instead of creating one. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  /**
+   * Workflows live UNDER the workspace (`workspaces/{wid}/workflows`).
+   * They used to be written to a root-level `workflows` collection, which the
+   * Firestore rules deny for everyone except the super-admin — and because every
+   * write was wrapped in `.catch(() => {})`, the permission error was swallowed
+   * and the UI still reported success while nothing was ever saved.
+   */
+  const wfCol = () => collection(db, 'workspaces', workspaceId!, 'workflows');
+  const wfDoc = (id: string) => doc(db, 'workspaces', workspaceId!, 'workflows', id);
+
+  const runsCol = () => collection(db, 'workspaces', workspaceId!, 'workflowRuns');
+
+  const loadPendingRuns = () => {
+    if (!workspaceId) return;
+    getDocs(runsCol())
+      .then(s => setPendingRuns(
+        s.docs.map(d => ({ id: d.id, ...d.data() } as PendingRun))
+          .filter(r => r.status === 'pending_approval')
+          .sort((a, b) => b.createdAt - a.createdAt),
+      ))
+      .catch(err => console.error('[workflowRuns load]', err));
+  };
 
   useEffect(() => {
-    getDocs(collection(db, 'workflows'))
+    if (!workspaceId) { setLoadingWf(false); return; }
+    getDocs(wfCol())
       .then(s => setWorkflows(s.docs.map(d => d.data() as Workflow)))
-      .catch(() => {}).finally(() => setLoadingWf(false));
-  }, []);
+      .catch(err => { console.error('[workflows load]', err); onToast?.('שגיאה בטעינת האוטומציות', 'error'); })
+      .finally(() => setLoadingWf(false));
+    loadPendingRuns();
+  }, [workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Load an existing workflow into the form for editing. */
+  const startEdit = (wf: Workflow) => {
+    setEditingId(wf.id);
+    setFName(wf.name);
+    setFDesc(wf.description ?? '');
+    setFLogic(wf.conditionLogic);
+    setFConds((wf.conditions ?? []).length ? wf.conditions.map(c => ({ ...c })) : [mkCond()]);
+    setFActions((wf.actions ?? []).length ? wf.actions.map(a => ({ ...a, config: { ...a.config } })) : [mkAct()]);
+    setAiPrompt('');
+    setShowForm(true);
+  };
 
   const resetForm = () => {
+    setEditingId(null);
     setFName(''); setFDesc(''); setFLogic('and');
     setFConds([mkCond()]); setFActions([mkAct()]); setAiPrompt('');
   };
@@ -1192,18 +1249,57 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
   const matches = (lead: Lead, wf: Workflow) => {
     const conditions = wf.conditions ?? [];
     if (conditions.length === 0) return false;
+    const midnight = () => { const t = new Date(); t.setHours(0,0,0,0); return t; };
     const results = conditions.map(c => {
       switch (c.type) {
         case 'days_inactive':    return daysSinceUpdate(lead) >= parseInt(c.value);
         case 'status_is':        return lead.status === c.value;
+        case 'status_is_not':    return lead.status !== c.value;
         case 'score_above':      return lead.aiScore > parseInt(c.value);
         case 'score_below':      return lead.aiScore < parseInt(c.value);
         case 'budget_above':     return lead.budget > parseInt(c.value);
+        case 'budget_below':     return lead.budget < parseInt(c.value);
         case 'source_is':        return lead.source === c.value;
         case 'has_overdue_task': {
-          const t = new Date(); t.setHours(0,0,0,0);
+          const t = midnight();
           return (lead.tasks ?? []).some(tk => !tk.completed && (() => { try { return new Date(tk.date+'T00:00:00') < t; } catch { return false; } })());
         }
+        case 'is_hot':            return Boolean(lead.isHot);
+        case 'is_not_hot':        return !lead.isHot;
+        case 'days_since_created': {
+          if (!lead.createdAt) return false;
+          return (Date.now() - lead.createdAt) / 86400000 >= parseInt(c.value);
+        }
+        case 'never_contacted':   return !lead.lastContactDate;
+        case 'followup_overdue': {
+          if (!lead.nextFollowUpDate) return false;
+          try { return new Date(lead.nextFollowUpDate) < new Date(); } catch { return false; }
+        }
+        case 'has_no_open_tasks': return !(lead.tasks ?? []).some(tk => !tk.completed);
+        case 'assigned_to_is':    return lead.assignedTo === c.value;
+        case 'has_objection':     return Boolean(lead.objection);
+        case 'has_solution':      return (lead.solutions ?? []).some(s => s.name === c.value);
+        case 'missing_email':     return !lead.email?.trim();
+        case 'missing_phone':     return !lead.phone?.trim();
+        case 'no_answer_count_gte': return (lead.noAnswerCount ?? 0) >= parseInt(c.value);
+        case 'hours_since_no_answer': {
+          if (!lead.lastNoAnswerAt) return false;
+          const t = Date.parse(lead.lastNoAnswerAt);
+          return isNaN(t) ? false : (Date.now() - t) / 3600000 >= parseInt(c.value);
+        }
+        case 'hours_since_last_contact': {
+          if (!lead.lastContactDate) return false;
+          const t = Date.parse(lead.lastContactDate);
+          return isNaN(t) ? false : (Date.now() - t) / 3600000 >= parseInt(c.value);
+        }
+        case 'hours_since_created': {
+          if (!lead.createdAt) return false;
+          return (Date.now() - lead.createdAt) / 3600000 >= parseInt(c.value);
+        }
+        case 'flag_color_is':     return lead.flagColor === c.value;
+        case 'has_no_flag':       return !lead.flagColor;
+        case 'was_contacted':     return Boolean(lead.lastContactDate);
+        case 'contact_method_is': return lead.contactMethod === c.value;
         default: return false;
       }
     });
@@ -1218,53 +1314,211 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
     setGenAi(true);
     try {
       const client = getAnthropicProxy();
+
+      // Live vocabulary + real workspace data so the AI can only reference things
+      // that actually exist in THIS workspace (statuses, sources, team, products).
+      const triggerDocs = (Object.keys(TRIGGER_LABELS) as TriggerType[])
+        .map(k => `  "${k}" — ${TRIGGER_LABELS[k]}${VALUELESS_TRIGGERS.includes(k) ? ' (ללא value)' : ''}`).join('\n');
+      const actionDocs = (Object.keys(ACTION_LABELS) as WFActionType[])
+        .map(k => `  "${k}" — ${ACTION_LABELS[k].replace(/^\S+\s/, '')}`).join('\n');
+      const solutions = [...new Set(leads.flatMap(l => (l.solutions ?? []).map(s => s.name)))].slice(0, 20);
+
+      const system = `אתה בונה אוטומציות ל-CRM בעברית. אתה ממיר בקשה חופשית של המשתמש לאוטומציה מובנית (תנאים + פעולות) בפורמט JSON.
+
+## סוגי תנאים (conditions.type) — השתמש אך ורק באלה:
+${triggerDocs}
+
+## סוגי פעולות (actions.type) — השתמש אך ורק באלה:
+${actionDocs}
+
+## ערכים חוקיים בסביבת העבודה הזו (אל תמציא אחרים!):
+סטטוסים: ${statuses.join(' | ')}
+מקורות ליד: ${sources.join(' | ')}
+${members.length ? `אנשי צוות: ${members.join(' | ')}` : ''}
+${solutions.length ? `פתרונות/מוצרים: ${solutions.join(' | ')}` : ''}
+
+## מבנה config לכל פעולה:
+- create_task: {"description":"טקסט — אפשר {company} ו-{name}","priority":"high|medium|low"}
+- change_status: {"status":"<אחד מהסטטוסים למעלה>"}
+- send_whatsapp_ai / send_email_ai: {"tone":"ידידותי|מקצועי|רשמי","prompt":"מה לכתוב"}
+- add_note: {"noteText":"טקסט — אפשר {company} ו-{name}"}
+- assign_to: {"assignee":"<שם איש צוות>"}
+- send_webhook: {"url":"https://..."}
+- mark_hot / unmark_hot: {}
+- set_followup: {"days":"7"}
+- set_flag_color: {"color":"<hex מהרשימה>","reason":"סיבה קצרה"}
+- clear_flag_color: {}
+
+## צבעי סימון חוקיים (hex בלבד):
+${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
+
+## דוגמאות (חשוב — למד מהן):
+בקשה: "אם הליד לא ענה 3 פעמים צבע אותו באדום"
+→ {"name":"3 ניסיונות ללא מענה","description":"ליד שלא ענה 3 פעמים נצבע באדום","conditionLogic":"and","conditions":[{"type":"no_answer_count_gte","value":"3"}],"actions":[{"type":"set_flag_color","config":{"color":"#ef4444","reason":"לא ענה 3 פעמים"}}]}
+
+בקשה: "אם הליד לא ענה פעם אחת תצבע אותו באדום אחרי 48 שעות"
+→ {"name":"ללא מענה 48 שעות","description":"ליד שלא ענה ועברו 48 שעות נצבע באדום","conditionLogic":"and","conditions":[{"type":"no_answer_count_gte","value":"1"},{"type":"hours_since_no_answer","value":"48"}],"actions":[{"type":"set_flag_color","config":{"color":"#ef4444","reason":"48 שעות ללא מענה"}}]}
+
+בקשה: "אם תיעדתי פנייה בכרטיס — העבר את הליד לסטטוס בתהליך"
+→ {"name":"פנייה תועדה → בתהליך","description":"ליד שתועדה לו פנייה עובר אוטומטית לבתהליך","conditionLogic":"and","conditions":[{"type":"was_contacted","value":""},{"type":"status_is","value":"חדש"}],"actions":[{"type":"change_status","config":{"status":"בתהליך"}}]}
+(שים לב: הוסף תנאי status_is על הסטטוס ההתחלתי כדי שהכלל לא יחול על לידים שכבר התקדמו)
+
+## כללים:
+1. תנאים שמסומנים "ללא value" — שלח value כמחרוזת ריקה "".
+2. conditionLogic: "and" כשכל התנאים חייבים להתקיים, "or" כשמספיק אחד.
+3. לשעות השתמש בתנאי hours_* ולא בימים — "48 שעות" = hours_since_no_answer=48.
+4. אפשר לשלב כמה תנאים וכמה פעולות באותה אוטומציה.
+5. תן שם קצר וברור בעברית ותיאור במשפט אחד.
+6. החזר JSON תקין בלבד — בלי markdown, בלי הסברים.
+
+פורמט:
+{"name":"","description":"","conditionLogic":"and","conditions":[{"type":"","value":""}],"actions":[{"type":"","config":{}}]}`;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res: any = await (client.messages as any).create({
-        model: 'claude-opus-4-5', max_tokens: 800,
-        messages: [{ role: 'user', content:
-          `בנה אוטומציה CRM מהתיאור: "${aiPrompt}"\n\nטריגרים: ${Object.keys(TRIGGER_LABELS).join(', ')}\nפעולות: ${Object.keys(ACTION_LABELS).join(', ')}\nסטטוסים: ${WF_STATUSES.join(', ')}\nמקורות: ${WF_SOURCES.join(', ')}\n\nהחזר JSON בלבד ללא markdown:\n{"name":"","description":"","conditionLogic":"and","conditions":[{"id":"1","type":"","value":""}],"actions":[{"id":"1","type":"","config":{}}]}\n\nעבור send_whatsapp_ai/send_email_ai שים config: {"tone":"ידידותי","prompt":""}`,
-        }],
+        model: 'claude-sonnet-4-6', max_tokens: 1500, system,
+        messages: [{ role: 'user', content: aiPrompt.trim() }],
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const raw = res.content?.find((b: any) => b.type === 'text')?.text ?? '{}';
-      const p   = JSON.parse(raw.replace(/^```json\s*/,'').replace(/\s*```$/,''));
-      if (p.name)             setFName(p.name);
-      if (p.description)      setFDesc(p.description);
-      if (p.conditionLogic)   setFLogic(p.conditionLogic);
-      if (p.conditions?.length) setFConds(p.conditions.map((c: WorkflowCondition) => ({ ...c, id: `${Date.now()}${Math.random()}` })));
-      if (p.actions?.length)    setFActions(p.actions.map((a: WorkflowAction) => ({ ...a, id: `${Date.now()}${Math.random()}` })));
-      onToast?.('אוטומציה נבנתה על ידי AI ✓', 'success');
-    } catch { onToast?.('שגיאה בבניית האוטומציה', 'error'); }
+      const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+      const a = cleaned.indexOf('{'), b = cleaned.lastIndexOf('}');
+      const p = JSON.parse(a !== -1 && b !== -1 ? cleaned.slice(a, b + 1) : cleaned);
+
+      // ── Validate against the real vocabulary — never trust the model blindly ──
+      const validTriggers = new Set(Object.keys(TRIGGER_LABELS));
+      const validActions  = new Set(Object.keys(ACTION_LABELS));
+      const dropped: string[] = [];
+
+      const conds: WorkflowCondition[] = (p.conditions ?? [])
+        .filter((c: { type: string }) => {
+          if (validTriggers.has(c.type)) return true;
+          dropped.push(`תנאי לא מוכר: ${c.type}`); return false;
+        })
+        .map((c: { type: TriggerType; value?: string }, i: number) => ({
+          id: `${Date.now()}${i}${Math.random()}`,
+          type: c.type,
+          value: VALUELESS_TRIGGERS.includes(c.type) ? '' : String(c.value ?? ''),
+        }));
+
+      const acts: WorkflowAction[] = (p.actions ?? [])
+        .filter((x: { type: string }) => {
+          if (validActions.has(x.type)) return true;
+          dropped.push(`פעולה לא מוכרת: ${x.type}`); return false;
+        })
+        .map((x: { type: WFActionType; config?: Record<string, string> }, i: number) => ({
+          id: `${Date.now()}${i}${Math.random()}`,
+          type: x.type,
+          config: x.config ?? {},
+        }));
+
+      if (!conds.length && !acts.length) {
+        onToast?.('ה-AI לא הצליח לבנות אוטומציה מהתיאור — נסה לנסח אחרת', 'error');
+        return;
+      }
+
+      if (p.name)           setFName(p.name);
+      if (p.description)    setFDesc(p.description);
+      if (p.conditionLogic === 'and' || p.conditionLogic === 'or') setFLogic(p.conditionLogic);
+      if (conds.length)     setFConds(conds);
+      if (acts.length)      setFActions(acts);
+
+      // Report how many leads this would actually hit right now — instant sanity check.
+      const preview = leads.filter(l => matches(l, {
+        id: '', name: '', active: true, conditionLogic: (p.conditionLogic === 'or' ? 'or' : 'and'),
+        conditions: conds, actions: acts, createdAt: '', runCount: 0,
+      })).length;
+
+      onToast?.(
+        dropped.length
+          ? `אוטומציה נבנתה (${preview} לידים תואמים) — ${dropped.length} פריטים לא נתמכים הושמטו`
+          : `✓ אוטומציה נבנתה — ${preview} לידים תואמים כרגע`,
+        dropped.length ? 'info' : 'success',
+      );
+    } catch (err) {
+      console.error('[workflow ai]', err);
+      onToast?.('שגיאה בבניית האוטומציה', 'error');
+    }
     finally  { setGenAi(false); }
   };
 
   const saveWorkflow = async () => {
     if (!fName.trim()) { onToast?.('חסר שם לאוטומציה', 'error'); return; }
+    if (!workspaceId)  { onToast?.('אין סביבת עבודה מחוברת — לא ניתן לשמור', 'error'); return; }
+    // Firestore rejects any object containing `undefined`, so build a clean record.
+    const existing = editingId ? workflows.find(w => w.id === editingId) : null;
     const wf: Workflow = {
-      id: Date.now().toString(), name: fName, description: fDesc, active: true,
-      conditionLogic: fLogic, conditions: fConds, actions: fActions,
-      createdAt: new Date().toISOString(), runCount: 0,
+      id: editingId ?? Date.now().toString(),
+      name: fName.trim(),
+      description: fDesc?.trim() || '',
+      active: existing?.active ?? true,
+      conditionLogic: fLogic,
+      conditions: fConds.map(c => ({ id: c.id, type: c.type, value: c.value ?? '' })),
+      actions: fActions.map(a => ({ id: a.id, type: a.type, config: a.config ?? {} })),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      runCount: existing?.runCount ?? 0,
+      ...(existing?.lastRunAt ? { lastRunAt: existing.lastRunAt } : {}),
     };
-    await setDoc(doc(db, 'workflows', wf.id), wf).catch(() => {});
-    setWorkflows(p => [...p, wf]);
+    try {
+      await setDoc(wfDoc(wf.id), wf);
+    } catch (err) {
+      console.error('[workflow save]', err);
+      onToast?.(`שגיאה בשמירת האוטומציה: ${(err as Error).message}`, 'error');
+      return;   // don't pretend it worked
+    }
+    setWorkflows(p => editingId ? p.map(w => w.id === wf.id ? wf : w) : [...p, wf]);
+    const wasEdit = Boolean(editingId);
     setShowForm(false); resetForm();
-    onToast?.('אוטומציה נוצרה ✓', 'success');
+    onToast?.(wasEdit ? 'האוטומציה עודכנה ✓' : 'אוטומציה נוצרה ונשמרה ✓', 'success');
   };
 
   const toggleWf = async (wf: Workflow) => {
+    if (!workspaceId) return;
     const u = { ...wf, active: !wf.active };
-    await setDoc(doc(db, 'workflows', wf.id), u).catch(() => {});
-    setWorkflows(p => p.map(w => w.id === wf.id ? u : w));
+    try {
+      await setDoc(wfDoc(wf.id), u);
+      setWorkflows(p => p.map(w => w.id === wf.id ? u : w));
+    } catch (err) {
+      console.error('[workflow toggle]', err);
+      onToast?.('שגיאה בעדכון האוטומציה', 'error');
+    }
   };
 
   const deleteWf = async (id: string) => {
-    await deleteDoc(doc(db, 'workflows', id)).catch(() => {});
-    setWorkflows(p => p.filter(w => w.id !== id));
-    onToast?.('אוטומציה נמחקה', 'info');
+    if (!workspaceId) return;
+    try {
+      await deleteDoc(wfDoc(id));
+      setWorkflows(p => p.filter(w => w.id !== id));
+      onToast?.('אוטומציה נמחקה', 'info');
+    } catch (err) {
+      console.error('[workflow delete]', err);
+      onToast?.('שגיאה במחיקת האוטומציה', 'error');
+    }
   };
 
-  const runWf = async (wf: Workflow) => {
-    const matching = matchLeads(wf);
+  /* ── Background approval requests ─────────────────────────────────────────── */
+  const closeRun = async (run: PendingRun, status: 'approved' | 'rejected') => {
+    if (!workspaceId) return;
+    await setDoc(doc(db, 'workspaces', workspaceId, 'workflowRuns', run.id),
+      { ...run, status, closedAt: Date.now() }).catch(err => console.error('[run close]', err));
+    setPendingRuns(p => p.filter(r => r.id !== run.id));
+  };
+
+  const approveRun = async (run: PendingRun) => {
+    const wf = workflows.find(w => w.id === run.workflowId);
+    if (!wf) { onToast?.('האוטומציה לא נמצאה — ייתכן שנמחקה', 'error'); await closeRun(run, 'rejected'); return; }
+    await closeRun(run, 'approved');
+    await runWf(wf, run.leadIds);   // run on exactly the reviewed leads
+  };
+
+  /**
+   * @param onlyLeadIds when provided (approving a background request), act on exactly
+   *        those leads instead of re-matching — so the user runs what they reviewed.
+   */
+  const runWf = async (wf: Workflow, onlyLeadIds?: string[]) => {
+    const matching = onlyLeadIds
+      ? leads.filter(l => onlyLeadIds.includes(l.id))
+      : matchLeads(wf);
     if (!matching.length) { onToast?.('אין לידים תואמים', 'info'); return; }
     const hasAiAction = (wf.actions ?? []).some(a => ['send_whatsapp_ai','send_email_ai'].includes(a.type));
     if (hasAiAction && workspaceId) {
@@ -1301,6 +1555,28 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
 
           } else if (action.type === 'assign_to') {
             onUpdateLead({ ...lead, assignedTo: action.config.assignee || currentUser });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'mark_hot' || action.type === 'unmark_hot') {
+            onUpdateLead({ ...lead, isHot: action.type === 'mark_hot' });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'set_followup') {
+            const days = parseInt(action.config.days || '7') || 7;
+            const d = new Date(); d.setDate(d.getDate() + days);
+            onUpdateLead({ ...lead, nextFollowUpDate: d.toISOString() });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'set_flag_color') {
+            onUpdateLead({
+              ...lead,
+              flagColor: action.config.color || '#ef4444',
+              flagReason: action.config.reason || wf.name,
+            });
+            actionResults.push({ actionId: action.id, type: action.type, success: true });
+
+          } else if (action.type === 'clear_flag_color') {
+            onUpdateLead({ ...lead, flagColor: '', flagReason: '' });
             actionResults.push({ actionId: action.id, type: action.type, success: true });
 
           } else if (action.type === 'send_webhook') {
@@ -1346,7 +1622,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
     }
 
     const updated = { ...wf, runCount: wf.runCount + 1, lastRunAt: new Date().toISOString() };
-    await setDoc(doc(db, 'workflows', wf.id), updated).catch(() => {});
+    if (workspaceId) await setDoc(wfDoc(wf.id), updated).catch(err => console.error('[workflow runCount]', err));
     setWorkflows(p => p.map(w => w.id === wf.id ? updated : w));
     setRunning(null);
 
@@ -1372,20 +1648,43 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
         className={`${inp} flex-1 min-w-32`}>
         {(Object.keys(TRIGGER_LABELS) as TriggerType[]).map(k => <option key={k} value={k}>{TRIGGER_LABELS[k]}</option>)}
       </select>
-      {c.type === 'status_is' ? (
+      {(c.type === 'status_is' || c.type === 'status_is_not') ? (
         <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
           className={inp}>
-          {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          <option value="">— בחר —</option>
+          {statuses.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       ) : c.type === 'source_is' ? (
         <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
           className={inp}>
-          {WF_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+          <option value="">— בחר —</option>
+          {sources.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-      ) : c.type !== 'has_overdue_task' ? (
+      ) : c.type === 'assigned_to_is' ? (
+        <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          className={inp}>
+          <option value="">— בחר —</option>
+          {(members.length ? members : [currentUser]).map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      ) : c.type === 'has_solution' ? (
+        <input value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          placeholder="שם הפתרון" className={`${inp} w-32 text-right`}/>
+      ) : c.type === 'flag_color_is' ? (
+        <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          className={inp}>
+          <option value="">— בחר צבע —</option>
+          {FLAG_COLORS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+        </select>
+      ) : c.type === 'contact_method_is' ? (
+        <select value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
+          className={inp}>
+          <option value="">— בחר —</option>
+          {CONTACT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      ) : !VALUELESS_TRIGGERS.includes(c.type) ? (
         <input type="number" value={c.value} onChange={e => setFConds(cs => cs.map(x => x.id === c.id ? { ...x, value: e.target.value } : x))}
           placeholder="ערך" className={`${inp} w-20`}/>
-      ) : <span className="text-slate-400 text-xs">(כל ליד עם משימה באיחור)</span>}
+      ) : <span className="text-slate-400 text-xs">(תנאי ללא ערך)</span>}
       {fConds.length > 1 && (
         <button onClick={() => setFConds(cs => cs.filter(x => x.id !== c.id))} className="text-red-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12}/></button>
       )}
@@ -1419,8 +1718,29 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
         <select value={a.config.status || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, status: e.target.value } } : x))}
           className={`w-full ${inp}`}>
           <option value="">— בחר סטטוס —</option>
-          {WF_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          {statuses.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+      )}
+      {a.type === 'set_followup' && (
+        <input type="number" min={1} value={a.config.days || '7'}
+          onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, days: e.target.value } } : x))}
+          placeholder="בעוד כמה ימים" className={`w-full ${inp}`}/>
+      )}
+      {a.type === 'set_flag_color' && (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5 justify-end">
+            {FLAG_COLORS.map(f => (
+              <button key={f.value} type="button"
+                onClick={() => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, color: f.value } } : x))}
+                className="w-7 h-7 rounded-lg transition-all"
+                style={{ background: f.value, outline: (a.config.color || '#ef4444') === f.value ? '2px solid #1e293b' : 'none', outlineOffset: 2 }}
+                title={f.label}/>
+            ))}
+          </div>
+          <input value={a.config.reason || ''}
+            onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, reason: e.target.value } } : x))}
+            placeholder="סיבה לצביעה (אופציונלי)" className={`w-full ${inp} text-right`}/>
+        </div>
       )}
       {(a.type === 'send_whatsapp_ai' || a.type === 'send_email_ai') && (
         <div className="space-y-1.5">
@@ -1440,8 +1760,16 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
           className={`w-full ${inp} text-right resize-none`}/>
       )}
       {a.type === 'assign_to' && (
-        <input value={a.config.assignee || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, assignee: e.target.value } } : x))}
-          placeholder="שם איש צוות" className={`w-full ${inp} text-right`}/>
+        members.length ? (
+          <select value={a.config.assignee || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, assignee: e.target.value } } : x))}
+            className={`w-full ${inp}`}>
+            <option value="">— בחר איש צוות —</option>
+            {members.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        ) : (
+          <input value={a.config.assignee || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, assignee: e.target.value } } : x))}
+            placeholder="שם איש צוות" className={`w-full ${inp} text-right`}/>
+        )
       )}
       {a.type === 'send_webhook' && (
         <div className="space-y-1.5">
@@ -1485,7 +1813,7 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
         <div className="bg-white border border-violet-200 rounded-2xl p-5 space-y-4 shadow-md">
           <div className="flex items-center justify-between">
             <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-400 hover:text-slate-600 text-xs transition-colors">✕ ביטול</button>
-            <h3 className="text-slate-800 font-bold text-sm">⚡ בנה אוטומציה חדשה</h3>
+            <h3 className="text-slate-800 font-bold text-sm">{editingId ? '✏️ עריכת אוטומציה' : '⚡ בנה אוטומציה חדשה'}</h3>
           </div>
 
           {/* AI builder */}
@@ -1497,9 +1825,24 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
                 style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)' }}>
                 {genAi ? <><Loader2 size={11} className="animate-spin"/> בונה...</> : <><Brain size={11}/> בנה</>}
               </button>
-              <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
-                placeholder='למשל: "שלח וואטסאפ ידידותי לכל ליד שלא עדכנתי 10 ימים"'
-                className="flex-1 bg-white border border-violet-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 text-right"/>
+              <textarea value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} rows={2}
+                onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) buildWithAi(); }}
+                placeholder={'תאר במילים שלך מה שהאוטומציה צריכה לעשות...\nלמשל: "כל ליד חם שלא נוצר איתו קשר — שלח וואטסאפ ותקבע מעקב בעוד 3 ימים"'}
+                className="flex-1 bg-white border border-violet-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 text-right resize-none"/>
+            </div>
+            {/* One-click starting points — each is a full sentence the AI can build from */}
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              {[
+                'ליד חם שלא יצרתי איתו קשר — שלח וואטסאפ וקבע מעקב בעוד 3 ימים',
+                'ליד חדש מעל 10 ימים בלי טיפול — סמן כחם, צור משימת שיחה דחופה',
+                'ליד עם ציון AI מעל 80 שאין לו משימות פתוחות — צור משימה ושייך אליי',
+                'ליד עם מעקב שעבר זמנו — שלח מייל מקצועי והוסף הערה',
+              ].map(ex => (
+                <button key={ex} onClick={() => setAiPrompt(ex)}
+                  className="text-[10px] px-2 py-1 rounded-lg bg-white/70 border border-violet-200 text-violet-600 hover:bg-white transition-colors text-right">
+                  {ex.length > 42 ? ex.slice(0, 42) + '…' : ex}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -1544,9 +1887,47 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
             <button onClick={saveWorkflow}
               className="text-white font-bold text-sm px-6 py-2 rounded-xl transition-all flex items-center gap-2 shadow-md"
               style={{ background:'linear-gradient(135deg,#8b5cf6,#6366f1)', boxShadow:'0 4px 12px #8b5cf640' }}>
-              <CheckCircle2 size={14}/> שמור אוטומציה
+              <CheckCircle2 size={14}/> {editingId ? 'עדכן אוטומציה' : 'שמור אוטומציה'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Pending approvals filed by the background scanner ── */}
+      {pendingRuns.length > 0 && (
+        <div className="space-y-2">
+          {pendingRuns.map(run => (
+            <div key={run.id} className="rounded-xl p-3.5"
+              style={{ background: 'linear-gradient(135deg,#fffbeb,#fef3c7)', border: '1px solid #fcd34d' }}>
+              <div className="flex items-start gap-2.5">
+                <span className="text-lg flex-shrink-0">⚡</span>
+                <div className="flex-1 min-w-0 text-right">
+                  <p className="text-sm font-bold text-amber-900">
+                    האוטומציה "{run.workflowName}" מצאה {run.matchCount} לידים
+                  </p>
+                  {run.leadNames?.length ? (
+                    <p className="text-[11px] text-amber-700 mt-0.5 truncate">
+                      {run.leadNames.filter(Boolean).join(' · ')}{run.matchCount > (run.leadNames.length) ? ' ועוד…' : ''}
+                    </p>
+                  ) : null}
+                  <p className="text-[10px] text-amber-600 mt-0.5">
+                    זוהה ברקע · ממתין לאישורך כדי לרוץ
+                  </p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <button onClick={() => approveRun(run)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold text-white"
+                      style={{ background: 'linear-gradient(135deg,#10b981,#059669)' }}>
+                      ✓ אשר והרץ
+                    </button>
+                    <button onClick={() => closeRun(run, 'rejected')}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold text-amber-700 hover:bg-amber-100">
+                      דחה
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1608,6 +1989,10 @@ export function WorkflowBuilder({ leads, currentUser, onCreateTask, onUpdateLead
                     <button onClick={() => runWf(wf)} disabled={running === wf.id || !wf.active || mc === 0} title="הפעל עכשיו"
                       className="w-8 h-8 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-600 transition-colors disabled:opacity-30">
                       {running === wf.id ? <Loader2 size={12} className="animate-spin"/> : <Play size={12}/>}
+                    </button>
+                    <button onClick={() => startEdit(wf)} title="ערוך אוטומציה"
+                      className="w-8 h-8 rounded-lg bg-slate-50 hover:bg-violet-50 border border-slate-200 flex items-center justify-center text-slate-400 hover:text-violet-600 transition-colors">
+                      <Edit3 size={12}/>
                     </button>
                     <button onClick={() => toggleWf(wf)} title={wf.active ? 'כבה' : 'הפעל'}
                       className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors border ${wf.active ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
@@ -3177,7 +3562,7 @@ function DnaMatchAgent({ leads, workspaceId, onToast }: {
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function Agents({
   leads, team, currentUser, standaloneTask,
-  onCreateTask, onUpdateLead, onToast, workspaceId,
+  onCreateTask, onUpdateLead, onToast, workspaceId, statusConfigs, workspace,
 }: AgentsProps) {
   const { t } = useLang();
   const { isDark, c } = useTheme();
@@ -3210,6 +3595,7 @@ export default function Agents({
     { key: 'followup',    emoji: '🎯', label: t('agents.tab.followup'),    badge: staleCount > 0 ? staleCount : undefined },
     { key: 'forecast',    emoji: '📈', label: t('agents.tab.forecast'),    badge: `₪${Math.round(confirmed/1000)}K` },
     { key: 'proposal',    emoji: '✍️', label: t('agents.tab.proposal'),   badge: undefined },
+    { key: 'quotes',      emoji: '📑', label: 'ניהול הצעות מחיר',          badge: undefined },
     { key: 'alerts',      emoji: '🚨', label: t('agents.tab.alerts'),     badge: alertCount > 0 ? alertCount : undefined },
     { key: 'enrich',      emoji: '🔍', label: t('agents.tab.enrich'),     badge: undefined },
     { key: 'workflow',    emoji: '⚡', label: t('agents.tab.workflow'),   badge: undefined },
@@ -3226,7 +3612,7 @@ export default function Agents({
   const activeClients = leads.filter(l => l.status === 'לקוח פעיל').length;
 
   const tabGroups: { label: string; desc: string; keys: AgentTab[] }[] = [
-    { label: t('agents.group.sales'),     desc: '4', keys: ['followup','forecast','proposal','alerts'] },
+    { label: t('agents.group.sales'),     desc: '5', keys: ['followup','forecast','proposal','quotes','alerts'] },
     { label: t('agents.group.leads'),     desc: '3', keys: ['enrich','workflow','brief'] },
     { label: t('agents.group.clients'),   desc: '2', keys: ['churn','templates'] },
     { label: t('agents.group.marketing'), desc: '3', keys: ['marketing','campaign','coach'] },
@@ -3443,11 +3829,26 @@ export default function Agents({
               )}
               {tab === 'forecast'    && <RevenueForecast leads={leads}/>}
               {tab === 'proposal'    && <ProposalGenerator leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
+              {tab === 'quotes'      && (
+                <Suspense fallback={<div className="py-10 text-center text-sm text-slate-400">טוען...</div>}>
+                  <ProposalManager
+                    workspaceId={workspaceId ?? ''}
+                    leads={leads}
+                    workspaceName={workspace?.name ?? ''}
+                    workspaceEmail={workspace?.email ?? ''}
+                    defaultFooter={workspace?.salesSettings?.proposalFooter ?? ''}
+                    defaultValidDays={workspace?.salesSettings?.proposalValidDays ?? 14}
+                    onToast={onToast ?? (() => {})}
+                  />
+                </Suspense>
+              )}
               {tab === 'alerts'      && <SmartAlerts leads={leads} standaloneTask={standaloneTask}/>}
               {tab === 'enrich'      && <LeadEnrichment leads={leads} onUpdateLead={onUpdateLead} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'workflow'    && (
                 <WorkflowBuilder leads={leads} currentUser={currentUser}
-                  onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}/>
+                  onCreateTask={onCreateTask} onUpdateLead={onUpdateLead} onToast={onToast}
+                  workspaceId={workspaceId} statusConfigs={statusConfigs}
+                  leadSources={workspace?.leadSources} team={team}/>
               )}
               {tab === 'brief'       && <MeetingBrief leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
               {tab === 'marketing'   && <MarketingAI leads={leads} currentUser={currentUser} onToast={onToast} workspaceId={workspaceId}/>}
