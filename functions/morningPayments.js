@@ -87,6 +87,7 @@ exports.createMorningPayment = onCall(
 
     const {
       workspaceId, type, planKey, amount, label, successUrl, failureUrl,
+      customer, consent,
     } = request.data ?? {};
 
     if (!workspaceId || !type || !successUrl || !failureUrl) {
@@ -148,8 +149,13 @@ exports.createMorningPayment = onCall(
         maxPayments: 1,
         group: GROUP_CREDIT_CARD,
         client: {
-          name: ws.name || request.auth.token.email || 'לקוח',
-          emails: [request.auth.token.email].filter(Boolean),
+          // The checkout form's details when it collected them, falling back to
+          // the workspace for a purchase started from inside the app.
+          name: [customer?.firstName, customer?.lastName].filter(Boolean).join(' ').trim()
+            || ws.name || request.auth.token.email || 'לקוח',
+          emails: [customer?.email || request.auth.token.email].filter(Boolean),
+          ...(customer?.phone ? { phone: String(customer.phone) } : {}),
+          ...(customer?.country ? { country: String(customer.country) } : {}),
         },
         income: [{
           description,
@@ -173,6 +179,26 @@ exports.createMorningPayment = onCall(
     if (!result?.url) {
       throw new HttpsError('internal', 'Morning returned no payment URL.');
     }
+
+    // Record what the buyer agreed to, with the wording and version they were
+    // actually shown. The checkout page tells them their acceptance is stored;
+    // a dispute months later is then settled by this rather than by whatever
+    // the terms page happens to say by then.
+    if (consent?.text) {
+      await db.collection('workspaces').doc(workspaceId)
+        .collection('checkoutConsents').add({
+          uid: request.auth.uid,
+          email: customer?.email ?? request.auth.token.email ?? null,
+          type, planKey: planKey ?? null, amount: total,
+          consentText: String(consent.text).slice(0, 1000),
+          consentVersion: consent.version ?? null,
+          acceptedAt: consent.acceptedAt ?? new Date().toISOString(),
+          recordedAt: new Date().toISOString(),
+          customer: customer ?? null,
+        })
+        .catch(err => console.error('[createMorningPayment] consent not recorded', err));
+    }
+
     console.log(`[createMorningPayment] ws=${workspaceId} type=${type} amount=${total}`);
     return { url: result.url };
   },
