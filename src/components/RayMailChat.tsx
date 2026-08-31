@@ -78,6 +78,10 @@ export default function RayMailChat({
   // is what made the app claim an empty inbox that was not empty.
   const [auth, setAuth] = useState<'checking' | 'live' | 'reauth' | 'none'>('checking');
   const [reconnecting, setReconnecting] = useState(false);
+  /** Which mailbox is actually connected, and whether it survives a restart. */
+  const [account, setAccount] = useState<{ email: string; permanent: boolean } | null>(null);
+  const [triaging, setTriaging] = useState(false);
+  const triagedRef = useRef(false);
   const [learning, setLearning] = useState<StyleLearning | null>(null);
 
   const speakRef = useRef<{ stop: () => void } | null>(null);
@@ -146,6 +150,17 @@ export default function RayMailChat({
       setAuth('live');
       setMails(inbox.length ? inbox : unread);
       setUnreadCount(unread.length);
+
+      // Name the mailbox. Worth showing plainly: this app has already had an
+      // episode of being connected to an account the user did not expect.
+      if (!account) {
+        const { getServerGmailToken } = await import('../lib/gmailServerAuth');
+        const permanent = (await getServerGmailToken(workspaceId)) !== null;
+        const email = config?.accounts?.[0]?.email
+          ?? (await import('../lib/gmailKeepAlive')).getKeepAliveState().email
+          ?? '';
+        setAccount({ email, permanent });
+      }
       // Announcements still key on unread — an already-read mail is not news.
       if (!announce) { unread.forEach(m => seenRef.current.add(m.id)); return; }
       for (const m of unread) {
@@ -166,13 +181,78 @@ export default function RayMailChat({
       setAuth(/401|403|invalid|unauthor/i.test(msg) ? 'reauth' : 'live');
       setError(`לא הצלחתי לקרוא את תיבת הדואר: ${msg}`);
     }
-  }, [push, workspaceId, clientId, config]);
+  }, [push, workspaceId, clientId, config, account]);
 
   useEffect(() => {
     void checkMail(false);
     const id = setInterval(() => void checkMail(true), POLL_MS);
     return () => clearInterval(id);
   }, [checkMail]);
+
+  /* ── What to do next ──────────────────────────────────────────────────── */
+  /**
+   * Triage the inbox into a short, ordered list of actions.
+   *
+   * Deliberately opinionated: an assistant that lists everything has just
+   * reproduced the inbox, which the user can already see. The value is in
+   * saying what deserves attention and what does not, so the prompt asks for a
+   * ranking and an explicit "no action needed" bucket.
+   */
+  const recommend = useCallback(async (auto: boolean) => {
+    if (triaging || !mails.length) return;
+    setTriaging(true);
+    try {
+      const { getAnthropicProxy } = await import('../lib/anthropicClient');
+      const digest = mails.slice(0, 15).map((m, idx) =>
+        `${idx + 1}. מאת: ${m.fromName || m.from} <${m.from}>\n`
+        + `   נושא: ${m.subject}\n`
+        + `   תאריך: ${new Date(m.date).toLocaleDateString('he-IL')}\n`
+        + `   תקציר: ${readableEmailText(m.body || m.snippet, 300)}`).join('\n\n');
+
+      const resp = await getAnthropicProxy().messages.create({
+        model: 'claude-opus-4-5',
+        max_tokens: 1200,
+        system: [
+          `אתה עוזר אישי למיילים של ${config?.agentName || 'המשתמש'}`
+            + (config?.agentRole ? ` (${config.agentRole})` : '') + '.',
+          config?.businessDescription ? `רקע על העסק: ${config.businessDescription}` : '',
+          '',
+          'עבור על תיבת הדואר וקבע מה באמת דורש טיפול. כתוב בעברית, קצר וישיר.',
+          '',
+          'מבנה התשובה:',
+          '• עד 4 פריטים שדורשים פעולה, מהדחוף לפחות דחוף. לכל אחד: שם השולח,',
+          '  מה רוצים ממך במשפט אחד, ומה הפעולה המומלצת.',
+          '• בסוף שורה אחת: מה אפשר להתעלם ממנו.',
+          '',
+          'כללים:',
+          '• אל תמציא עובדות שלא מופיעות במיילים — לא סכומים, לא תאריכים, לא הבטחות.',
+          '• אם משהו לא ברור, אמור שהוא לא ברור במקום לנחש.',
+          '• אל תפרט את כל התיבה. אם רוב המיילים לא דורשים כלום — תגיד את זה.',
+          '• בלי כותרות Markdown ובלי טבלאות. שורות קצרות.',
+        ].filter(Boolean).join('\n'),
+        messages: [{ role: 'user', content: digest }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = (resp.content?.find((b: any) => b.type === 'text') as any)?.text?.trim();
+      if (text) {
+        const head = auto ? '📋 מה מחכה לך בתיבה:' : '📋 המלצות:';
+        push({ role: 'assistant', text: head + '\n\n' + text });
+      }
+    } catch (e) {
+      // Only surface a failure the user asked for. An automatic briefing that
+      // fails should stay quiet rather than open the chat with an error.
+      if (!auto) setError(`לא הצלחתי לנתח את התיבה: ${(e as Error).message}`);
+    } finally { setTriaging(false); }
+  }, [mails, config, push, triaging]);
+
+  // Brief once, the first time real mail arrives — the point of opening this
+  // chat is usually "what needs me?", not "let me type a question".
+  useEffect(() => {
+    if (auth === 'live' && mails.length && !triagedRef.current) {
+      triagedRef.current = true;
+      void recommend(true);
+    }
+  }, [auth, mails, recommend]);
 
   /* ── Reading aloud ────────────────────────────────────────────────────── */
   const readAloud = async (m: GmailMessage) => {
@@ -302,6 +382,13 @@ export default function RayMailChat({
               <VolumeX size={13} /> עצור הקראה
             </button>
           )}
+          <button onClick={() => void recommend(false)} disabled={triaging || !mails.length}
+            title="מה כדאי לעשות עכשיו?"
+            className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-white flex items-center gap-1.5 disabled:opacity-50"
+            style={{ background: 'rgba(0,0,0,0.22)' }}>
+            {triaging ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+            מה לעשות
+          </button>
           <button onClick={() => void checkMail(true)} title="בדוק מיילים חדשים"
             className="p-1.5 rounded-lg text-white/90 hover:bg-white/15">
             <RefreshCw size={15} />
@@ -311,7 +398,7 @@ export default function RayMailChat({
               RAY MAIL <Mail size={16} />
             </div>
             <div className="text-white/80 text-[11px] truncate">
-              {auth === 'live'     ? `${mails.length} מיילים בתיבה${unreadCount ? ` · ${unreadCount} לא נקראו` : ''}`
+              {auth === 'live'     ? `${account?.email ?? 'מחובר'} · ${mails.length} בתיבה${unreadCount ? ` · ${unreadCount} לא נקראו` : ''}`
              : auth === 'reauth'   ? 'החיבור פג — נדרשת התחברות מחדש'
              : auth === 'checking' ? 'בודק חיבור…'
              :                       'לא מחובר ל-Gmail'}
