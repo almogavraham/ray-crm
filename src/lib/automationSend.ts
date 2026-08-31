@@ -56,6 +56,10 @@ export async function dispatchAutomationSends(params: {
   lead: Lead;
   sends: PendingSend[];
   fromName: string;
+  /** Default true — send as noreply@ray-crm.com. */
+  fromPlatform?: boolean;
+  /** Address a customer's reply should reach, since noreply cannot receive. */
+  replyTo?: string;
 }): Promise<SendOutcome> {
   const { workspaceId, workspace, lead, sends, fromName } = params;
   if (!sends.length || !workspaceId) return EMPTY;
@@ -109,6 +113,11 @@ export async function dispatchAutomationSends(params: {
         fromName,
         workspaceId,
         workspace,
+        // Automated mail goes out from the platform address by default: it must
+        // not depend on the workspace having its own mailbox connected, and a
+        // machine-sent message should not arrive from an inbox someone watches.
+        fromPlatform: params.fromPlatform !== false,
+        replyTo: params.replyTo,
       });
     } catch (e) {
       out.failed.push({ rule: s.workflowName, reason: (e as Error).message || 'שליחת המייל נכשלה' });

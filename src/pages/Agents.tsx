@@ -1133,7 +1133,16 @@ function LeadEnrichment({ leads, onUpdateLead, onToast, workspaceId }: {
 ══════════════════════════════════════════════════════════════════════════════ */
 interface RunResult {
   lead: Lead;
-  actionResults: { actionId: string; type: WFActionType; message?: string; subject?: string; success: boolean }[];
+  actionResults: {
+    actionId: string; type: WFActionType; message?: string; subject?: string; success: boolean;
+    /**
+     * The AI actions produce a draft; they do not send. Marking that draft
+     * `success: true` with no further qualification is what made the automation
+     * report "everything fine" for mail that never left. `pending` means written,
+     * awaiting the user's approval.
+     */
+    pending?: boolean;
+  }[];
 }
 /** An approval request created in the background by the workflowScanner function. */
 interface PendingRun {
@@ -1506,6 +1515,49 @@ ${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
     setPendingRuns(p => p.filter(r => r.id !== run.id));
   };
 
+  /** Edits the user made to a generated draft, keyed by lead+action. */
+  const [draftEdits, setDraftEdits] = useState<Record<string, { subject: string; body: string }>>({});
+  const [sendingKey, setSendingKey] = useState<string | null>(null);
+
+  /**
+   * Actually send a reviewed draft.
+   *
+   * The generate step deliberately does not send: an AI-written mail to a real
+   * customer should pass a human's eyes first. This is the other half — it runs
+   * only from the approve button, and reports what really happened.
+   */
+  const sendDraft = async (key: string, lead: Lead, subject: string, body: string, sender?: string) => {
+    if (!lead.email) { onToast?.('אין כתובת מייל לליד הזה', 'error'); return; }
+    setSendingKey(key);
+    try {
+      const { sendLeadEmail } = await import('../lib/email');
+      await sendLeadEmail({
+        toEmail: lead.email,
+        toName: lead.contactName || lead.company || '',
+        subject, message: body,
+        fromName: 'RAY CRM',
+        workspaceId,
+        // From the platform address, so it works with no mailbox connected and
+        // arrives from somewhere nobody is watching for replies.
+        // The builder decides; the platform address is the default because it
+        // works with no mailbox connected.
+        fromPlatform: sender !== 'workspace',
+        replyTo: undefined,
+      });
+      setDraftEdits(p => ({ ...p, [key]: { subject, body } }));
+      setSentDrafts(p => new Set(p).add(key));
+      onToast?.(`המייל נשלח אל ${lead.email} ✓`, 'success');
+    } catch (e) {
+      onToast?.(`השליחה נכשלה: ${(e as Error).message}`, 'error');
+    } finally { setSendingKey(null); }
+  };
+
+  const [sentDrafts, setSentDrafts] = useState<Set<string>>(new Set());
+
+  /** Which sender this action was configured with, across all saved rules. */
+  const senderOf = (actionId: string) =>
+    workflows.flatMap(w => w.actions ?? []).find(a => a.id === actionId)?.config?.sender ?? 'platform';
+
   const approveRun = async (run: PendingRun) => {
     const wf = workflows.find(w => w.id === run.workflowId);
     if (!wf) { onToast?.('האוטומציה לא נמצאה — ייתכן שנמחקה', 'error'); await closeRun(run, 'rejected'); return; }
@@ -1612,10 +1664,10 @@ ${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
             if (workspaceId) await deductTokens(workspaceId, cost, 'claude-opus-4-5', `Workflow: ${wf.name}`).catch(() => {});
 
             if (isWA) {
-              actionResults.push({ actionId: action.id, type: action.type, message: rawText, success: true });
+              actionResults.push({ actionId: action.id, type: action.type, message: rawText, success: true, pending: true });
             } else {
               const parsed = (() => { try { return JSON.parse(rawText.replace(/^```json\s*/,'').replace(/\s*```$/,'')); } catch { return { subject: '', body: rawText }; } })();
-              actionResults.push({ actionId: action.id, type: action.type, message: parsed.body || rawText, subject: parsed.subject || '', success: true });
+              actionResults.push({ actionId: action.id, type: action.type, message: parsed.body || rawText, subject: parsed.subject || '', success: true, pending: true });
             }
           } else if (SEND_ACTIONS[action.type]) {
             // Template sends were falling straight through this chain: no branch
@@ -1790,6 +1842,19 @@ ${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
           <input value={a.config.prompt || ''} onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, prompt: e.target.value } } : x))}
             placeholder={a.type === 'send_whatsapp_ai' ? 'הנחיה (אופציונלי) — "הזכר את הפגישה"' : 'נושא / הנחיה (אופציונלי)'}
             className={`w-full ${inp} text-right`}/>
+          {a.type === 'send_email_ai' && (
+            <>
+              <select value={a.config.sender || 'platform'}
+                onChange={e => setFActions(as => as.map(x => x.id === a.id ? { ...x, config: { ...x.config, sender: e.target.value } } : x))}
+                className={`w-full ${inp}`}>
+                <option value="platform">שלח מ-noreply@ray-crm.com (כתובת המערכת)</option>
+                <option value="workspace">שלח מתיבת הדואר שלי</option>
+              </select>
+              <p className="text-[11px] text-slate-500 text-right leading-relaxed">
+                המייל נכתב על ידי ה-AI ומוצג לך לעריכה ואישור — הוא לא נשלח לבד.
+              </p>
+            </>
+          )}
         </div>
       )}
       {a.type === 'add_note' && (
@@ -2082,8 +2147,43 @@ ${FLAG_COLORS.map(f => `${f.value} = ${f.label}`).join(' | ')}
                     return (
                       <div key={ar.actionId} className="space-y-2">
                         <p className="text-[10px] text-slate-500 font-bold text-right">{ACTION_LABELS[ar.type]}</p>
+                        {ar.type === 'send_email_ai' && ar.pending ? (() => {
+                          const key = `${lead.id}:${ar.actionId}`;
+                          const cur = draftEdits[key] ?? { subject: ar.subject ?? '', body: ar.message ?? '' };
+                          const sent = sentDrafts.has(key);
+                          return (
+                            <div className="space-y-2">
+                              {/* Editable, because an AI draft going to a real
+                                  customer should be the user's words by the time
+                                  it leaves. */}
+                              <input value={cur.subject} disabled={sent}
+                                onChange={e => setDraftEdits(p => ({ ...p, [key]: { ...cur, subject: e.target.value } }))}
+                                placeholder="נושא"
+                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-right font-semibold disabled:opacity-60" />
+                              <textarea value={cur.body} disabled={sent} rows={7}
+                                onChange={e => setDraftEdits(p => ({ ...p, [key]: { ...cur, body: e.target.value } }))}
+                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-700 text-right leading-relaxed disabled:opacity-60" />
+                              {sent ? (
+                                <p className="text-xs font-bold text-emerald-700 text-right">✓ נשלח אל {lead.email}</p>
+                              ) : (
+                                <div className="flex items-center gap-2 justify-end flex-wrap">
+                                  <span className="text-[11px] text-slate-500">
+                                    {senderOf(ar.actionId) === 'workspace' ? 'יישלח מתיבת הדואר שלך' : 'יישלח מ-noreply@ray-crm.com'} אל {lead.email || '(אין כתובת)'}
+                                  </span>
+                                  <button
+                                    onClick={() => void sendDraft(key, lead, cur.subject, cur.body, senderOf(ar.actionId))}
+                                    disabled={sendingKey === key || !lead.email || !cur.body.trim()}
+                                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">
+                                    {sendingKey === key ? 'שולח…' : 'אשר ושלח'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })() : (<>
                         {ar.subject && <p className="text-slate-600 text-xs font-semibold text-right">נושא: {ar.subject}</p>}
                         <div className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-700 text-right whitespace-pre-wrap leading-relaxed">{ar.message}</div>
+                        </>)}
                         <div className="flex gap-2 flex-wrap">
                           <button onClick={() => { navigator.clipboard.writeText(ar.message!); onToast?.('הועתק ✓','success'); }}
                             className="flex items-center gap-1 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1 rounded-lg transition-colors">

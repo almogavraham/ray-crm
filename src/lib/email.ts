@@ -81,7 +81,30 @@ export async function sendLeadEmail(params: {
   fromName:    string;
   workspaceId?: string;
   workspace?:  WorkspaceProfile | null;
+  /**
+   * Send from the platform address (noreply@ray-crm.com) rather than the
+   * workspace's own mailbox. Automated mail should come from an address nobody
+   * is watching for replies, and it must not depend on the workspace having
+   * configured a mailbox at all.
+   */
+  fromPlatform?: boolean;
+  /** Where a human reply should go, when the sender cannot receive one. */
+  replyTo?: string;
 }): Promise<void> {
+  if (params.fromPlatform) {
+    await callSendEmail({
+      workspaceId:   params.workspaceId,
+      to:            params.toEmail,
+      subject:       params.subject,
+      htmlBody:      buildLeadHtml(params.message, params.fromName),
+      textBody:      params.message,
+      preferPlatform: true,
+      noReply:        true,
+      replyTo:        params.replyTo,
+      fromNameOverride: params.fromName,
+    });
+    return;
+  }
   const provider = getEmailProvider(params.workspace);
   const cfg = params.workspace?.emailConfig;
 
