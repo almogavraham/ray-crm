@@ -794,6 +794,54 @@ async function resolvePlanPrice(stripe, planKey) {
  * could silently disagree, showing a customer one price and charging another.
  * This makes Stripe the single source of truth for both.
  */
+/**
+ * Set tax_behavior on the plan prices so Stripe Tax can add VAT on top.
+ *
+ * A price created without it is "unspecified", and automatic tax refuses to
+ * compute against that — so this is a prerequisite for VAT ever being charged
+ * correctly. Stripe only allows the field to be set while it is unspecified,
+ * which is why this is a one-way, idempotent repair rather than a toggle.
+ *
+ * "exclusive" means the ₪89/179/329 are pre-VAT and tax is added, matching what
+ * the pricing page has always told customers ("+ מע\"מ").
+ */
+exports.setPlanTaxBehavior = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
+    if (request.auth.token.email !== SUPER_ADMIN_EMAIL) {
+      throw new HttpsError('permission-denied', 'Super-admin only.');
+    }
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) throw new HttpsError('failed-precondition', 'Stripe not configured.');
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Stripe = require('stripe');
+    const stripe = Stripe(stripeKey);
+
+    const prices = await stripe.prices.list({
+      active: true, type: 'recurring', limit: 100, expand: ['data.product'],
+    });
+    const wanted = new Set(Object.values(PLAN_PRODUCT_NAME));
+    const out = [];
+
+    for (const pr of prices.data) {
+      if (!pr.product || !wanted.has(pr.product.name)) continue;
+      if (pr.tax_behavior && pr.tax_behavior !== 'unspecified') {
+        out.push({ price: pr.id, product: pr.product.name, taxBehavior: pr.tax_behavior, changed: false });
+        continue;
+      }
+      try {
+        const updated = await stripe.prices.update(pr.id, { tax_behavior: 'exclusive' });
+        out.push({ price: pr.id, product: pr.product.name, taxBehavior: updated.tax_behavior, changed: true });
+      } catch (err) {
+        out.push({ price: pr.id, product: pr.product.name, error: err.message });
+      }
+    }
+    return { results: out };
+  },
+);
+
 exports.getPlanPricing = onCall(
   { region: 'us-central1' },
   async () => {
@@ -829,6 +877,84 @@ exports.getPlanPricing = onCall(
     }
   },
 );
+
+/**
+ * One Stripe customer per workspace, reused for every purchase.
+ *
+ * Checkout will happily create a fresh customer on each session, but that
+ * scatters a workspace's billing across unrelated customer records: a second
+ * upgrade becomes a second active subscription rather than a change to the
+ * first, and nothing in the dashboard connects them. Reusing one customer also
+ * makes `customer_update` legal — Stripe rejects it outright when no customer
+ * is supplied, which is what took plan checkout down.
+ *
+ * The id is only stored on a workspace that already exists; checkout is not a
+ * path that should be able to bring a workspace into being.
+ */
+async function getOrCreateStripeCustomer(stripe, workspaceId, email) {
+  const ref = admin.firestore().collection('workspaces').doc(workspaceId);
+  const snap = await ref.get();
+  const existing = snap.exists ? snap.data()?.stripeCustomerId : null;
+  if (existing) {
+    // Verify rather than trust: a customer deleted in the dashboard would
+    // otherwise fail every future checkout with a stale id.
+    try {
+      const c = await stripe.customers.retrieve(existing);
+      if (c && !c.deleted) return existing;
+    } catch { /* fall through and mint a new one */ }
+  }
+
+  const customer = await stripe.customers.create({
+    email: email || undefined,
+    name: snap.exists ? (snap.data()?.name ?? undefined) : undefined,
+    metadata: { workspaceId },
+  });
+  if (snap.exists) {
+    await ref.set({ stripeCustomerId: customer.id }, { merge: true }).catch(e =>
+      // The customer exists either way; losing the pointer costs a duplicate
+      // record next time, not this sale.
+      console.error('[getOrCreateStripeCustomer] could not persist id', e));
+  }
+  return customer.id;
+}
+
+/**
+ * The Israeli VAT rate added to every charge.
+ *
+ * Stripe Tax — which computes rates automatically — is not available to Israeli
+ * accounts at all ("Stripe Tax isn't yet supported for your country"), and
+ * requesting automatic_tax without it does not fail loudly: Stripe accepts the
+ * session and silently computes nothing, so checkout showed a bare price and no
+ * VAT was ever collected. A manual Tax Rate is the supported alternative.
+ *
+ * Looked up by metadata rather than a hard-coded id, so the rate can be swapped
+ * from the dashboard: when the VAT rate next changes, create a new rate carrying
+ * the same marker and deactivate the old one, with no redeploy and no repeat of
+ * the stale hard-coded 1.17 this replaced.
+ *
+ * Returns null rather than throwing when none is found — refusing the sale would
+ * be a worse failure than charging without a tax line — but says so in the log.
+ *
+ * KNOWN LIMITATION: this rate is applied to every customer regardless of where
+ * they are, so a buyer outside Israel is charged Israeli VAT they do not owe —
+ * exports are zero-rated. Stripe offers no fix for this account: `Stripe Tax`
+ * is unavailable to Israeli accounts, and `dynamic_tax_rates` (which chose a
+ * rate by billing country) has been removed from the API. It is harmless while
+ * the product is Hebrew-only and priced in ILS. Before selling abroad, decide
+ * the rate here from the workspace's own country — which this server knows at
+ * session-creation time — rather than from the address Stripe collects later.
+ */
+let vatRateCache;
+async function resolveVatRate(stripe) {
+  if (vatRateCache !== undefined) return vatRateCache;
+  const rates = await stripe.taxRates.list({ active: true, limit: 100 });
+  const rate = rates.data.find(r => r.metadata?.ray_vat === 'il');
+  if (!rate) {
+    console.warn('[resolveVatRate] no active tax rate tagged ray_vat=il — charging without VAT');
+  }
+  vatRateCache = rate ? rate.id : null;
+  return vatRateCache;
+}
 
 exports.createCheckoutSession = onCall(
   { region: 'us-central1' },
@@ -880,40 +1006,30 @@ exports.createCheckoutSession = onCall(
 
     try {
       const isSubscription = type === 'plan';
-      const buildSession = (withTax) => ({
+      const customerId = await getOrCreateStripeCustomer(
+        stripe, workspaceId, request.auth.token.email,
+      );
+      const vatRateId = await resolveVatRate(stripe);
+
+      const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items: [lineItem],
+        customer: customerId,
+        line_items: [vatRateId ? { ...lineItem, tax_rates: [vatRateId] } : lineItem],
         mode: isSubscription ? 'subscription' : 'payment',
         success_url: successUrl,
         cancel_url: cancelUrl,
         metadata,
-        // Stripe Tax computes VAT at the rate in force on the day of the charge.
-        // The previous code multiplied by a hard-coded 1.17, which has been the
-        // wrong rate since Israeli VAT moved to 18% in January 2025 — and would
-        // go stale again at the next change.
-        automatic_tax: { enabled: withTax },
-        // Tax cannot be computed without knowing where the customer is.
+        // Collected so the invoice carries a real address, and saved back onto
+        // the reused customer rather than being discarded with the session.
         billing_address_collection: 'required',
-        ...(isSubscription && withTax ? { customer_update: { address: 'auto', name: 'auto' } } : {}),
+        customer_update: { address: 'auto', name: 'auto' },
         // The subscription carries its own copy: webhooks for renewals and
         // cancellations arrive against the subscription, not the checkout
         // session, and without this they would not know which workspace to act on.
         ...(isSubscription ? { subscription_data: { metadata } } : {}),
       });
 
-      // Stripe Tax is a paid add-on that must be switched on for the account.
-      // Requesting it before then makes Stripe reject the whole session, which
-      // would take checkout down completely — so fall back to charging without
-      // automatic tax rather than losing the sale, and say so in the logs.
-      let session;
-      try {
-        session = await stripe.checkout.sessions.create(buildSession(true));
-      } catch (taxErr) {
-        if (!/tax/i.test(taxErr.message ?? '')) throw taxErr;
-        console.warn(`[createCheckoutSession] automatic tax unavailable (${taxErr.message}) — charging without it`);
-        session = await stripe.checkout.sessions.create(buildSession(false));
-      }
-      console.log(`[createCheckoutSession] Created session ${session.id} for workspace ${workspaceId} (${type})`);
+      console.log(`[createCheckoutSession] Created session ${session.id} for workspace ${workspaceId} (${type}, vat=${vatRateId ?? 'none'})`);
       return { url: session.url };
     } catch (err) {
       console.error('[createCheckoutSession] Stripe error:', err);
