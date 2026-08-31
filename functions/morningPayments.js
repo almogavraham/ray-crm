@@ -47,6 +47,37 @@ const DOC_TAX_INVOICE_RECEIPT = 320;
  *  purpose: they have no test path, so every trial with them moves real money. */
 const GROUP_CREDIT_CARD = 100;
 
+/**
+ * What each plan costs, before VAT, in shekels.
+ *
+ * The server has to hold these. The browser used to send the amount, which
+ * meant a modified client could ask for a ₪1 payment page and then claim the
+ * enterprise plan — the price is an authorization decision, and authorization
+ * decisions cannot be taken on the client's word.
+ *
+ * Keep in step with PLANS in src/pages/BillingPage.tsx. They cannot share a
+ * module (CommonJS here, TypeScript there), so instead of hoping they stay
+ * equal, the caller sends what it displayed and a mismatch is rejected — drift
+ * surfaces as a loud error on the first click rather than as a wrong charge.
+ */
+const PLAN_PRICE_ILS = { basic: 89, pro: 179, enterprise: 329 };
+
+/**
+ * VAT is added on top, matching what the pricing page promises. This constant
+ * exists only to turn the listed price into the total to charge; the split on
+ * the invoice itself is computed by Morning from its own tax settings, so a
+ * rate change here cannot make the invoice wrong — only the total, which is
+ * checked against the client's displayed price on every call.
+ */
+const VAT_RATE = 0.18;
+
+/** The amount actually charged for a plan, to the agora. */
+const planTotal = (planKey) => {
+  const base = PLAN_PRICE_ILS[planKey];
+  if (base === undefined) return null;
+  return Math.round(base * (1 + VAT_RATE) * 100) / 100;
+};
+
 /* ── Creating a payment ──────────────────────────────────────────────────── */
 
 exports.createMorningPayment = onCall(
@@ -64,9 +95,29 @@ exports.createMorningPayment = onCall(
     if (type !== 'plan' && type !== 'topup') {
       throw new HttpsError('invalid-argument', 'type must be "plan" or "topup".');
     }
-    const total = Number(amount);
-    if (!Number.isFinite(total) || total <= 0) {
-      throw new HttpsError('invalid-argument', 'amount must be a positive number.');
+    // For a plan the price comes from this server, never from the caller. The
+    // amount the caller sent is treated as the price it *displayed*, and a
+    // disagreement means the two lists have drifted — which must stop the sale
+    // rather than quietly charge whichever number won.
+    let total;
+    if (type === 'plan') {
+      total = planTotal(planKey);
+      if (total === null) {
+        throw new HttpsError('invalid-argument', `Unknown plan "${planKey}".`);
+      }
+      const shown = Number(amount);
+      if (Number.isFinite(shown) && Math.abs(shown - total) > 0.01) {
+        console.error(`[createMorningPayment] price drift: page showed ${shown}, server says ${total} for ${planKey}`);
+        throw new HttpsError(
+          'failed-precondition',
+          'המחיר שמוצג בעמוד אינו תואם את המחיר במערכת. רענן את הדף ונסה שוב.',
+        );
+      }
+    } else {
+      total = Number(amount);
+      if (!Number.isFinite(total) || total <= 0) {
+        throw new HttpsError('invalid-argument', 'amount must be a positive number.');
+      }
     }
 
     const db = admin.firestore();
@@ -162,6 +213,12 @@ exports.morningWebhook = onRequest(
       // forgery or the plain notifyUrl callback, which is unsigned. Either way
       // it is not proof of anything — it is recorded and confirmed below.
       console.warn('[morningWebhook] delivery carried no signature');
+    } else {
+      // No secret configured on this deployment, so signatures cannot be
+      // checked at all and the confirmation against Morning's API is the only
+      // thing standing between a forged POST and a free plan. Logged on every
+      // delivery so this is visible in production rather than assumed.
+      console.warn('[morningWebhook] MORNING_WEBHOOK_SECRET is not set — deliveries are unsigned');
     }
 
     let payload = null;
@@ -237,6 +294,33 @@ async function applyPayment(db, ref, payload) {
 
   const paid = Number(doc.amount ?? doc.total ?? 0);
   if (!(paid > 0)) throw new Error(`document ${documentId} shows no amount paid`);
+
+  // The amount has to cover the plan being claimed. Without this, a real ₪10
+  // token purchase yields a real document id, and replaying it with a custom
+  // field naming the enterprise plan would buy the top tier for ten shekels.
+  if (type === 'plan') {
+    const expected = planTotal(planKey);
+    if (expected === null) throw new Error(`unknown plan "${planKey}"`);
+    if (paid + 0.01 < expected) {
+      throw new Error(`document ${documentId} paid ${paid} but ${planKey} costs ${expected}`);
+    }
+  }
+
+  // One document, one application. The delivery id cannot carry this: it comes
+  // from the request, so anything replaying a document simply sends a new one.
+  // create() fails if the id is taken, which makes this a claim rather than a
+  // check — two concurrent replays cannot both pass it.
+  try {
+    await db.collection('morningAppliedDocuments').doc(String(documentId)).create({
+      workspaceId, type, planKey: planKey ?? null, amount: paid,
+      appliedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    if (err.code === 6 || /already exists/i.test(String(err.message))) {
+      throw new Error(`document ${documentId} was already applied — ignoring replay`);
+    }
+    throw err;
+  }
 
   await db.collection('workspaces').doc(workspaceId).update(
     type === 'plan'

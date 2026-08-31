@@ -61,6 +61,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // The ledger binding one Morning document to one applied payment. A client
+    // able to write here could delete an entry and replay a real payment, or
+    // pre-create one to block a genuine upgrade.
+    match /morningAppliedDocuments/{documentId} {
+      allow read, write: if false;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
