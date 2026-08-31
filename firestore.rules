@@ -54,6 +54,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Raw payment notifications from Morning. Denied to every client: they
+    // carry billing details, and a client that could write here could forge a
+    // delivery id and make a real payment look like one already applied.
+    match /morningDeliveries/{deliveryId} {
+      allow read, write: if false;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;

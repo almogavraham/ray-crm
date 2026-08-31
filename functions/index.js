@@ -6,6 +6,13 @@ exports.formSubmit = formIngest.formSubmit;
 const siteContact = require('./siteContact');
 exports.siteContact = siteContact.siteContact;
 
+// Payments through Morning, which is also the invoicing system — so a
+// successful charge issues the חשבונית מס itself. Replaces Stripe, which
+// cannot be used at all: it does not support Israel as a merchant country.
+const morningPayments = require('./morningPayments');
+exports.createMorningPayment = morningPayments.createMorningPayment;
+exports.morningWebhook       = morningPayments.morningWebhook;
+
 // Gmail authorization-code flow — a connection that outlives the browser.
 const gmailOAuth = require('./gmailOAuth');
 exports.gmailConnectUrl    = gmailOAuth.gmailConnectUrl;
