@@ -12,7 +12,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { X, Send, Loader2, Sparkles, CheckCircle2, Zap, Users, RotateCcw } from 'lucide-react';
+import { X, Send, Loader2, Sparkles, CheckCircle2, Zap, Users, RotateCcw, Mic, Square, Volume2 } from 'lucide-react';
 import type { Lead, TeamMember } from '../types';
 import {
   TRIGGER_LABELS, ACTION_LABELS, VALUELESS_TRIGGERS, FLAG_COLORS, CONTACT_METHODS,
@@ -23,6 +23,7 @@ import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
 import { useDraggableWindow } from '../lib/useDraggableWindow';
+import { useVoiceChat } from '../lib/useVoiceChat';
 
 const GREETING: ChatMsg = {
   role: 'assistant',
@@ -69,6 +70,16 @@ export default function AutomationChat({ leads, statuses, sources, team, onSave,
   const session = useChatSession<ChatMsg>('automation');
   const msgs    = session.msgs.length ? session.msgs : [GREETING];
   const busy    = session.busy;
+
+  // Speak to RAY here the same way as in the personal assistant: the hook runs
+  // listen → send → speak the answer → listen again until it is switched off.
+  const askVoice = (t: string) => { void submitText(t); };
+  const lastReply = [...msgs].reverse().find(m => m.role === 'assistant')?.text;
+  const voice = useVoiceChat({
+    onSay: t => { setInput(''); void askVoice(t); },
+    lastReply,
+    busy: busy,
+  });
   const draft   = (session.extra.draft as DraftWorkflow | undefined) ?? null;
   const setMsgs = (u: ChatMsg[] | ((p: ChatMsg[]) => ChatMsg[])) =>
     setMessages<ChatMsg>('automation', prev => {
@@ -108,8 +119,9 @@ export default function AutomationChat({ leads, statuses, sources, team, onSave,
     return leads.filter(l => matchesWorkflow(l, wf)).length;
   };
 
-  const send = async () => {
-    const text = input.trim();
+  /** `send` reads the composer; voice supplies its own text, so both share this. */
+  const submitText = async (raw: string) => {
+    const text = raw.trim();
     if (!text || busy) return;
     setInput('');
     const history = [...msgs, { role: 'user' as const, text }];
@@ -232,6 +244,8 @@ create_task {"description","priority":"high|medium|low"} · change_status {"stat
       setBusy(false);
     }
   };
+
+  const send = () => void submitText(input);
 
   const save = async () => {
     if (!draft) return;
@@ -363,6 +377,18 @@ create_task {"description","priority":"high|medium|low"} · change_status {"stat
             </div>
           )}
           <div className="flex gap-2">
+            <button
+              onClick={voice.toggle}
+              title={voice.active ? 'עצור שיחה קולית' : 'דבר עם RAY'}
+              aria-pressed={voice.active}
+              className="px-3 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors"
+              style={voice.active
+                ? { background: '#dc2626', color: '#fff' }
+                : { background: 'rgba(0,0,0,0.06)', color: '#475569' }}>
+              {voice.speaking ? <Volume2 size={16} />
+                : voice.active ? <Square size={15} />
+                : <Mic size={16} />}
+            </button>
             <button onClick={send} disabled={busy || !input.trim()}
               className="px-4 rounded-xl text-white flex items-center justify-center disabled:opacity-40 flex-shrink-0"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#6366f1)' }}>

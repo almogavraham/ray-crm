@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  X, Mic, Square, Send, Loader2, Volume2, VolumeX, RefreshCw, Mail,
+  X, Mic, Square, Send, Loader2, Volume2, VolumeX, RefreshCw, Mail, MessageCircle,
   Check, AlertCircle, Sparkles, Inbox, Trash2,
 } from 'lucide-react';
 import { useDictation } from '../hooks/useDictation';
@@ -36,6 +36,7 @@ import type { GmailMessage } from '../lib/gmailAgent';
 import type { EmailAgentConfig } from '../types';
 import { appendMessage, setMessages, setOpen, useChatSession } from '../lib/chatSessionStore';
 import { useDraggableWindow } from '../lib/useDraggableWindow';
+import { useVoiceChat } from '../lib/useVoiceChat';
 
 interface Msg {
   role: 'user' | 'assistant';
@@ -83,6 +84,16 @@ export default function RayMailChat({
   const seenRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const dict = useDictation(setInput, { onToast });
+
+  // Full spoken conversation, alongside the dictation mic. Dictation writes into
+  // the composer for a reply you are about to send; this one is a back-and-forth
+  // with RAY, the same as in the personal assistant.
+  const lastReply = [...msgs].reverse().find(m => m.role === 'assistant')?.text;
+  const voice = useVoiceChat({
+    onSay: t => { setInput(''); void (active ? composeReply(t) : askInbox(t)); },
+    lastReply,
+    busy,
+  });
 
   // Straight into the shared store: closing the window must not lose the thread,
   // and an answer that lands while it is closed should raise the badge.
@@ -432,6 +443,16 @@ export default function RayMailChat({
         {/* Composer */}
         <div className="px-3 py-3 flex-shrink-0 flex items-end gap-2"
           style={{ borderTop: '1px solid rgba(255,255,255,0.09)' }}>
+          <button
+            onClick={voice.toggle}
+            title={voice.active ? 'עצור שיחה קולית' : 'דבר עם RAY'}
+            aria-pressed={voice.active}
+            className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-white"
+            style={{ background: voice.active ? '#dc2626' : 'rgba(255,255,255,0.08)' }}>
+            {voice.speaking ? <Volume2 size={16} />
+              : voice.active ? <Square size={15} />
+              : <MessageCircle size={16} />}
+          </button>
           <button
             onClick={() => dict.toggle(input)}
             disabled={!dict.supported || dict.transcribing}

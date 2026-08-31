@@ -20,8 +20,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   X, Send, Loader2, Sparkles, Users, Flame, Clock, AlertTriangle,
-  ArrowLeft, Mail, MessageCircle, DollarSign, RotateCcw,
-} from 'lucide-react';
+  ArrowLeft, Mail, MessageCircle, DollarSign, RotateCcw, Mic, Square, Volume2 } from 'lucide-react';
 import type { Lead, TeamMember, StandaloneTask, TaskPriority } from '../types';
 import ChatBlockView, { sanitiseBlocks } from './ChatBlocks';
 import type { ChatBlock } from './ChatBlocks';
@@ -29,6 +28,7 @@ import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
 import { useDraggableWindow } from '../lib/useDraggableWindow';
+import { useVoiceChat } from '../lib/useVoiceChat';
 
 const ACCENT = '#0f766e';
 
@@ -180,6 +180,16 @@ export default function SalesCopilot({
   const session  = useChatSession<ChatMsg>('sales');
   const msgs     = session.msgs;
   const busy     = session.busy;
+
+  // Speak to RAY here the same way as in the personal assistant: the hook runs
+  // listen → send → speak the answer → listen again until it is switched off.
+  const askVoice = (t: string) => { void ask(t); };
+  const lastReply = [...msgs].reverse().find(m => m.role === 'assistant')?.text;
+  const voice = useVoiceChat({
+    onSay: t => { setInput(''); void askVoice(t); },
+    lastReply,
+    busy: busy,
+  });
   const setMsgs  = (u: ChatMsg[] | ((p: ChatMsg[]) => ChatMsg[])) => setMessages<ChatMsg>('sales', u);
   const setBusy  = (v: boolean) => updateSession('sales', { busy: v });
 
@@ -618,6 +628,18 @@ create_task | change_status | flag_lead | mark_hot | set_followup | open_lead | 
             ))}
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={voice.toggle}
+              title={voice.active ? 'עצור שיחה קולית' : 'דבר עם RAY'}
+              aria-pressed={voice.active}
+              className="px-3 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors"
+              style={voice.active
+                ? { background: '#dc2626', color: '#fff' }
+                : { background: 'rgba(0,0,0,0.06)', color: '#475569' }}>
+              {voice.speaking ? <Volume2 size={16} />
+                : voice.active ? <Square size={15} />
+                : <Mic size={16} />}
+            </button>
             <button onClick={() => { const t = input.trim(); if (t) { setInput(''); void ask(t); } }}
               disabled={busy || !input.trim()}
               className="px-4 rounded-xl text-white flex items-center justify-center disabled:opacity-40 flex-shrink-0"

@@ -22,8 +22,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   X, Send, Loader2, Megaphone, Image as ImageIcon, Rocket, Users,
-  TrendingUp, ArrowLeft, Calendar, Upload, Share2, Camera, Wand2, RotateCcw,
-} from 'lucide-react';
+  TrendingUp, ArrowLeft, Calendar, Upload, Share2, Camera, Wand2, RotateCcw, Mic, Square, Volume2 } from 'lucide-react';
 import type { Lead, WorkspaceProfile } from '../types';
 import ChatBlockView, { sanitiseBlocks } from './ChatBlocks';
 import type { ChatBlock } from './ChatBlocks';
@@ -31,6 +30,7 @@ import {
   useChatSession, setMessages, appendMessage, updateSession, setOpen, clearSession,
 } from '../lib/chatSessionStore';
 import { useDraggableWindow } from '../lib/useDraggableWindow';
+import { useVoiceChat } from '../lib/useVoiceChat';
 
 const ACCENT = '#c026d3';       // fuchsia — distinct from the sales copilot's teal
 const WON_STATUSES = ['לקוח פעיל', 'נסגר', 'עסקה נסגרה'];
@@ -149,6 +149,16 @@ export default function MarketingCopilot({
   const msgs    = session.msgs;
   const busy    = session.busy;
   const working = session.working;
+
+  // Speak to RAY here the same way as in the personal assistant: the hook runs
+  // listen → send → speak the answer → listen again until it is switched off.
+  const askVoice = (t: string) => { void ask(t); };
+  const lastReply = [...msgs].reverse().find(m => m.role === 'assistant')?.text;
+  const voice = useVoiceChat({
+    onSay: t => { setInput(''); void askVoice(t); },
+    lastReply,
+    busy: busy || Boolean(working),
+  });
   const setMsgs   = (u: ChatMsg[] | ((p: ChatMsg[]) => ChatMsg[])) => setMessages<ChatMsg>('marketing', u);
   const setBusy   = (v: boolean) => updateSession('marketing', { busy: v });
   const setWorking = (v: string | null) => updateSession('marketing', { working: v });
@@ -583,6 +593,18 @@ ${socialLine}
             ))}
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={voice.toggle}
+              title={voice.active ? 'עצור שיחה קולית' : 'דבר עם RAY'}
+              aria-pressed={voice.active}
+              className="px-3 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors"
+              style={voice.active
+                ? { background: '#dc2626', color: '#fff' }
+                : { background: 'rgba(0,0,0,0.06)', color: '#475569' }}>
+              {voice.speaking ? <Volume2 size={16} />
+                : voice.active ? <Square size={15} />
+                : <Mic size={16} />}
+            </button>
             <button onClick={send} disabled={busy || Boolean(working) || !input.trim()}
               className="px-4 rounded-xl text-white flex items-center justify-center disabled:opacity-40 flex-shrink-0"
               style={{ background: 'linear-gradient(135deg,#a21caf,#db2777)' }}>
