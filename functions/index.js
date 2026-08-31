@@ -753,6 +753,39 @@ exports.metaDisconnect = onCall(
  *
  * Returns: { url: string }
  * ══════════════════════════════════════════════════════════════════════════ */
+/**
+ * Resolve a plan key to its Stripe recurring Price.
+ *
+ * Looked up by product name rather than a hard-coded price id, so changing a
+ * price in the dashboard does not require a redeploy — and so there is no id to
+ * copy by hand and get wrong. Cached per instance because it is the same three
+ * products on every checkout.
+ */
+const PLAN_PRODUCT_NAME = {
+  basic:      'RAY CRM — Basic',
+  pro:        'RAY CRM — Pro',
+  enterprise: 'RAY CRM — Enterprise',
+};
+const planPriceCache = {};
+
+async function resolvePlanPrice(stripe, planKey) {
+  if (planPriceCache[planKey]) return planPriceCache[planKey];
+
+  const wanted = PLAN_PRODUCT_NAME[planKey];
+  if (!wanted) throw new HttpsError('invalid-argument', `Unknown plan: ${planKey}`);
+
+  const prices = await stripe.prices.list({ active: true, type: 'recurring', limit: 100, expand: ['data.product'] });
+  const match = prices.data.find(pr => pr.product && pr.product.name === wanted);
+  if (!match) {
+    throw new HttpsError(
+      'failed-precondition',
+      `No active recurring price found for "${wanted}". Create the product in Stripe with a monthly ILS price.`,
+    );
+  }
+  planPriceCache[planKey] = match.id;
+  return match.id;
+}
+
 exports.createCheckoutSession = onCall(
   { region: 'us-central1' },
   async (request) => {
@@ -789,30 +822,31 @@ exports.createCheckoutSession = onCall(
       metadata = { workspaceId, type: 'topup', dollars: String(dollars), label: label ?? '' };
 
     } else if (type === 'plan') {
-      if (!priceIls || !planKey) throw new HttpsError('invalid-argument', 'Missing plan data.');
-      const totalAgot = Math.round(priceIls * 1.17 * 100); // ILS agorot (cents)
-      lineItem = {
-        price_data: {
-          currency: 'ils',
-          product_data: { name: `RAY CRM — תוכנית ${label}` },
-          unit_amount: totalAgot,
-        },
-        quantity: 1,
-      };
-      metadata = { workspaceId, type: 'plan', planKey, priceIls: String(priceIls), label: label ?? '' };
+      if (!planKey) throw new HttpsError('invalid-argument', 'Missing plan data.');
+      // A plan is a SUBSCRIPTION. It used to be charged with mode:'payment' and
+      // an inline price, which billed the customer exactly once — every renewal
+      // would have had to be collected by hand.
+      const priceId = await resolvePlanPrice(stripe, planKey);
+      lineItem = { price: priceId, quantity: 1 };
+      metadata = { workspaceId, type: 'plan', planKey, label: label ?? '' };
 
     } else {
       throw new HttpsError('invalid-argument', 'Invalid type. Must be "topup" or "plan".');
     }
 
     try {
+      const isSubscription = type === 'plan';
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [lineItem],
-        mode: 'payment',
+        mode: isSubscription ? 'subscription' : 'payment',
         success_url: successUrl,
         cancel_url: cancelUrl,
         metadata,
+        // The subscription carries its own copy: webhooks for renewals and
+        // cancellations arrive against the subscription, not the checkout
+        // session, and without this they would not know which workspace to act on.
+        ...(isSubscription ? { subscription_data: { metadata } } : {}),
       });
       console.log(`[createCheckoutSession] Created session ${session.id} for workspace ${workspaceId} (${type})`);
       return { url: session.url };
@@ -857,6 +891,40 @@ exports.stripeWebhook = onRequest(
     } catch (err) {
       console.error('[stripeWebhook] Signature error:', err.message);
       res.status(400).send(`Webhook Error: ${err.message}`);
+      return;
+    }
+
+    /* ── Subscription lifecycle ────────────────────────────────────────────
+     * Without these a cancelled or unpaid subscription would leave the customer
+     * on a paid plan forever: the only event previously handled was the initial
+     * checkout, so Stripe could stop collecting and the app would never know.
+     */
+    if (event.type === 'customer.subscription.deleted'
+     || event.type === 'customer.subscription.updated'
+     || event.type === 'invoice.payment_failed') {
+      const obj = event.data.object;
+      const wid = obj.metadata?.workspaceId
+        ?? obj.subscription_details?.metadata?.workspaceId;
+      if (!wid) { res.json({ received: true }); return; }
+
+      const db = admin.firestore();
+      const ended = event.type === 'customer.subscription.deleted'
+        || ['canceled', 'unpaid', 'incomplete_expired'].includes(obj.status);
+      const pastDue = event.type === 'invoice.payment_failed' || obj.status === 'past_due';
+
+      try {
+        await db.collection('workspaces').doc(wid).update(
+          ended
+            // Downgrade rather than delete: the customer keeps their data and
+            // can resubscribe, they simply lose the paid tier.
+            ? { plan: 'basic', subscriptionStatus: 'canceled', subscriptionEndedAt: new Date().toISOString() }
+            : { subscriptionStatus: pastDue ? 'past_due' : (obj.status ?? 'active') },
+        );
+        console.log(`[stripeWebhook] ${event.type} → workspace ${wid} (${ended ? 'downgraded' : obj.status})`);
+      } catch (err) {
+        console.error(`[stripeWebhook] failed to apply ${event.type} for ${wid}`, err);
+      }
+      res.json({ received: true });
       return;
     }
 
