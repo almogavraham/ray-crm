@@ -26,7 +26,7 @@ import type { MarketingAgentConfig } from './facebookMarketing';
 import { getPageToken, saveScheduledPost } from './facebookMarketing';
 import { loadProductProfile } from './mediaGeneration';
 import type { ProductProfile } from './mediaGeneration';
-import { sendLeadEmail, isEmailConfigured } from './email';
+import { sendLeadEmail } from './email';
 import { createNotification } from './notifications';
 
 /* ── Types ────────────────────────────────────────────────────────────────── */
@@ -453,7 +453,13 @@ export async function notifyOwnerForApproval(
   });
 
   const to = workspace?.email;
-  if (to && isEmailConfigured(workspace)) {
+  // Deliberately not gated on isEmailConfigured: this is a notification from
+  // RAY to its own user, not mail to a customer, so it goes out from the
+  // platform address and must not depend on the workspace having connected a
+  // mailbox. It previously did, which meant a workspace without email set up
+  // was never told a plan was waiting — the plan simply sat there unapproved
+  // with nothing to explain why.
+  if (to) {
     try {
       await sendLeadEmail({
         toEmail: to,
@@ -463,6 +469,9 @@ export async function notifyOwnerForApproval(
         fromName: 'RAY Marketing Autopilot',
         workspaceId: wid,
         workspace,
+        fromPlatform: true,
+        // noreply cannot receive, so a reply reaches the workspace's own inbox.
+        replyTo: workspace?.email,
       });
     } catch (err) {
       console.error('[autopilot notify email]', err);
