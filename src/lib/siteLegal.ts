@@ -1,11 +1,15 @@
 /**
  * siteLegal.ts — who operates the site, and the versioned consent wording.
  *
- * The identity fields are optional and rendered only when filled. RAY has no
- * registered legal entity yet, and a privacy policy naming a company that does
- * not exist, or an invented address, is worse than one that simply identifies
- * the operator by the contact channel that really works. Fill these in when the
- * entity is registered — every page that needs them picks them up from here.
+ * The identity fields are optional and rendered only when filled, because a
+ * privacy policy naming a company that does not exist is worse than one that
+ * identifies the operator by a contact channel that really works. They are
+ * filled in now: the business is a registered עוסק מורשה.
+ *
+ * These are not decoration. A payment provider will not approve a site for
+ * card processing unless the operator's name, business number, physical
+ * address and phone are actually published on it, alongside a cancellation
+ * policy — so every field here is load-bearing for taking payment at all.
  */
 
 export const SITE_LEGAL = {
@@ -13,12 +17,14 @@ export const SITE_LEGAL = {
   brand: 'RAY CRM',
   site: 'ray-crm.com',
 
-  /** Registered company name. Empty until an entity exists. */
-  legalName: '',
-  /** ח.פ / ע.מ. Empty until an entity exists. */
-  companyId: '',
-  /** Registered address. Empty until an entity exists. */
-  address: '',
+  /** Registered business name. */
+  legalName: 'רעות זומר',
+  /** ע.מ (עוסק מורשה). */
+  companyId: '301737110',
+  /** Registered business address. */
+  address: 'אלעזר רוקח 21, תל אביב',
+  /** Published business phone. Israeli local format; tel: link is built from it. */
+  phone: '03-7221650',
 
   /** Real, monitored addresses — safe to publish. */
   contactEmail: 'hello@ray-crm.com',
@@ -34,6 +40,15 @@ export const SITE_LEGAL = {
 
 /** True once the site can name a legal entity for itself. */
 export const hasLegalEntity = () => Boolean(SITE_LEGAL.legalName && SITE_LEGAL.companyId);
+
+/**
+ * The published phone as a dialable href, in international form so it works
+ * from a phone abroad and from desktop dialers that reject local prefixes.
+ */
+export const telHref = () => {
+  const digits = SITE_LEGAL.phone.replace(/\D/g, '');
+  return `tel:+972${digits.replace(/^0/, '')}`;
+};
 
 /**
  * The exact wording a contact-form submitter agrees to. Stored with the lead,
