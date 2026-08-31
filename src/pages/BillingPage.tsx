@@ -25,7 +25,10 @@ function daysRemaining(isoDate?: string): number {
   return Math.max(0, Math.ceil(diff / 86400000));
 }
 
-const VAT_RATE = 0.17;
+// Only used for the on-screen estimate. The amount actually charged is
+// computed by Stripe Tax at checkout, so this number going stale can no longer
+// cause an incorrect charge — the previous code billed with it directly.
+const VAT_RATE = 0.18;
 
 const PLANS = [
   {
@@ -156,7 +159,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
         type:       'plan',
         workspaceId: workspace.id,
         planKey:    selectedPlan,
-        priceIls:   chosenPlanObj.price,
+        priceIls:   chosenPrice,
         label:      chosenPlanObj.name ?? '',
         successUrl: buildSuccessUrl(),
         cancelUrl:  buildCancelUrl(),
@@ -172,11 +175,38 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   };
 
   // ── Close modals ────────────────────────────────────────────────────────
+  // Prices come from Stripe so the page cannot show one number while checkout
+  // charges another. The table above is the fallback for when Stripe is not
+  // configured yet — it is a default, not the source of truth.
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const { httpsCallable } = await import('firebase/functions');
+        const { functions } = await import('../lib/firebase');
+        const fn = httpsCallable<unknown, { configured: boolean; plans: { key: string; amount: number }[] }>(
+          functions, 'getPlanPricing');
+        const { data } = await fn({});
+        if (alive && data?.configured) {
+          setLivePrices(Object.fromEntries(data.plans.map(p2 => [p2.key, p2.amount])));
+        }
+      } catch { /* keep the built-in defaults */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  /** The price to show and charge — Stripe's if we have it. */
+  const priceOf = (key: string, fallback: number) => livePrices[key] ?? fallback;
+
   const closePlanModal  = () => { setSelectedPlan(null); setPlanError(''); setPlanLoading(false); };
   const closeTopupModal = () => { setTopupPkg(null);     setTopupError(''); setTopupLoading(false); };
 
-  const vatAmount   = chosenPlanObj ? chosenPlanObj.price * VAT_RATE : 0;
-  const totalAmount = chosenPlanObj ? chosenPlanObj.price + vatAmount : 0;
+  // Stripe Tax computes the real VAT at checkout; this is only an estimate for
+  // the summary, which is why it is labelled as one.
+  const chosenPrice = chosenPlanObj ? priceOf(chosenPlanObj.key, chosenPlanObj.price) : 0;
+  const vatAmount   = chosenPrice * VAT_RATE;
+  const totalAmount = chosenPrice + vatAmount;
 
   return (
     <div
@@ -379,7 +409,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     ) : (
                       <>
                         <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>₪</span>
-                        <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{plan.price}</span>
+                        <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{priceOf(plan.key, plan.price)}</span>
                         <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>/{t(plan.periodKey)}</span>
                       </>
                     )}
@@ -520,7 +550,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     <p className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>{t(chosenPlanObj.descKey)}</p>
                   </div>
                   <div className="text-left">
-                    <span className="text-xl font-black" style={{ color: '#a5b4fc' }}>₪{chosenPlanObj.price}</span>
+                    <span className="text-xl font-black" style={{ color: '#a5b4fc' }}>₪{chosenPrice}</span>
                     <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>/{t(chosenPlanObj.periodKey)}</span>
                   </div>
                 </div>
@@ -531,7 +561,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 <div className="rounded-xl p-4 space-y-2 text-sm" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
                   <div className="flex justify-between" style={{ color: 'rgba(255,255,255,0.5)' }}>
                     <span>{t('billing.payment.subtotal')}</span>
-                    <span>₪{chosenPlanObj.price.toFixed(2)}</span>
+                    <span>₪{chosenPrice.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between" style={{ color: 'rgba(255,255,255,0.5)' }}>
                     <span>{t('billing.payment.vat')}</span>

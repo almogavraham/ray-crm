@@ -786,6 +786,50 @@ async function resolvePlanPrice(stripe, planKey) {
   return match.id;
 }
 
+/**
+ * The live plan prices, read from Stripe.
+ *
+ * The billing page used to hard-code 89/179/329 while Stripe held the real
+ * numbers, so changing a price meant editing code and redeploying — and the two
+ * could silently disagree, showing a customer one price and charging another.
+ * This makes Stripe the single source of truth for both.
+ */
+exports.getPlanPricing = onCall(
+  { region: 'us-central1' },
+  async () => {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) return { configured: false, plans: [] };
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Stripe = require('stripe');
+    const stripe = Stripe(stripeKey);
+
+    try {
+      const prices = await stripe.prices.list({
+        active: true, type: 'recurring', limit: 100, expand: ['data.product'],
+      });
+      const plans = Object.entries(PLAN_PRODUCT_NAME).map(([key, name]) => {
+        const m = prices.data.find(pr => pr.product && pr.product.name === name);
+        if (!m) return null;
+        return {
+          key,
+          priceId:  m.id,
+          amount:   (m.unit_amount ?? 0) / 100,
+          currency: m.currency,
+          interval: m.recurring?.interval ?? 'month',
+          // Whether the displayed amount already contains tax, so the page can
+          // say "+ VAT" or not without guessing.
+          taxBehavior: m.tax_behavior ?? 'unspecified',
+        };
+      }).filter(Boolean);
+      return { configured: true, plans };
+    } catch (err) {
+      console.error('[getPlanPricing]', err);
+      return { configured: false, plans: [], error: err.message };
+    }
+  },
+);
+
 exports.createCheckoutSession = onCall(
   { region: 'us-central1' },
   async (request) => {
@@ -836,18 +880,39 @@ exports.createCheckoutSession = onCall(
 
     try {
       const isSubscription = type === 'plan';
-      const session = await stripe.checkout.sessions.create({
+      const buildSession = (withTax) => ({
         payment_method_types: ['card'],
         line_items: [lineItem],
         mode: isSubscription ? 'subscription' : 'payment',
         success_url: successUrl,
         cancel_url: cancelUrl,
         metadata,
+        // Stripe Tax computes VAT at the rate in force on the day of the charge.
+        // The previous code multiplied by a hard-coded 1.17, which has been the
+        // wrong rate since Israeli VAT moved to 18% in January 2025 — and would
+        // go stale again at the next change.
+        automatic_tax: { enabled: withTax },
+        // Tax cannot be computed without knowing where the customer is.
+        billing_address_collection: 'required',
+        ...(isSubscription && withTax ? { customer_update: { address: 'auto', name: 'auto' } } : {}),
         // The subscription carries its own copy: webhooks for renewals and
         // cancellations arrive against the subscription, not the checkout
         // session, and without this they would not know which workspace to act on.
         ...(isSubscription ? { subscription_data: { metadata } } : {}),
       });
+
+      // Stripe Tax is a paid add-on that must be switched on for the account.
+      // Requesting it before then makes Stripe reject the whole session, which
+      // would take checkout down completely — so fall back to charging without
+      // automatic tax rather than losing the sale, and say so in the logs.
+      let session;
+      try {
+        session = await stripe.checkout.sessions.create(buildSession(true));
+      } catch (taxErr) {
+        if (!/tax/i.test(taxErr.message ?? '')) throw taxErr;
+        console.warn(`[createCheckoutSession] automatic tax unavailable (${taxErr.message}) — charging without it`);
+        session = await stripe.checkout.sessions.create(buildSession(false));
+      }
       console.log(`[createCheckoutSession] Created session ${session.id} for workspace ${workspaceId} (${type})`);
       return { url: session.url };
     } catch (err) {
