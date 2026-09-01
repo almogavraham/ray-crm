@@ -148,6 +148,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(p);
         setUser(firebaseUser);
 
+        // A purchase interrupted by sign-up resumes here. Checkout sends a
+        // buyer who has no account yet to sign up; without this they would
+        // finish signing up and land in the app, with the payment they came
+        // to make simply forgotten. The details they typed are still in
+        // session storage, so returning puts them back where they were.
+        try {
+          const back = sessionStorage.getItem('ray_checkout_return');
+          if (back && !window.location.pathname.startsWith('/checkout')) {
+            sessionStorage.removeItem('ray_checkout_return');
+            window.location.href = back;
+            return;
+          }
+        } catch { /* private mode — the purchase is simply not resumed */ }
+
         // Subscribe to workspace (real-time) if user has one.
         //
         // A superadmin who chose "enter this workspace" from the admin panel is

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { withVat } from '../lib/vat';
 import {
   Zap, Check, BarChart3, Users, Brain, CheckSquare, Target,
   Shield, Rocket, Globe, Menu, X, TrendingUp, ChevronRight,
@@ -887,6 +888,7 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
 
   const plans = [
     {
+      key: 'basic',
       name: 'Basic',
       price: '89',
       period: 'חודש',
@@ -896,6 +898,7 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
       features: ['כל התכונות', 'עד 5 משתמשים', 'AI מלא לניהול לידים', 'משימות ותזכורות', 'תמיכה בסיסית', 'אחסון 5GB'],
     },
     {
+      key: 'pro',
       name: 'Pro',
       price: '179',
       period: 'חודש',
@@ -905,6 +908,7 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
       features: ['כל התכונות', 'עד 10 משתמשים', 'AI מלא + דירוג לידים', 'דוחות מתקדמים', 'אינטגרציות API', 'אחסון 10GB', 'תמיכה מועדפת'],
     },
     {
+      key: 'enterprise',
       name: 'Enterprise',
       price: '329',
       period: 'חודש',
@@ -961,6 +965,11 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                     <span className={`text-sm ${plan.highlight ? 'text-indigo-200' : 'text-slate-400'}`}>/{plan.period}</span>
                   )}
                 </div>
+                {plan.price !== 'חינם' && (
+                  <p className={`text-[11px] mt-1.5 ${plan.highlight ? 'text-indigo-200' : 'text-slate-400'}`}>
+                    + מע״מ · ₪{withVat(Number(plan.price)).toFixed(2)} לחודש כולל מע״מ
+                  </p>
+                )}
               </div>
 
               <button onClick={onSignUp}
@@ -971,6 +980,15 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                 }`}>
                 {plan.name === 'Enterprise' ? 'צור קשר' : 'התחל ניסיון חינם'}
               </button>
+
+              {plan.name !== 'Enterprise' && (
+                <a href={`/checkout?plan=${plan.key}`}
+                  className={`-mt-5 mb-7 block text-center text-xs font-semibold underline underline-offset-2 transition-colors ${
+                    plan.highlight ? 'text-indigo-200 hover:text-white' : 'text-indigo-600 hover:text-indigo-800'
+                  }`}>
+                  או רכישה מיידית
+                </a>
+              )}
 
               <div className="space-y-3 flex-1">
                 {plan.features.map(f => (
@@ -1165,7 +1183,7 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
           <p className="text-slate-600 text-xs">© 2026 RAY CRM. כל הזכויות שמורות.</p>
           <div className="flex items-center gap-5 text-slate-600 text-xs">
             <a href="/privacy" className="hover:text-slate-400 transition-colors">מדיניות פרטיות</a>
-            <a href="/terms" className="hover:text-slate-400 transition-colors">תנאי שימוש</a>
+            <a href="/terms" className="hover:text-slate-400 transition-colors">תנאי שימוש ותקנון</a>
             <a href="/accessibility" className="hover:text-slate-400 transition-colors">הצהרת נגישות</a>
             <div className="flex items-center gap-1.5 font-mono">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />

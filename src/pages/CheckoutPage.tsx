@@ -23,6 +23,7 @@ import { ArrowRight, Loader2, ShieldCheck, AlertCircle } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, auth } from '../lib/firebase';
 import { SITE_LEGAL } from '../lib/siteLegal';
+import { VAT_PERCENT, vatOn, withVat } from '../lib/vat';
 
 /** Kept in step with PLAN_PRICE_ILS in functions/morningPayments.js, which is
  *  authoritative: the server recomputes the price and refuses a mismatch. */
@@ -33,8 +34,6 @@ const PLANS = {
 } as const;
 
 type PlanKey = keyof typeof PLANS;
-
-const VAT_RATE = 0.18;
 
 /** The exact wording accepted, stored with the order. Bump when it changes. */
 const CHECKOUT_CONSENT_VERSION = '1.0';
@@ -62,8 +61,8 @@ export default function CheckoutPage() {
   const [busy,  setBusy]  = useState(false);
   const [error, setError] = useState('');
 
-  const vat   = Math.round(plan.price * VAT_RATE * 100) / 100;
-  const total = Math.round(plan.price * (1 + VAT_RATE) * 100) / 100;
+  const vat   = vatOn(plan.price);
+  const total = withVat(plan.price);
 
   useEffect(() => {
     const off = auth.onAuthStateChanged(u => {
@@ -108,8 +107,13 @@ export default function CheckoutPage() {
 
     if (!signedIn) {
       // A subscription has to attach to an account. Said here rather than
-      // failing silently at the payment step.
-      window.location.href = `/signup?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      // failing silently at the payment step. The destination is left in
+      // session storage rather than passed as a query parameter, because
+      // nothing in the sign-up flow reads one — AuthContext picks this up the
+      // moment the account exists and brings them back to finish paying.
+      try { sessionStorage.setItem('ray_checkout_return', window.location.pathname + window.location.search); }
+      catch { /* private mode — they can navigate back themselves */ }
+      window.location.href = '/signup';
       return;
     }
 
@@ -172,7 +176,7 @@ export default function CheckoutPage() {
             <span className="text-slate-700">₪{plan.price.toFixed(2)}</span>
           </div>
           <div className="flex items-baseline justify-between text-[14px] text-slate-500 mb-3">
-            <span>מע״מ ({Math.round(VAT_RATE * 100)}%)</span>
+            <span>מע״מ ({VAT_PERCENT}%)</span>
             <span>₪{vat.toFixed(2)}</span>
           </div>
           <div className="flex items-baseline justify-between pt-3 border-t border-slate-200">

@@ -35,7 +35,7 @@ export const SITE_LEGAL = {
   accessibilityOfficer: '',
 
   /** Last substantive review of the legal texts. */
-  updated: '30.8.2026',
+  updated: '1.9.2026',
 } as const;
 
 /** True once the site can name a legal entity for itself. */
