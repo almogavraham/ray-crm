@@ -226,19 +226,45 @@ export default function CheckoutPage() {
             </div>
           </div>
 
-          {/* Required by the review: the box, and a link to the terms inside it. */}
-          <label className="mt-6 flex items-start gap-3 cursor-pointer">
-            <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}
-              className="mt-1 w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-            <span className="text-[14px] leading-relaxed text-slate-700">
-              קראתי ואני מאשר/ת את{' '}
-              <a href="/terms" target="_blank" rel="noopener noreferrer"
-                className="text-indigo-600 underline font-semibold">תנאי השימוש ותקנון הביטולים</a>
-              , ואת{' '}
-              <a href="/privacy" target="_blank" rel="noopener noreferrer"
-                className="text-indigo-600 underline font-semibold">מדיניות הפרטיות</a>. *
-            </span>
-          </label>
+          {/* The terms consent.
+           *
+           * This was a bare native checkbox at the end of a long sentence. The
+           * payment provider's review passed the terms LINK inside that same
+           * sentence and still recorded the confirmation itself as missing —
+           * they read the line and did not register the box, because a 20px
+           * grey square at the end of running text does not read as a control.
+           *
+           * So it is now a titled block of its own, with a heading naming what
+           * it is, an oversized box, and a border that turns green once ticked.
+           * accent-color is set explicitly: Tailwind's forms plugin is not
+           * installed here, so `text-indigo-600` never coloured the control. */}
+          <div className={`mt-6 rounded-xl border-2 p-4 transition-colors ${
+            agreed ? 'border-emerald-400 bg-emerald-50' : 'border-indigo-300 bg-indigo-50/50'
+          }`}>
+            <p className="text-[12px] font-black tracking-wide text-slate-500 mb-2">
+              אישור תקנון — חובה
+            </p>
+            <label htmlFor="terms-consent" className="flex items-start gap-3 cursor-pointer">
+              <input
+                id="terms-consent"
+                name="terms-consent"
+                type="checkbox"
+                required
+                checked={agreed}
+                onChange={e => setAgreed(e.target.checked)}
+                style={{ accentColor: '#4f46e5', width: 24, height: 24 }}
+                className="mt-0.5 flex-shrink-0 cursor-pointer"
+              />
+              <span className="text-[14px] leading-relaxed text-slate-800 font-medium">
+                קראתי ואני מאשר/ת את{' '}
+                <a href="/terms" target="_blank" rel="noopener noreferrer"
+                  className="text-indigo-700 underline font-bold">תנאי השימוש ותקנון הביטולים</a>
+                {' '}ואת{' '}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer"
+                  className="text-indigo-700 underline font-bold">מדיניות הפרטיות</a>.
+              </span>
+            </label>
+          </div>
 
           {error && (
             <p className="mt-5 flex items-start gap-2 text-[14px] text-rose-700">
@@ -246,12 +272,22 @@ export default function CheckoutPage() {
             </p>
           )}
 
-          <button type="submit" disabled={busy}
-            className="mt-7 w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60
-                       text-white font-bold py-3.5 flex items-center justify-center gap-2 transition-colors">
+          {/* Disabled until the box is ticked. The consent is a precondition of
+              the purchase, so the button should not look available before it is
+              given — and a visibly blocked button is itself a signal that the
+              control above it matters. */}
+          <button type="submit" disabled={busy || !agreed}
+            className="mt-6 w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300
+                       disabled:cursor-not-allowed text-white font-bold py-3.5 flex items-center
+                       justify-center gap-2 transition-colors">
             {busy ? <><Loader2 size={18} className="animate-spin" /> מעביר לתשלום…</>
                   : <><ShieldCheck size={18} /> המשך לתשלום מאובטח</>}
           </button>
+          {!agreed && (
+            <p className="mt-2 text-center text-[13px] font-semibold text-indigo-700">
+              ↑ יש לאשר את התקנון כדי להמשיך
+            </p>
+          )}
 
           <p className="mt-4 text-center text-[12px] leading-relaxed text-slate-500">
             התשלום מתבצע בעמוד מאובטח. פרטי האשראי אינם נשמרים אצלנו.
