@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { VAT_RATE, VAT_PERCENT } from '../lib/vat';
 import {
   Building2, Mail, Users2, Image, Save, Copy,
   Lock, Eye, EyeOff, CheckCircle2, Check, AlertCircle, UserPlus, Trash2,
@@ -2735,7 +2736,7 @@ function RevenueManager({ workspaceId, leads }: { workspaceId: string; leads: Le
   /* ── Helpers ── */
   const fmt = (n: number) =>
     n >= 1_000_000 ? `₪${(n/1_000_000).toFixed(1)}M` : n >= 1000 ? `₪${(n/1000).toFixed(1)}K` : `₪${n.toLocaleString()}`;
-  const VAT = 0.17;
+  const VAT = VAT_RATE;
   const vatAmount = formVat ? Math.round(Number(formAmount) * VAT) : 0;
   const clients   = [...new Set(leads.filter(l => l.status === 'לקוח פעיל').map(l => l.company || l.contactName))];
   const resetForm = () => { setFormProductId(''); setFormCategory(''); setFormClient(''); setFormDesc(''); setFormAmount(''); setFormRecurring(false); setFormVat(false); };
@@ -3028,7 +3029,7 @@ function RevenueManager({ workspaceId, leads }: { workspaceId: string; leads: Le
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex gap-4 flex-wrap">
                 <FToggle on={formRecurring} onToggle={() => setFormRecurring(r => !r)} label="חוזר חודשי" />
-                <FToggle on={formVat} onToggle={() => setFormVat(v => !v)} label={`כולל מע"מ (17%)`} />
+                <FToggle on={formVat} onToggle={() => setFormVat(v => !v)} label={`כולל מע"מ (${VAT_PERCENT}%)`} />
               </div>
               <div className="flex gap-2 flex-wrap">
                 {leads.some(l => l.status === 'לקוח פעיל' && l.solutions.some(s => s.price)) && (

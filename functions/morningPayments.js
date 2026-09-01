@@ -87,8 +87,18 @@ exports.createMorningPayment = onCall(
 
     const {
       workspaceId, type, planKey, amount, label, successUrl, failureUrl,
-      customer, consent,
+      customer, consent, currency,
     } = request.data ?? {};
+
+    // Morning accepts these four. A plan is always in shekels; token top-ups
+    // are priced in dollars because that is the unit the AI credit is bought
+    // in, and Morning can charge it directly rather than us inventing an
+    // exchange rate that would drift.
+    const CURRENCIES = new Set(['ILS', 'USD', 'EUR', 'GBP']);
+    const cur = type === 'plan' ? 'ILS' : String(currency ?? 'ILS').toUpperCase();
+    if (!CURRENCIES.has(cur)) {
+      throw new HttpsError('invalid-argument', `Unsupported currency "${currency}".`);
+    }
 
     if (!workspaceId || !type || !successUrl || !failureUrl) {
       throw new HttpsError('invalid-argument', 'Missing required fields.');
@@ -143,7 +153,7 @@ exports.createMorningPayment = onCall(
         description,
         type: DOC_TAX_INVOICE_RECEIPT,
         amount: total,
-        currency: 'ILS',
+        currency: cur,
         vatType: 0,           // document level: let the business's own setup decide
         lang: 'he',           // Hebrew payment page — the reason Stripe was unusable
         maxPayments: 1,
@@ -161,7 +171,7 @@ exports.createMorningPayment = onCall(
           description,
           quantity: 1,
           price: total,
-          currency: 'ILS',
+          currency: cur,
           vatType: 1,         // the price already includes VAT — see the file header
         }],
         successUrl,

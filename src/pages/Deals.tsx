@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { vatOn, VAT_PERCENT } from '../lib/vat';
 import { useLang } from '../contexts/LangContext';
 import { useTheme } from '../contexts/ThemeContext';
 import {
@@ -1819,7 +1820,7 @@ function exportToPdf(proposal: Proposal, tmpl: string, includeVat: boolean) {
   const subtotal = proposal.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
   const discountAmt = subtotal * ((proposal.discount ?? 0) / 100);
   const afterDiscount = subtotal - discountAmt;
-  const vatAmt = includeVat ? afterDiscount * 0.17 : 0;
+  const vatAmt = includeVat ? vatOn(afterDiscount) : 0;
   const total = afterDiscount + vatAmt;
   const fmtN = (n: number) => `₪${n.toLocaleString('he-IL')}`;
 
@@ -1896,7 +1897,7 @@ function exportToPdf(proposal: Proposal, tmpl: string, includeVat: boolean) {
   <div class="totals">
     <div class="totals-row"><span>${fmtN(subtotal)}</span><span>סכום ביניים</span></div>
     ${discountAmt > 0 ? `<div class="totals-row"><span style="color:#10b981">-${fmtN(discountAmt)}</span><span>הנחה (${proposal.discount}%)</span></div>` : ''}
-    ${vatAmt > 0 ? `<div class="totals-row"><span>+${fmtN(vatAmt)}</span><span>מע״מ 17%</span></div>` : ''}
+    ${vatAmt > 0 ? `<div class="totals-row"><span>+${fmtN(vatAmt)}</span><span>מע״מ ${VAT_PERCENT}%</span></div>` : ''}
     <div class="totals-total"><span class="amount">${fmtN(total)}</span><span class="label">סה״כ לתשלום</span></div>
   </div>
   ${proposal.notes ? `<div class="notes"><h3>הערות והתניות</h3><p>${proposal.notes.replace(/\n/g,'<br>')}</p></div>` : ''}
@@ -1923,7 +1924,7 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
   const subtotal = p.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
   const discountAmt = subtotal * ((p.discount ?? 0) / 100);
   const afterDiscount = subtotal - discountAmt;
-  const vatAmt = vat ? afterDiscount * 0.17 : 0;
+  const vatAmt = vat ? vatOn(afterDiscount) : 0;
   const total = afterDiscount + vatAmt;
 
   const headerClass = templateId === 'dark' ? 'bg-slate-900 text-white'
@@ -2097,7 +2098,7 @@ function ProposalBuilder({ proposal, onSave, onClose, clientName }: {
               <div className="flex items-center gap-2">
                 <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer print:hidden">
                   <input type="checkbox" checked={vat} onChange={e => setVat(e.target.checked)} className="rounded" />
-                  כולל מע״מ 17%
+                  כולל מע״מ {VAT_PERCENT}%
                 </label>
                 {vat && <span className="text-slate-600">+{fmt(vatAmt)}</span>}
               </div>

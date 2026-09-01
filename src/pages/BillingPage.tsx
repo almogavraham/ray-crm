@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { VAT_PERCENT, vatOn, withVat } from '../lib/vat';
 import {
   CreditCard, Check, Zap, Building2, Crown, X, Lock,
   RefreshCw, CheckCircle2, Star, AlertCircle, AlertTriangle, ExternalLink,
@@ -26,9 +27,9 @@ function daysRemaining(isoDate?: string): number {
 }
 
 // Only used for the on-screen estimate. The amount actually charged is
-// computed by Stripe Tax at checkout, so this number going stale can no longer
+// computed by Morning when it issues the invoice, so this number cannot
 // cause an incorrect charge — the previous code billed with it directly.
-const VAT_RATE = 0.18;
+
 
 const PLANS = [
   {
@@ -85,10 +86,10 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const [topupLoading,    setTopupLoading]    = useState(false);
   const [topupError,      setTopupError]      = useState('');
 
-  // ── Global payment-success banner (return from Stripe) ──────────────────
+  // ── Global payment-success banner (return from the payment page) ────────
   const [paymentSuccess,  setPaymentSuccess]  = useState(false);
 
-  // Detect ?payment=success in URL (Stripe redirect-back)
+  // Detect ?payment=success in URL (redirect back from the payment page)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('payment') === 'success') {
@@ -111,7 +112,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
   const currentPlanObj = PLANS.find(p => p.key === workspace.plan) ?? PLANS[0];
   const chosenPlanObj  = selectedPlan ? PLANS.find(p => p.key === selectedPlan) : null;
 
-  // ── Build success/cancel URLs for Stripe ───────────────────────────────
+  // ── Build success/cancel URLs ──────────────────────────────────────────
   function buildSuccessUrl() {
     const u = new URL(window.location.href);
     u.searchParams.set('payment', 'success');
@@ -121,92 +122,80 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
     return window.location.href;
   }
 
-  // ── Stripe: token top-up ───────────────────────────────────────────────
-  const handleTopupStripe = async () => {
+  // ── Token top-up ───────────────────────────────────────────────────────
+  // Charged in dollars, which Morning supports directly — the AI credit is
+  // bought in dollars, so converting it here would only add an exchange rate
+  // to drift out of date.
+  const handleTopup = async () => {
     if (!topupPkg) return;
     setTopupError('');
     setTopupLoading(true);
     try {
-      const fn = httpsCallable<unknown, { url: string }>(functions, 'createCheckoutSession');
+      const fn = httpsCallable<unknown, { url: string }>(functions, 'createMorningPayment');
       const result = await fn({
         type:       'topup',
         workspaceId: workspace.id,
-        dollars:    topupPkg.dollars,
-        label:      topupPkg.label,
+        amount:     topupPkg.dollars,
+        currency:   'USD',
+        label:      `RAY CRM — ${topupPkg.label} טוקני AI`,
         successUrl: buildSuccessUrl(),
-        cancelUrl:  buildCancelUrl(),
+        failureUrl: buildCancelUrl(),
       });
       window.location.href = result.data.url;
     } catch (err: unknown) {
-      console.error('[handleTopupStripe]', err);
-      setTopupError('שגיאה ביצירת דף תשלום. נסה שוב.');
+      console.error('[handleTopup]', err);
+      // Show what actually went wrong. "Try again" is useless advice when the
+      // cause is a payment terminal that is not connected yet.
+      setTopupError((err as Error)?.message || 'שגיאה ביצירת דף תשלום. נסה שוב.');
       setTopupLoading(false);
     }
   };
 
-  // ── Stripe: plan upgrade ───────────────────────────────────────────────
-  const handlePlanStripe = async () => {
+  // ── Plan upgrade ───────────────────────────────────────────────────────
+  const handlePlan = async () => {
     if (!chosenPlanObj) return;
     setPlanError('');
     setPlanLoading(true);
 
-    // Optimistically update plan in parent (webhook will confirm in Firestore)
-    const optimisticPlan = selectedPlan as WorkspacePlan;
-
     try {
-      const fn = httpsCallable<unknown, { url: string }>(functions, 'createCheckoutSession');
+      const fn = httpsCallable<unknown, { url: string }>(functions, 'createMorningPayment');
       const result = await fn({
         type:       'plan',
         workspaceId: workspace.id,
         planKey:    selectedPlan,
-        priceIls:   chosenPrice,
-        label:      chosenPlanObj.name ?? '',
+        // Sent as the price this page displayed; the server holds the real one
+        // and refuses a mismatch rather than charging either number.
+        amount:     totalAmount,
+        label:      `RAY CRM — ${chosenPlanObj.name ?? selectedPlan}`,
         successUrl: buildSuccessUrl(),
-        cancelUrl:  buildCancelUrl(),
+        failureUrl: buildCancelUrl(),
       });
-      // Optimistic local update so the UI feels instant after return
-      onPlanUpdate?.(optimisticPlan);
+      // The plan is NOT updated here. It used to be set optimistically before
+      // the customer had even reached the payment page, so an abandoned
+      // checkout still showed them upgraded. The webhook applies it, after
+      // Morning confirms the money arrived.
       window.location.href = result.data.url;
     } catch (err: unknown) {
-      console.error('[handlePlanStripe]', err);
-      setPlanError('שגיאה ביצירת דף תשלום. נסה שוב.');
+      console.error('[handlePlan]', err);
+      setPlanError((err as Error)?.message || 'שגיאה ביצירת דף תשלום. נסה שוב.');
       setPlanLoading(false);
     }
   };
 
   // ── Close modals ────────────────────────────────────────────────────────
-  // Prices come from Stripe so the page cannot show one number while checkout
-  // charges another. The table above is the fallback for when Stripe is not
-  // configured yet — it is a default, not the source of truth.
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const { httpsCallable } = await import('firebase/functions');
-        const { functions } = await import('../lib/firebase');
-        const fn = httpsCallable<unknown, { configured: boolean; plans: { key: string; amount: number }[] }>(
-          functions, 'getPlanPricing');
-        const { data } = await fn({});
-        if (alive && data?.configured) {
-          setLivePrices(Object.fromEntries(data.plans.map(p2 => [p2.key, p2.amount])));
-        }
-      } catch { /* keep the built-in defaults */ }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  /** The price to show and charge — Stripe's if we have it. */
-  const priceOf = (key: string, fallback: number) => livePrices[key] ?? fallback;
-
+  // The table above is the price. It used to be overridden at runtime by a
+  // fetch from Stripe, which is no longer the processor — leaving it would mean
+  // the page showing a price from a system that no longer takes the money.
+  // Drift is caught instead of hidden: the payment call sends the displayed
+  // price, and the server refuses it if it disagrees with its own.
   const closePlanModal  = () => { setSelectedPlan(null); setPlanError(''); setPlanLoading(false); };
   const closeTopupModal = () => { setTopupPkg(null);     setTopupError(''); setTopupLoading(false); };
 
-  // Stripe Tax computes the real VAT at checkout; this is only an estimate for
-  // the summary, which is why it is labelled as one.
-  const chosenPrice = chosenPlanObj ? priceOf(chosenPlanObj.key, chosenPlanObj.price) : 0;
-  const vatAmount   = chosenPrice * VAT_RATE;
-  const totalAmount = chosenPrice + vatAmount;
+  // VAT shown for the summary. Morning computes the authoritative split when
+  // it issues the invoice, from the business's own tax settings.
+  const chosenPrice = chosenPlanObj?.price ?? 0;
+  const vatAmount   = vatOn(chosenPrice);
+  const totalAmount = withVat(chosenPrice);
 
   return (
     <div
@@ -409,7 +398,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     ) : (
                       <>
                         <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>₪</span>
-                        <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{priceOf(plan.key, plan.price)}</span>
+                        <span className="text-3xl font-black" style={{ color: 'rgba(255,255,255,0.9)' }}>{plan.price}</span>
                         <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>/{t(plan.periodKey)}</span>
                       </>
                     )}
@@ -496,7 +485,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
             ))}
           </div>
           <p className="text-xs mt-3 text-center" style={{ color: 'rgba(255,255,255,0.3)' }}>
-            * התשלום מאובטח ומוצפן על ידי Stripe. הטוקנים יתווספו מיד לאחר אישור התשלום.
+            * התשלום מאובטח ומוצפן. הטוקנים יתווספו מיד לאחר אישור התשלום.
           </p>
         </div>
 
@@ -564,7 +553,7 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                     <span>₪{chosenPrice.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                    <span>{t('billing.payment.vat')}</span>
+                    <span>{t('billing.payment.vat')} ({VAT_PERCENT}%)</span>
                     <span>₪{vatAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between font-bold pt-2" style={{ color: 'rgba(255,255,255,0.9)', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -574,11 +563,11 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                 </div>
               )}
 
-              {/* Stripe info */}
+              {/* How payment works — without naming the processor. */}
               <div className="rounded-xl p-4 flex items-start gap-3" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
                 <Lock size={14} className="text-indigo-400 mt-0.5 flex-shrink-0" />
                 <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
-                  התשלום מבוצע בצורה מאובטחת דרך <span className="text-indigo-400 font-semibold">Stripe</span> — תועבר לדף תשלום מאובטח ותוחזר בחזרה לאחר אישור.
+                  התשלום מבוצע בצורה מאובטחת בעמוד תשלום חיצוני. פרטי האשראי אינם נשמרים אצלנו, ותוחזר לכאן לאחר אישור. חשבונית מס תישלח אליך בדוא״ל.
                 </p>
               </div>
 
@@ -589,14 +578,14 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               )}
 
               <button
-                onClick={handlePlanStripe}
+                onClick={handlePlan}
                 disabled={planLoading}
                 className="w-full font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', boxShadow: '0 0 20px rgba(99,102,241,0.3)' }}
               >
                 {planLoading
                   ? <><RefreshCw size={16} className="animate-spin" /> מעביר לדף תשלום...</>
-                  : <><ExternalLink size={15} /> {t('billing.payment.pay')} ₪{totalAmount.toFixed(2)} עם Stripe</>
+                  : <><ExternalLink size={15} /> {t('billing.payment.pay')} ₪{totalAmount.toFixed(2)}</>
                 }
               </button>
             </div>
@@ -636,16 +625,16 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
                   <p className="text-xs mb-1" style={{ color: 'rgba(255,255,255,0.4)' }}>לתשלום</p>
                   <p className="font-black text-3xl" style={{ color: '#34d399' }}>{topupPkg.label}</p>
                   <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                    + מע"מ ${(topupPkg.dollars * 0.17).toFixed(2)}
+                    + מע"מ ${vatOn(topupPkg.dollars).toFixed(2)}
                   </p>
                 </div>
               </div>
 
-              {/* Stripe info */}
+              {/* How payment works — without naming the processor. */}
               <div className="rounded-xl p-4 flex items-start gap-3" style={{ background: 'rgba(52,211,153,0.05)', border: '1px solid rgba(52,211,153,0.15)' }}>
                 <Lock size={14} className="text-emerald-400 mt-0.5 flex-shrink-0" />
                 <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
-                  התשלום מבוצע דרך <span className="text-emerald-400 font-semibold">Stripe</span> — תועבר לדף תשלום מאובטח ותוחזר בחזרה לאחר אישור.
+                  התשלום מבוצע בעמוד תשלום מאובטח. פרטי האשראי אינם נשמרים אצלנו, ותוחזר לכאן לאחר אישור. חשבונית מס תישלח אליך בדוא״ל.
                 </p>
               </div>
 
@@ -656,19 +645,19 @@ export default function BillingPage({ workspace, onPlanUpdate }: BillingPageProp
               )}
 
               <button
-                onClick={handleTopupStripe}
+                onClick={handleTopup}
                 disabled={topupLoading}
                 className="w-full font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ background: 'linear-gradient(135deg,#10b981,#059669)', color: 'white', boxShadow: '0 0 14px rgba(16,185,129,0.3)' }}
               >
                 {topupLoading
                   ? <><RefreshCw size={16} className="animate-spin" /> מעביר לדף תשלום...</>
-                  : <><ExternalLink size={15} /> שלם {topupPkg.label} עם Stripe</>
+                  : <><ExternalLink size={15} /> שלם {topupPkg.label}</>
                 }
               </button>
 
               <p className="text-center text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
-                🔒 256-bit SSL · מאובטח על ידי Stripe
+                🔒 256-bit SSL · תשלום מאובטח ומוצפן
               </p>
             </div>
           </div>
