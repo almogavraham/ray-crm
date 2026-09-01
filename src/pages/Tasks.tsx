@@ -605,7 +605,7 @@ export default function Tasks({
                     <span
                       className="text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center"
                       style={dateFilter === tab.k
-                        ? { background: 'rgba(255,255,255,0.2)', color: c.textPrimary }
+                        ? { background: 'rgba(255,255,255,0.25)', color: '#ffffff' }
                         : tab.urgent
                           ? { background: 'rgba(239,68,68,0.2)', color: '#f87171' }
                           : { background: 'rgba(255,255,255,0.1)', color: c.textSecondary }}>
@@ -815,24 +815,24 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(4px)' }}>
       <div
         className="rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-lg overflow-hidden max-h-[95vh] overflow-y-auto"
         dir="rtl"
-        style={{ background: '#0d1526', border: '1px solid rgba(99,102,241,0.2)' }}
+        style={{ background: c.cardBg, border: `1px solid ${c.cardBorder}` }}
       >
 
         {/* Header */}
-        <div className="px-6 py-5 flex items-center justify-between" style={{ background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid rgba(99,102,241,0.2)' }}>
+        <div className="px-6 py-5 flex items-center justify-between" style={{ background: c.cardBgAlt, borderBottom: `1px solid ${c.cardBorder}` }}>
           <button onClick={onClose}
             className="p-1 rounded-lg transition-colors"
             style={{ color: c.textMuted }}
-            onMouseEnter={e => { e.currentTarget.style.color = '#818cf8'; e.currentTarget.style.background = 'rgba(99,102,241,0.15)'; }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; e.currentTarget.style.background = 'transparent'; }}>
+            onMouseEnter={e => { e.currentTarget.style.color = c.accentText; e.currentTarget.style.background = 'rgba(99,102,241,0.15)'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = c.textMuted; e.currentTarget.style.background = 'transparent'; }}>
             <X size={18} />
           </button>
           <div className="text-right">
-            <h2 className="font-bold text-lg leading-none" style={{ background: 'linear-gradient(135deg,#818cf8,#a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>משימה חדשה</h2>
+            <h2 className="font-bold text-lg leading-none" style={{ color: c.textPrimary }}>משימה חדשה</h2>
             <p className="text-xs mt-1" style={{ color: c.textMuted }}>הוסף משימה ושייך לחבר צוות</p>
           </div>
           <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
@@ -851,7 +851,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
               className="w-full rounded-xl px-4 py-3 text-sm text-right focus:outline-none resize-none placeholder-slate-500"
               style={inputStyle}
               onFocus={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.15)'; }}
-              onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.boxShadow = 'none'; }}
+              onBlur={e => { e.currentTarget.style.borderColor = c.cardBorder; e.currentTarget.style.boxShadow = 'none'; }}
             />
           </div>
 
@@ -861,8 +861,8 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
               <button onClick={() => setShowNotes(true)}
                 className="flex items-center gap-1.5 text-xs transition-colors"
                 style={{ color: c.textMuted }}
-                onMouseEnter={e => e.currentTarget.style.color = '#818cf8'}
-                onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.35)'}>
+                onMouseEnter={e => e.currentTarget.style.color = c.accentText}
+                onMouseLeave={e => e.currentTarget.style.color = c.textMuted}>
                 <StickyNote size={13} /> הוסף פרטים נוספים
               </button>
             ) : (
@@ -875,7 +875,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                   className="w-full rounded-xl px-4 py-3 text-sm text-right focus:outline-none resize-none placeholder-slate-500"
                   style={inputStyle}
                   onFocus={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.15)'; }}
-                  onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.boxShadow = 'none'; }}
+                  onBlur={e => { e.currentTarget.style.borderColor = c.cardBorder; e.currentTarget.style.boxShadow = 'none'; }}
                 />
               </div>
             )}
@@ -892,11 +892,11 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                   className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all"
                   style={assignedTo === m.name
                     ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: 'white', border: '2px solid transparent' }
-                    : { background: c.subtleBg, border: '2px solid rgba(255,255,255,0.1)', color: c.textSecondary }}>
+                    : { background: c.subtleBg, border: `2px solid ${c.cardBorder}`, color: c.textSecondary }}>
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                     style={assignedTo === m.name
-                      ? { background: 'rgba(255,255,255,0.2)', color: c.textPrimary }
+                      ? { background: 'rgba(255,255,255,0.25)', color: '#ffffff' }
                       : { background: 'rgba(99,102,241,0.2)', color: c.accentText }}>
                     {m.name[0]?.toUpperCase()}
                   </div>
@@ -914,7 +914,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
             <div className="relative" ref={dropRef}>
               <div onClick={() => setShowLeadDrop(true)}
                 className="flex items-center gap-2 rounded-xl px-3 py-2.5 cursor-text transition-all"
-                style={{ background: c.subtleBg, border: `1px solid ${showLeadDrop ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}` }}>
+                style={{ background: c.subtleBg, border: `1px solid ${showLeadDrop ? 'rgba(99,102,241,0.5)' : c.cardBorder}` }}>
                 <Search size={13} className="flex-shrink-0" style={{ color: c.textMuted }} />
                 <input type="text"
                   value={selectedLead ? selectedLead.company : leadSearch}
@@ -930,7 +930,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
               {showLeadDrop && !selectedLead && (
                 <div
                   className="absolute top-full mt-1 w-full rounded-xl shadow-lg z-10 overflow-hidden max-h-44 overflow-y-auto"
-                  style={{ background: 'rgba(10,15,30,0.95)', border: `1px solid ${c.cardBorder}` }}
+                  style={{ background: c.cardBg, border: `1px solid ${c.cardBorder}` }}
                 >
                   {filteredLeads.length === 0
                     ? <div className="px-4 py-3 text-sm text-center" style={{ color: c.textMuted }}>לא נמצאו לידים</div>
@@ -960,7 +960,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                 className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none"
                 style={inputStyle}
                 onFocus={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.15)'; }}
-                onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.boxShadow = 'none'; }}
+                onBlur={e => { e.currentTarget.style.borderColor = c.cardBorder; e.currentTarget.style.boxShadow = 'none'; }}
               />
             </div>
             <div>
@@ -969,7 +969,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                 className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none"
                 style={inputStyle}
                 onFocus={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.15)'; }}
-                onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.boxShadow = 'none'; }}
+                onBlur={e => { e.currentTarget.style.borderColor = c.cardBorder; e.currentTarget.style.boxShadow = 'none'; }}
               />
             </div>
           </div>
@@ -987,8 +987,8 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                 <button key={label} onClick={() => setDate(val)}
                   className="px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
                   style={date === val
-                    ? { background: 'rgba(99,102,241,0.3)', border: '1px solid rgba(99,102,241,0.5)', color: '#818cf8' }
-                    : { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)' }}>
+                    ? { background: 'rgba(99,102,241,0.3)', border: '1px solid rgba(99,102,241,0.5)', color: c.accentText }
+                    : { background: c.subtleBg, border: `1px solid ${c.cardBorder}`, color: c.textMuted }}>
                   {label}
                 </button>
               );
@@ -1030,7 +1030,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
                     className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all"
                     style={active
                       ? { background: dp.bg, color: dp.text, border: `2px solid ${dp.border}` }
-                      : { background: c.subtleBg, border: '2px solid rgba(255,255,255,0.1)', color: c.textSecondary }}>
+                      : { background: c.subtleBg, border: `2px solid ${c.cardBorder}`, color: c.textSecondary }}>
                     {m.icon} {m.label}
                   </button>
                 );
@@ -1053,7 +1053,7 @@ function CreateTaskModal({ leads, team, currentUser, onClose, onAddStandalone, o
             <button onClick={onClose}
               className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
               style={{ border: `1px solid ${c.cardBorder}`, color: c.textSecondary, background: 'transparent' }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseEnter={e => e.currentTarget.style.background = c.subtleBgHover}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               ביטול
             </button>
@@ -1344,11 +1344,25 @@ function KanbanCard({
   /* priority accent bar color */
   const pBar = task.priority === 'high' ? '#ef4444' : task.priority === 'medium' ? '#f97316' : '#3b82f6';
 
+  // A card is both draggable and clickable, which needs two guards. Without
+  // the first, finishing a drag counts as a click and the editor opens every
+  // time a task is moved between columns. Without the second, the buttons
+  // sitting on the card — complete, delete, open the lead — would each also
+  // open the editor behind whatever they were meant to do.
+  const draggedRef = useRef(false);
+
+  const openFromCard = (e: React.MouseEvent) => {
+    if (draggedRef.current) { draggedRef.current = false; return; }
+    if ((e.target as HTMLElement).closest('button, a')) return;
+    onEdit(task);
+  };
+
   return (
     <div
       draggable
       onDragStart={e => {
         dragRef.current = task;
+        draggedRef.current = true;
         e.dataTransfer.effectAllowed = 'move';
         (e.currentTarget as HTMLElement).style.opacity = '0.45';
         (e.currentTarget as HTMLElement).style.transform = 'rotate(2deg) scale(1.03)';
@@ -1357,7 +1371,12 @@ function KanbanCard({
         (e.currentTarget as HTMLElement).style.opacity = '1';
         (e.currentTarget as HTMLElement).style.transform = '';
       }}
-      className={`relative rounded-xl overflow-hidden cursor-grab active:cursor-grabbing select-none transition-all duration-150 ${isCompleting ? 'opacity-40 scale-[0.97]' : ''}`}
+      onClick={openFromCard}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(task); } }}
+      title="לחץ לפתיחת המשימה"
+      className={`relative rounded-xl overflow-hidden cursor-pointer active:cursor-grabbing select-none transition-all duration-150 ${isCompleting ? 'opacity-40 scale-[0.97]' : ''}`}
       style={{
         background: cardBg,
         border: `1px solid ${cardBorder}`,
@@ -1518,10 +1537,11 @@ function BoardColumn({ col, onComplete, onDelete, onEdit, onLeadClick, completin
   currentUser: string;
 }) {
   const c = DARK_COL[col.key];
+  const { c: th } = useTheme();
   return (
     <div
       className="rounded-xl overflow-hidden"
-      style={{ background: c.subtleBg, border: `1px solid ${c.accentBorder}`, backdropFilter: 'blur(8px)' }}
+      style={{ background: th.subtleBg, border: `1px solid ${c.accentBorder}`, backdropFilter: 'blur(8px)' }}
     >
       <div
         className="px-4 py-3 flex items-center justify-between"
@@ -1539,7 +1559,7 @@ function BoardColumn({ col, onComplete, onDelete, onEdit, onLeadClick, completin
       </div>
       <div className="min-h-[120px] p-2 space-y-2">
         {col.tasks.length === 0
-          ? <div className="py-8 text-center text-xs" style={{ color: c.textMuted }}>אין משימות</div>
+          ? <div className="py-8 text-center text-xs" style={{ color: th.textMuted }}>אין משימות</div>
           : col.tasks.map(task => (
             <BoardTaskCard key={task.id} task={task}
               onComplete={onComplete} onDelete={onDelete} onEdit={onEdit} onLeadClick={onLeadClick}
@@ -2280,6 +2300,7 @@ function StatCard({ value, label, icon, scheme, onClick }: {
     indigo: { bg:'rgba(99,102,241,0.08)',  border:'rgba(99,102,241,0.2)',  iconBg:'rgba(99,102,241,0.18)',  iconColor:'#818cf8', valueColor:'#818cf8' },
   };
   const c = C[scheme];
+  const { c: th } = useTheme();
   return (
     <button
       onClick={onClick}
@@ -2292,7 +2313,7 @@ function StatCard({ value, label, icon, scheme, onClick }: {
         <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: c.iconBg, color: c.iconColor }}>{icon}</div>
         <div className="text-3xl font-bold" style={{ color: c.valueColor }}>{value}</div>
       </div>
-      <div className="text-xs font-medium" style={{ color: c.textSecondary }}>{label}</div>
+      <div className="text-xs font-medium" style={{ color: th.textSecondary }}>{label}</div>
     </button>
   );
 }
