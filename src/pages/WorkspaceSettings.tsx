@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import ApiKeysPanel from '../components/ApiKeysPanel';
 import { VAT_RATE, VAT_PERCENT } from '../lib/vat';
 import {
   Building2, Mail, Users2, Image, Save, Copy,
@@ -9,7 +10,7 @@ import {
   Zap, Webhook, ChevronDown, ChevronUp, Shield,
   Palette, Moon, Monitor, Sparkles,
   Bell, DollarSign, Users, BarChart2, Briefcase, Plus, Minus, Settings2,
-  FileText, ClipboardList, X, Printer, Edit3, Brain, PlugZap, Star,
+  FileText, ClipboardList, X, Printer, Edit3, Brain, PlugZap, Star, KeyRound,
 } from 'lucide-react';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { getAnthropicProxy } from '../lib/anthropicClient';
@@ -60,7 +61,7 @@ interface PendingInvite {
   createdAt?: string;
 }
 
-type Section = 'safety' | 'forms' | 'pipeline' | 'workspace' | 'password' | 'team' | 'performance' | 'plan' | 'portal' | 'appearance' | 'notifications' | 'marketing-budget' | 'custom-fields' | 'integrations';
+type Section = 'safety' | 'forms' | 'pipeline' | 'workspace' | 'password' | 'team' | 'performance' | 'plan' | 'portal' | 'appearance' | 'notifications' | 'marketing-budget' | 'custom-fields' | 'integrations' | 'api-keys';
 
 /* ── Finance types & constants ──────────────────────────────────────────── */
 interface FinanceEntry {
@@ -770,6 +771,7 @@ export default function WorkspaceSettings({
     { key: 'workspace',        label: t('settings.workspaceProfile'), icon: Building2     },
     { key: 'team',             label: t('settings.teamManagement'),   icon: Users2        },
     { key: 'integrations',     label: 'אינטגרציות',                   icon: PlugZap       },
+    { key: 'api-keys',         label: 'מפתחות API',                    icon: KeyRound      },
     { key: 'performance',      label: 'ביצועי צוות',                  icon: BarChart3     },
     { key: 'notifications',    label: 'התראות',                       icon: Bell          },
     { key: 'marketing-budget', label: 'תקציב שיווק',                  icon: Brain         },
@@ -1749,6 +1751,10 @@ export default function WorkspaceSettings({
           )}
 
           {/* ── INTEGRATIONS ──────────────────────────────────────────── */}
+          {section === 'api-keys' && (
+            <ApiKeysPanel workspaceId={workspace.id} onToast={onToast} />
+          )}
+
           {section === 'integrations' && (
             <div className="-mx-0">
               {integrationsPanel ?? (
