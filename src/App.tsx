@@ -1323,6 +1323,11 @@ function AppInner() {
     const slug = workspace?.slug;
     // Skip if at root — root is always the landing page, never redirect away from it
     if (window.location.pathname === '/' || window.location.pathname === '') return;
+    // Public pages keep their own address. This used to rewrite any non-root
+    // path to /{slug}, so a signed-in user opening /api, /security, /terms or
+    // /checkout had the URL silently replaced: reloading dropped them into the
+    // app, and copying the address to share it shared the wrong page.
+    if (RESERVED_PATHS.has(pathSegments[0])) return;
     if (!slug) return; // no slug yet — don't modify URL
     // Already on the right subdomain
     if (wsSlugFromHost === slug) return;

@@ -6,6 +6,17 @@ exports.formSubmit = formIngest.formSubmit;
 const siteContact = require('./siteContact');
 exports.siteContact = siteContact.siteContact;
 
+// Outbound webhooks: the API answers when asked, these tell the customer's
+// systems the moment something happens here.
+const webhooks = require('./webhooks');
+exports.onLeadCreated  = webhooks.onLeadCreated;
+exports.onLeadUpdated  = webhooks.onLeadUpdated;
+exports.onTaskCreated  = webhooks.onTaskCreated;
+exports.createWebhook  = webhooks.createWebhook;
+exports.listWebhooks   = webhooks.listWebhooks;
+exports.deleteWebhook  = webhooks.deleteWebhook;
+exports.testWebhook    = webhooks.testWebhook;
+
 // The public REST API other systems integrate against, plus the key
 // management the app calls to issue and revoke credentials for it.
 const publicApi = require('./publicApi');

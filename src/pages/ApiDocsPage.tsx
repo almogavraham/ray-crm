@@ -80,6 +80,17 @@ const H = ({ id, children }: { id: string; children: React.ReactNode }) => (
   <h2 id={id} className="text-2xl font-black text-slate-900 mt-14 mb-4 scroll-mt-24">{children}</h2>
 );
 
+const UL = ({ items }: { items: React.ReactNode[] }) => (
+  <ul className="mb-4 space-y-2.5">
+    {items.map((it, i) => (
+      <li key={i} className="text-[15px] leading-[1.8] text-slate-700 flex gap-2.5">
+        <span className="mt-[10px] w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
+        <span>{it}</span>
+      </li>
+    ))}
+  </ul>
+);
+
 /* ── Page ────────────────────────────────────────────────────────────────── */
 
 export default function ApiDocsPage() {
@@ -90,6 +101,7 @@ export default function ApiDocsPage() {
     ['auth',            'אימות'],
     ['leads',           'לידים'],
     ['tasks',           'משימות'],
+    ['webhooks',        'Webhooks'],
     ['errors',          'שגיאות'],
     ['limits',          'מגבלות'],
   ] as const;
@@ -261,6 +273,72 @@ do {
     "priority": "high",
     "lead_id": "api_1788236007744_7382e897"
   }'`}</Code>
+
+          <H id="webhooks">Webhooks — שנדע לספר לך</H>
+          <p className="text-[15px] leading-relaxed text-slate-600 mb-3">
+            במקום לשאול את ה-API כל דקה אם נכנס ליד חדש, אנחנו נודיע לך ברגע שזה קורה.
+            רשום כתובת HTTPS בהגדרות → מפתחות API, ונשלח אליה POST על כל אירוע שתבחר.
+          </p>
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 mb-4">
+            <table className="w-full text-right">
+              <tbody>
+                <Row name="lead.created" type="event">נוצר ליד חדש — מכל מקור: טופס, API, או ידנית.</Row>
+                <Row name="lead.updated" type="event">השתנה שדה בליד. לא נשלח על שינוי שאינו נראה לך.</Row>
+                <Row name="task.created" type="event">נוצרה משימה חדשה.</Row>
+              </tbody>
+            </table>
+          </div>
+          <Code label="מבנה ההודעה">{`POST https://your-server.com/ray-hook
+X-Ray-Event: lead.created
+X-Ray-Signature: 9f86d081884c7d659a2feaa0c55ad015...
+
+{
+  "id": "evt_1788243557499_a3f2b1",
+  "event": "lead.created",
+  "created_at": "2026-09-01T06:19:23.000Z",
+  "workspace_id": "ws_abc123",
+  "data": { ...אותו מבנה בדיוק כמו GET /v1/leads/{id} }
+}`}</Code>
+          <p className="text-[15px] leading-relaxed text-slate-600 mb-3">
+            <strong>שדה <code dir="ltr" className="text-[13px] font-mono">data</code> זהה למה
+            ש-<code dir="ltr" className="text-[13px] font-mono">GET /v1/leads/{'{id}'}</code> מחזיר</strong>,
+            כדי שלא תצטרך לכתוב שני מפענחים לאותו אובייקט.
+          </p>
+
+          <div className="flex gap-3 rounded-xl bg-rose-50 border border-rose-200 p-4 my-5">
+            <ShieldAlert size={18} className="text-rose-600 flex-shrink-0 mt-0.5" />
+            <div className="text-[14px] leading-relaxed text-rose-900">
+              <strong>אמת את החתימה — הכתובת שלך ציבורית.</strong> בלי אימות, כל אחד יכול
+              לשלוח אליה ליד מומצא. <code dir="ltr" className="text-[12px] font-mono">X-Ray-Signature</code>{' '}
+              הוא HMAC-SHA256 של <strong>גוף הבקשה הגולמי</strong>, עם ה-secret שקיבלת ביצירה.
+            </div>
+          </div>
+          <Code label="אימות בצד שלך (Node.js)">{`const crypto = require('crypto');
+
+app.post('/ray-hook', express.raw({ type: 'application/json' }), (req, res) => {
+  const expected = crypto.createHmac('sha256', RAY_WEBHOOK_SECRET)
+                         .update(req.body)          // הבייטים הגולמיים, לא JSON מסודר מחדש
+                         .digest('hex');
+  const got = req.get('X-Ray-Signature') || '';
+  if (expected.length !== got.length ||
+      !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(got))) {
+    return res.status(401).send('bad signature');
+  }
+  const event = JSON.parse(req.body.toString('utf8'));
+  // ... טפל באירוע, והחזר 2xx מהר
+  res.sendStatus(200);
+});`}</Code>
+          <p className="text-[14px] leading-relaxed text-slate-500 mb-3">
+            חשב את ה-HMAC על <strong>הבייטים כפי שהתקבלו</strong>. אם תיתן ל-JSON parser לסדר
+            אותם מחדש, החתימה לא תתאים לעולם.
+          </p>
+          <UL items={[
+            <>ענה <strong>2xx</strong> כדי לאשר קבלה. כל תשובה אחרת נחשבת לכישלון.</>,
+            <>אנחנו מוותרים אחרי <strong>10 שניות</strong> ללא תשובה — קבל, אשר, ועבד אחר כך.</>,
+            <>אחרי <strong>15 כשלים רצופים</strong> הכתובת מושבתת אוטומטית, כדי לא להמשיך להכות
+              בשרת שנפל. תראה את הסיבה בהגדרות ותוכל להפעיל מחדש.</>,
+            <>יש כפתור <strong>שלח בדיקה</strong> — תוכל לוודא שהכתובת עובדת לפני שזה משנה.</>,
+          ]} />
 
           <H id="errors">שגיאות</H>
           <p className="text-[15px] leading-relaxed text-slate-600 mb-3">

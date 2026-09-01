@@ -449,3 +449,12 @@ exports.revokeApiKey = onCall({ region: 'us-central1' }, async (request) => {
   await ref.update({ revokedAt: new Date().toISOString() });
   return { ok: true };
 });
+
+/*
+ * Shared with the webhook sender, so an event carries exactly the same shape as
+ * a GET on the same resource. Two serialisers for one object is how an
+ * integrator ends up writing two parsers and discovering the difference in
+ * production.
+ */
+module.exports.leadOut = leadOut;
+module.exports.taskOut = taskOut;

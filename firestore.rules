@@ -79,6 +79,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Webhook endpoints. Each holds a signing secret, and a client able to
+    // write here could repoint an endpoint at a URL of its choosing and have
+    // another workspace's leads delivered to it. Managed only through the
+    // callable functions, which check membership.
+    match /webhookEndpoints/{endpointId} {
+      allow read, write: if false;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
