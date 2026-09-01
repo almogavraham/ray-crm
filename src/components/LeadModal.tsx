@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
+import CreateTaskModal from './CreateTaskModal';
 import {
   X, MessageCircle, Mail, Phone, Save, Plus, Trash2, Brain,
   Clock, Building2, CheckCircle2, Activity, Star, Zap,
@@ -120,6 +121,12 @@ export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, w
 
   const [activeTab, setActiveTab] = useState<Tab>('details');
   const [newNote, setNewNote] = useState('');
+  // The full create dialog, opened from this card. The lead is fixed to this
+  // one, so a task started here cannot end up on a different lead.
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  // A task already on the lead, opened for viewing by clicking its row.
+  const [viewTask, setViewTask] = useState<import('../types').Task | null>(null);
+
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskDate, setNewTaskDate] = useState('');
   const [newTaskTime, setNewTaskTime] = useState('09:00');
@@ -617,6 +624,14 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     setData(updated);
     onUpdate(updated);
     setNewNote('');
+  };
+
+  const addTaskFromModal = (task: import('../types').Task) => {
+    const newLog = appendActivity('task', `משימה נוצרה: ${task.description} — ${task.date} ${task.time}`);
+    const updated = { ...data, tasks: [...data.tasks, task], activityLog: newLog };
+    setData(updated);
+    onUpdate(updated);
+    setShowTaskModal(false);
   };
 
   const addTask = () => {
@@ -1818,43 +1833,16 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                   <h3 className="text-sm font-bold text-slate-200">{t('leadModal.tasks')}</h3>
                 </div>
 
-                {/* Add task form */}
-                <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 space-y-3">
-                  <input
-                    type="text"
-                    placeholder={t('leadModal.taskDesc') + '...'}
-                    value={newTaskDesc}
-                    onChange={e => setNewTaskDesc(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addTask()}
-                    className="w-full bg-slate-700/80 text-white placeholder-slate-500 px-3 py-2.5 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500 border border-slate-600/50"
-                  />
-                  <div className="flex gap-1.5 justify-end">
-                    {PRIORITY_OPTS.map(opt => (
-                      <button
-                        key={opt.value}
-                        onClick={() => setNewTaskPriority(opt.value)}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          newTaskPriority === opt.value ? opt.active : opt.idle
-                        }`}
-                      >
-                        {opt.label} {opt.value === 'high' ? t('tasks.high') : opt.value === 'low' ? t('tasks.low') : t('tasks.medium')}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 items-center">
-                    <button
-                      onClick={addTask}
-                      disabled={!newTaskDesc.trim() || !newTaskDate}
-                      className="flex items-center gap-1.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
-                    >
-                      <Plus size={13} />{t('leadModal.addTask')}
-                    </button>
-                    <input type="time" value={newTaskTime} onChange={e => setNewTaskTime(e.target.value)}
-                      className="bg-slate-700/80 border border-slate-600/50 text-white px-2 py-2 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 w-24" />
-                    <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)}
-                      className="flex-1 bg-slate-700/80 border border-slate-600/50 text-white px-2 py-2 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                  </div>
-                </div>
+                {/* The same dialog the tasks page uses. The inline form that
+                    was here offered only a description, a date and a priority,
+                    so a task created from a lead silently lacked the type,
+                    assignee and notes one created anywhere else would have. */}
+                <button
+                  onClick={() => setShowTaskModal(true)}
+                  className="w-full flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-400 text-white px-4 py-3 rounded-xl text-sm font-bold transition-all"
+                >
+                  <Plus size={15} /> {t('leadModal.addTask')}
+                </button>
 
                 {/* Tasks list */}
                 {data.tasks.length === 0 ? (
@@ -1865,7 +1853,18 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 ) : (
                   <div className="space-y-2">
                     {data.tasks.map(task => (
-                      <div key={task.id} className={`group flex items-center gap-3 rounded-xl px-4 py-3 border transition-all ${
+                      <div key={task.id}
+                        onClick={e => {
+                          // The row carries a delete and a complete control;
+                          // clicking either must not also open the task behind it.
+                          if ((e.target as HTMLElement).closest('button')) return;
+                          setViewTask(task);
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={e => { if (e.key === 'Enter') setViewTask(task); }}
+                        title="לחץ לצפייה במשימה"
+                        className={`group flex items-center gap-3 rounded-xl px-4 py-3 border transition-all cursor-pointer ${
                         task.completed ? 'bg-slate-800/40 border-slate-700/30 opacity-60' : 'bg-slate-800/80 border-slate-700/50 hover:border-slate-600'
                       }`}>
                         <button onClick={() => deleteTask(task.id)}
@@ -2375,6 +2374,40 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           workspace={workspace}
           onClose={() => setShowProposalEditor(false)}
           onToast={onToast}
+        />
+      )}
+
+      {/* ── New task, from this lead ────────────────────────────────── */}
+      {showTaskModal && (
+        <CreateTaskModal
+          leads={[data]}
+          lockedLead={data}
+          team={team ?? []}
+          currentUser={currentUser ?? ''}
+          onClose={() => setShowTaskModal(false)}
+          onAddToLead={(_leadId, task) => addTaskFromModal(task)}
+          // Not reachable: the lead is locked, so there is no way to produce a
+          // task with no lead attached from here.
+          onAddStandalone={() => setShowTaskModal(false)}
+        />
+      )}
+
+      {/* ── An existing task on this lead, opened by clicking its row ── */}
+      {viewTask && (
+        <CreateTaskModal
+          leads={[data]}
+          lockedLead={data}
+          initialTask={viewTask}
+          team={team ?? []}
+          currentUser={currentUser ?? ''}
+          onClose={() => setViewTask(null)}
+          onAddToLead={(_leadId, task) => {
+            const updated = { ...data, tasks: data.tasks.map(t => (t.id === task.id ? task : t)) };
+            setData(updated);
+            onUpdate(updated);
+            setViewTask(null);
+          }}
+          onAddStandalone={() => setViewTask(null)}
         />
       )}
     </>
