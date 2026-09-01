@@ -126,7 +126,11 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
     // A direct route to the checkout from the top of every page. The review
     // looks for a payment page, and a link only reachable by scrolling to the
     // pricing cards is one it can miss.
-    { label: 'רכישה', href: '/checkout?plan=pro' },
+    //
+    // The bare path, not /checkout?plan=pro: the page already defaults to Pro,
+    // so the parameter added nothing except noise in the address bar — and the
+    // clean URL is the one worth having shared and reviewed.
+    { label: 'רכישה', href: '/checkout' },
     { label: 'יצירת קשר', href: '#contact' },
   ];
 
@@ -1170,7 +1174,7 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
                 { label: 'תכונות',        href: '#features' },
                 { label: 'איך זה עובד',   href: '#how' },
                 { label: 'תמחור',         href: '#pricing' },
-                { label: 'רכישה ותשלום',  href: '/checkout?plan=pro' },
+                { label: 'רכישה ותשלום',  href: '/checkout' },
                 { label: 'אבטחת מידע',    href: '/security' },
                 { label: 'API למפתחים',   href: '/api' },
               ].map(l => (
