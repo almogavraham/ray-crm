@@ -123,6 +123,10 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
     { label: 'תכונות', href: '#features' },
     { label: 'איך זה עובד', href: '#how' },
     { label: 'תמחור', href: '#pricing' },
+    // A direct route to the checkout from the top of every page. The review
+    // looks for a payment page, and a link only reachable by scrolling to the
+    // pricing cards is one it can miss.
+    { label: 'רכישה', href: '/checkout?plan=pro' },
     { label: 'יצירת קשר', href: '#contact' },
   ];
 
@@ -982,12 +986,18 @@ function Pricing({ onSignUp }: { onSignUp: () => void }) {
                 {plan.name === 'Enterprise' ? 'צור קשר' : 'התחל ניסיון חינם'}
               </button>
 
+              {/* A real button, not a footnote. As a small underlined link
+                  under a prominent trial button it read as fine print, and the
+                  payment provider's site review reported finding no checkout
+                  page at all — the page existed, nobody could see the way in. */}
               {plan.name !== 'Enterprise' && (
                 <a href={`/checkout?plan=${plan.key}`}
-                  className={`-mt-5 mb-7 block text-center text-xs font-semibold underline underline-offset-2 transition-colors ${
-                    plan.highlight ? 'text-indigo-200 hover:text-white' : 'text-indigo-600 hover:text-indigo-800'
+                  className={`-mt-4 mb-7 w-full py-2.5 rounded-2xl text-sm font-bold text-center block transition-all border-2 ${
+                    plan.highlight
+                      ? 'border-white/40 text-white hover:bg-white/10'
+                      : 'border-indigo-200 text-indigo-700 hover:bg-indigo-50'
                   }`}>
-                  או רכישה מיידית
+                  רכישה ותשלום ←
                 </a>
               )}
 
@@ -1160,6 +1170,7 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
                 { label: 'תכונות',        href: '#features' },
                 { label: 'איך זה עובד',   href: '#how' },
                 { label: 'תמחור',         href: '#pricing' },
+                { label: 'רכישה ותשלום',  href: '/checkout?plan=pro' },
                 { label: 'אבטחת מידע',    href: '/security' },
                 { label: 'API למפתחים',   href: '/api' },
               ].map(l => (
@@ -1227,6 +1238,22 @@ export default function LandingPage({ onSignIn, onSignUp, isLoggedIn, isSuperAdm
   useScrollParallax();
   const { dir } = useLang();
   const t = useLandingT();
+
+  // Opening https://ray-crm.com/#pricing directly used to land at the top of
+  // the page: the browser looks for the element before React has rendered it,
+  // finds nothing, and gives up. Clicking the same link from the nav worked,
+  // which is what hid this — the section exists by then. Anyone arriving on a
+  // shared deep link saw the hero and had to find the section themselves.
+  useEffect(() => {
+    const id = window.location.hash.slice(1);
+    if (!id) return;
+    // Two frames: one for React to commit, one for layout to settle, so the
+    // target is at its final offset before we scroll to it.
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   return (
     <div className="min-h-screen bg-white" dir={dir}>
