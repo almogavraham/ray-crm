@@ -50,6 +50,7 @@ import type { StatusConfig } from './lib/statusConfig';
 import { markNotificationRead } from './lib/notifications';
 import LegalPages from './pages/LegalPages';
 import CheckoutPage from './pages/CheckoutPage';
+import ApiDocsPage from './pages/ApiDocsPage';
 import { ALL_PAGES } from './types';
 import { runAutoWorkflows } from './lib/automationEngine';
 import type { PendingSend } from './lib/automationEngine';
@@ -352,15 +353,16 @@ function AppInner() {
     // Legal pages. Without these a visit to /privacy is read as a workspace
     // slug and the visitor lands on a tenant login instead of the policy.
     'privacy', 'terms', 'accessibility',
-    // Checkout. Same hazard: without reserving it, /checkout resolves as a
-    // workspace slug and the buyer is shown a login screen instead.
-    'checkout']);
+    // Checkout and the API reference. Same hazard: without reserving these,
+    // they resolve as workspace slugs and the visitor gets a login screen.
+    'checkout', 'api']);
   const isSignupPath   = pathSegments[0] === 'signup' || urlSearch.get('signup') === '1';
   const isSigninPath   = pathSegments[0] === 'signin' || pathSegments[0] === 'login';
   const isForgotPath   = pathSegments[0] === 'forgot' || pathSegments[0] === 'forgot-password';
   const legalDoc       = (['privacy', 'terms', 'accessibility'] as const)
     .find(d => pathSegments[0] === d) ?? null;
   const isCheckout     = pathSegments[0] === 'checkout';
+  const isApiDocs      = pathSegments[0] === 'api';
   // Allow path-based slug on any domain (ray-crm.com/acme OR ray-crm-app.web.app/acme)
   const wsSlugFromPath = (!isAdminDomain && pathSegments.length === 1 && !RESERVED_PATHS.has(pathSegments[0]))
     ? pathSegments[0] : null;
@@ -1340,6 +1342,7 @@ function AppInner() {
   // that is waiting for one.
   if (legalDoc) return <LegalPages doc={legalDoc} />;
   if (isCheckout) return <CheckoutPage />;
+  if (isApiDocs) return <ApiDocsPage />;
 
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">

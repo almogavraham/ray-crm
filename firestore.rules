@@ -68,6 +68,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // API credentials. Only the hash of a key is stored, but the documents
+    // still map a hash to a workspace — and a client able to write here could
+    // point an existing key at someone else's data. Issued and revoked through
+    // callable functions, which check membership; never touched by a client.
+    match /apiKeys/{keyHash} {
+      allow read, write: if false;
+    }
+    match /apiRateLimits/{windowId} {
+      allow read, write: if false;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;

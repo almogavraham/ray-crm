@@ -1154,14 +1154,22 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
           </div>
 
           {[
-            { title: 'מוצר', links: ['תכונות', 'תמחור', 'אבטחה', 'API'] },
-            { title: 'חברה', links: ['אודות', 'בלוג', 'קריירה', 'יצירת קשר'] },
+            { title: 'מוצר', links: [
+              { label: 'תכונות', href: '#features' },
+              { label: 'תמחור',  href: '#pricing' },
+              { label: 'API למפתחים', href: '/api' },
+            ] },
+            { title: 'חברה', links: [
+              { label: 'יצירת קשר',   href: '#contact' },
+              { label: 'תנאי שימוש ותקנון', href: '/terms' },
+              { label: 'מדיניות פרטיות',    href: '/privacy' },
+            ] },
           ].map(col => (
             <div key={col.title}>
               <h4 className="text-slate-300 text-xs font-bold mb-4 tracking-widest uppercase">{col.title}</h4>
               <div className="space-y-2.5">
                 {col.links.map(l => (
-                  <a key={l} href="#" className="block text-slate-500 hover:text-slate-300 text-sm transition-colors">{l}</a>
+                  <a key={l.label} href={l.href} className="block text-slate-500 hover:text-slate-300 text-sm transition-colors">{l.label}</a>
                 ))}
               </div>
             </div>

@@ -6,6 +6,14 @@ exports.formSubmit = formIngest.formSubmit;
 const siteContact = require('./siteContact');
 exports.siteContact = siteContact.siteContact;
 
+// The public REST API other systems integrate against, plus the key
+// management the app calls to issue and revoke credentials for it.
+const publicApi = require('./publicApi');
+exports.api          = publicApi.api;
+exports.createApiKey = publicApi.createApiKey;
+exports.listApiKeys  = publicApi.listApiKeys;
+exports.revokeApiKey = publicApi.revokeApiKey;
+
 // Payments through Morning, which is also the invoicing system — so a
 // successful charge issues the חשבונית מס itself. Replaces Stripe, which
 // cannot be used at all: it does not support Israel as a merchant country.
