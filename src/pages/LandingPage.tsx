@@ -123,14 +123,9 @@ function Navbar({ onSignIn, onSignUp, isLoggedIn, isSuperAdmin, workspaceSlug }:
     { label: 'תכונות', href: '#features' },
     { label: 'איך זה עובד', href: '#how' },
     { label: 'תמחור', href: '#pricing' },
-    // A direct route to the checkout from the top of every page. The review
-    // looks for a payment page, and a link only reachable by scrolling to the
-    // pricing cards is one it can miss.
-    //
-    // The bare path, not /checkout?plan=pro: the page already defaults to Pro,
-    // so the parameter added nothing except noise in the address bar — and the
-    // clean URL is the one worth having shared and reviewed.
-    { label: 'רכישה', href: '/checkout' },
+    // Checkout is deliberately not in the top nav: the primary journey is the
+    // free trial, and a "buy" tab beside it competes with that. It stays
+    // reachable from the pricing cards and the footer.
     { label: 'יצירת קשר', href: '#contact' },
   ];
 
