@@ -182,7 +182,19 @@ exports.createMorningPayment = onCall(
         custom: JSON.stringify({ workspaceId, type, planKey: planKey ?? null }),
       });
     } catch (err) {
-      console.error('[createMorningPayment]', err.message);
+      // Morning's failures divide into two kinds, and the customer must only
+      // ever be shown one of them. "No active clearing terminal" is a setup
+      // problem in OUR account — telling a buyer to go and finish our payment
+      // settings exposes the inside of the business and gives them nothing
+      // they can act on. The real reason goes to the log, where it is useful.
+      const OPERATOR_SIDE = new Set([2600, 2601, 2602, 2606]);
+      console.error(`[createMorningPayment] ws=${workspaceId} type=${type}:`, err.message);
+      if (OPERATOR_SIDE.has(err.errorCode)) {
+        throw new HttpsError(
+          'unavailable',
+          'התשלומים אינם זמינים כרגע. נסה שוב מאוחר יותר, או צור קשר ונסדיר זאת עבורך.',
+        );
+      }
       throw new HttpsError('internal', err.message);
     }
 
