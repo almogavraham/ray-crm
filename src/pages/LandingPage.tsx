@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { SITE_LEGAL, telHref } from '../lib/siteLegal';
 import { withVat } from '../lib/vat';
 import {
   Zap, Check, BarChart3, Users, Brain, CheckSquare, Target,
@@ -7,7 +8,7 @@ import {
   GitBranch, Lock, Star, MessageSquare, Bell, Calendar,
   PieChart, Workflow, Settings2, UserCheck, PhoneCall,
   AlertTriangle, Clock, Filter, Repeat, BarChart2, Cpu,
-  Database, ArrowRight, Play, ChevronDown, Award, HeartHandshake,
+  Database, ArrowRight, Play, ChevronDown, Award, HeartHandshake, Phone, MapPin,
 } from 'lucide-react';
 import { useLang } from '../contexts/LangContext';
 import { useScrollParallax } from '../hooks/useScrollParallax';
@@ -1166,16 +1167,34 @@ function Footer({ onSignIn, onSignUp }: LandingPageProps) {
             </div>
           ))}
 
+          {/* Every value here comes from siteLegal, never retyped. The address
+              had been hard-coded and was still showing a mailbox that had since
+              been replaced everywhere else — which is how a published contact
+              channel quietly stops being one. */}
           <div>
             <h4 className="text-slate-300 text-xs font-bold mb-4 tracking-widest uppercase">יצירת קשר</h4>
-            <div className="space-y-2.5 mb-5">
-              <a href="mailto:hello@ray-crm.com" className="flex items-center gap-2 text-slate-500 hover:text-slate-300 text-sm transition-colors">
-                <Mail size={12} /> hello@ray-crm.com
+            <address className="not-italic space-y-2.5 mb-5">
+              <a href={`mailto:${SITE_LEGAL.contactEmail}`} className="flex items-center gap-2 text-slate-500 hover:text-slate-300 text-sm transition-colors">
+                <Mail size={12} className="flex-shrink-0" /> {SITE_LEGAL.contactEmail}
               </a>
-              <a href="#" className="flex items-center gap-2 text-slate-500 hover:text-slate-300 text-sm transition-colors">
-                <Globe size={12} /> ray-crm.com
+              <a href={telHref()} dir="ltr" className="flex items-center gap-2 justify-end text-slate-500 hover:text-slate-300 text-sm transition-colors">
+                {SITE_LEGAL.phone} <Phone size={12} className="flex-shrink-0" />
               </a>
-            </div>
+              <p className="flex items-center gap-2 text-slate-500 text-sm">
+                <MapPin size={12} className="flex-shrink-0" /> {SITE_LEGAL.address}
+              </p>
+              <a href={`https://${SITE_LEGAL.site}`} className="flex items-center gap-2 text-slate-500 hover:text-slate-300 text-sm transition-colors">
+                <Globe size={12} className="flex-shrink-0" /> {SITE_LEGAL.site}
+              </a>
+            </address>
+
+            {/* The operator's identity. Not decoration: an online seller is
+                required to publish its name and business number, and the
+                payment provider's site review checks for exactly this. */}
+            <p className="text-slate-500 text-xs leading-relaxed">
+              <span className="text-slate-400 font-semibold">{SITE_LEGAL.legalName}</span>
+              <br />עוסק מורשה {SITE_LEGAL.companyId}
+            </p>
           </div>
         </div>
 

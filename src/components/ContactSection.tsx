@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Send, Loader2, CheckCircle2, AlertCircle, Phone, Mail, Building2, User, MessageSquare } from 'lucide-react';
 import {
-  SITE_LEGAL, CONTACT_CONSENT_TEXT, CONTACT_CONSENT_VERSION, MARKETING_CONSENT_TEXT, telHref,
+  SITE_LEGAL, CONTACT_CONSENT_TEXT, CONTACT_CONSENT_VERSION, MARKETING_CONSENT_TEXT,
 } from '../lib/siteLegal';
 
 const ENDPOINT = 'https://us-central1-chex-crm.cloudfunctions.net/siteContact';
@@ -239,31 +239,6 @@ export default function ContactSection() {
           </p>
         </form>
 
-        {/* Business identity, published rather than tucked into a legal page.
-            A card processor will not approve a site for payment without the
-            operator's name, business number, physical address and phone
-            visible on it, next to a cancellation policy — so this block is a
-            prerequisite for taking payment at all, not a footer nicety. */}
-        <address className="mt-8 not-italic text-center text-[13px] leading-relaxed text-slate-500">
-          <span className="font-bold text-slate-700">{SITE_LEGAL.legalName}</span>
-          {' · '}עוסק מורשה {SITE_LEGAL.companyId}
-          <br />
-          {SITE_LEGAL.address}
-          {' · '}
-          <a href={telHref()} dir="ltr" className="text-indigo-600 underline">
-            {SITE_LEGAL.phone}
-          </a>
-          {' · '}
-          <a href={`mailto:${SITE_LEGAL.contactEmail}`} className="text-indigo-600 underline">
-            {SITE_LEGAL.contactEmail}
-          </a>
-          <br />
-          <a href="/terms" className="text-indigo-600 underline">תנאי שימוש ותקנון ביטולים</a>
-          {' · '}
-          <a href="/privacy" className="text-indigo-600 underline">מדיניות פרטיות</a>
-          {' · '}
-          <a href="/accessibility" className="text-indigo-600 underline">הצהרת נגישות</a>
-        </address>
       </div>
     </section>
   );

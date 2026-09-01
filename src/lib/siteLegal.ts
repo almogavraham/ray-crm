@@ -26,10 +26,17 @@ export const SITE_LEGAL = {
   /** Published business phone. Israeli local format; tel: link is built from it. */
   phone: '03-7221650',
 
-  /** Real, monitored addresses — safe to publish. */
-  contactEmail: 'hello@ray-crm.com',
-  privacyEmail: 'hello@ray-crm.com',
-  accessibilityEmail: 'hello@ray-crm.com',
+  /**
+   * Real, monitored addresses — safe to publish.
+   *
+   * All three point at the same working mailbox on purpose. The privacy and
+   * accessibility addresses are legal contact channels: a request sent to one
+   * has to actually reach someone, so pointing them at an address that is not
+   * watched would be worse than having none at all.
+   */
+  contactEmail: 'office@ray-digital-agency.com',
+  privacyEmail: 'office@ray-digital-agency.com',
+  accessibilityEmail: 'office@ray-digital-agency.com',
 
   /** Person responsible for accessibility. Empty until appointed. */
   accessibilityOfficer: '',
