@@ -3,26 +3,28 @@
  *
  * Google hands a browser client an access token that expires in ~1 hour and
  * gives NO refresh token. So a mailbox that was connected yesterday reads as
- * "disconnected" today even though nothing was revoked — which is exactly the
- * failure the user kept hitting.
+ * "disconnected" today even though nothing was revoked.
  *
- * The fix available to a pure browser app is to re-mint continuously. Because
- * consent was already granted, `prompt: ''` returns a fresh token with no popup
- * and no user interaction. This module does that:
+ * What this module does, and — just as important — what it no longer does:
  *
- *   • once on app start,
- *   • every 45 minutes while a tab is open,
- *   • whenever the tab regains focus (covers laptop sleep, which stops timers),
- *   • and on demand, before any operation that needs a live token.
+ *   • On app start and whenever a tab regains focus it ADOPTS a cached token
+ *     that is still live. That is the whole of the automatic behaviour.
+ *   • It re-mints a token only when an operation actually needs one
+ *     (`getLiveGmailToken` / `ensureFreshGmailToken`), preferring the
+ *     server-held refresh token, which needs no popup and no open tab.
  *
- * The refreshed token is written back to Firestore, so every surface (email
- * agent, copilots, scheduled scans that run while a tab is open) sees it.
+ * It used to re-mint automatically on load, every 45 minutes and on every
+ * focus. `requestAccessToken({ prompt: '' })` skips the *consent* screen, but
+ * it still opens Google's OAuth window — on desktop the browser blocked it
+ * ("Failed to open popup window" in the console, harmless), on a phone it
+ * opened full-screen as a Google sign-in the moment the app loaded, and the
+ * app was unusable behind it. A background job must never be allowed to put a
+ * Google login in front of someone who was opening their CRM.
  *
- * LIMIT worth being honest about: this only runs while the app is open in a
- * browser. Staying connected with every tab closed needs the server to hold a
- * refresh token, which requires switching from the implicit token flow to the
- * authorization-code flow (`initCodeClient` + `access_type=offline`) and
- * exchanging the code in a Cloud Function that holds the client secret.
+ * LIMIT worth being honest about: the implicit browser flow cannot refresh
+ * without a Google window. Staying connected with no popups at all requires
+ * the permanent connection (authorization-code flow in gmailServerAuth), which
+ * the UI offers and this module prefers whenever it exists.
  */
 
 import {
@@ -32,10 +34,8 @@ import type { EmailAgentConfig } from '../types';
 
 /** Re-mint when fewer than this many ms remain, so callers never race expiry. */
 const REFRESH_MARGIN_MS = 10 * 60 * 1000;   // 10 minutes
-const REFRESH_EVERY_MS  = 45 * 60 * 1000;   // comfortably inside the ~60-min life
 const TOKEN_LIFE_MS     = 58 * 60 * 1000;   // what we record after a refresh
 
-let timer: ReturnType<typeof setInterval> | null = null;
 let currentWid: string | null = null;
 let fallbackClientId: string | undefined;
 let inFlight: Promise<boolean> | null = null;
@@ -52,9 +52,48 @@ export function getKeepAliveState(): KeepAliveState {
 }
 
 /**
+ * A phone or tablet. The implicit OAuth window cannot be opened silently there:
+ * it takes over the screen. On these devices only the server-held connection
+ * refreshes on its own; the browser flow runs only from an explicit reconnect.
+ */
+function isTouchDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+/**
+ * Bring any still-live cached token into memory. No network, no Google window.
+ * This is everything the automatic path is allowed to do.
+ */
+async function adoptCachedTokens(wid: string): Promise<boolean> {
+  try {
+    const cfg = await loadAgentConfig(wid);
+    const accounts = cfg?.accounts?.filter(a => a.provider === 'gmail') ?? [];
+    let anyLive = false;
+    let liveEmail: string | undefined;
+    for (const acct of accounts) {
+      const healthy = acct.cachedToken && acct.cachedTokenExpiry
+        && acct.cachedTokenExpiry - Date.now() > REFRESH_MARGIN_MS;
+      if (healthy) {
+        adoptToken(acct.cachedToken!, acct.cachedTokenExpiry!);
+        anyLive = true; liveEmail ??= acct.email;
+      }
+    }
+    lastResult = { at: Date.now(), ok: anyLive, email: liveEmail };
+    return anyLive;
+  } catch {
+    lastResult = { at: Date.now(), ok: false };
+    return false;
+  }
+}
+
+/**
  * Refresh every Gmail account whose token is missing or near expiry.
  * Returns true if at least one account ended up with a live token.
- * Concurrent calls share one run — several surfaces mount at once on load.
+ * Concurrent calls share one run.
+ *
+ * This opens Google's OAuth window when a re-mint is needed, so it is called
+ * only from an operation the user started — never from a timer or on load.
  */
 export async function refreshGmailTokens(
   wid: string,
@@ -78,13 +117,14 @@ export async function refreshGmailTokens(
         const healthy = acct.cachedTokenExpiry
           && acct.cachedTokenExpiry - Date.now() > REFRESH_MARGIN_MS;
         if (healthy && !force) {
-          // Adopt the cached token into memory. Reporting "live" without doing
-          // this was the deadlock: the account looked healthy so no new token
-          // was minted, while getActiveToken() had nothing to return.
           if (acct.cachedToken) adoptToken(acct.cachedToken, acct.cachedTokenExpiry!);
           anyLive = true; liveEmail ??= acct.email;
           continue;
         }
+
+        // On a phone the "silent" request is a full-screen Google page. Not from
+        // here; the explicit reconnect button is the only place that may do it.
+        if (isTouchDevice()) continue;
 
         const clientId = acct.clientId || clientIdFallback;
         if (!clientId) continue;
@@ -98,9 +138,8 @@ export async function refreshGmailTokens(
           }
           anyLive = true; liveEmail ??= acct.email;
         } catch {
-          // Silent refresh needs consent again (revoked, signed out of Google,
-          // or a different client). Leave the account alone — the UI still
-          // offers an explicit reconnect.
+          // Consent is needed again (revoked, signed out, different client).
+          // Leave the account alone — the UI still offers an explicit reconnect.
         }
       }
 
@@ -121,15 +160,12 @@ export async function refreshGmailTokens(
 }
 
 /**
- * The token to use right now: the cached one if it is still live, otherwise a
- * silently re-minted one.
+ * The token to use right now: the cached one if it is still live, otherwise the
+ * server-held connection, otherwise a re-minted browser token.
  *
- * Every surface should call this instead of `getActiveToken()`. That accessor is
- * synchronous, so it can only report the in-memory token — and it returns null
- * the moment that token ages out, which is why a mailbox that was connected an
- * hour ago reported itself disconnected. Consent has not been withdrawn in that
- * situation; only the short-lived token has lapsed, and it can be replaced with
- * no popup.
+ * Every surface should call this instead of `getActiveToken()`. That accessor
+ * is synchronous and only reports the in-memory token, which is why a mailbox
+ * connected an hour ago reported itself disconnected.
  *
  * Returns null only when consent is genuinely gone — revoked, or signed out.
  */
@@ -159,16 +195,16 @@ export async function ensureFreshGmailToken(wid: string, clientIdFallback?: stri
 }
 
 function onFocus() {
-  // Timers do not fire while the machine sleeps, so a wake-up can find a token
-  // that expired hours ago. Re-check whenever the tab becomes visible again.
+  // A wake-up can find a token that expired hours ago. Re-read the cache; do
+  // not mint — that would put a Google window on screen unasked.
   if (document.visibilityState === 'visible' && currentWid) {
-    void refreshGmailTokens(currentWid, fallbackClientId);
+    void adoptCachedTokens(currentWid);
   }
 }
 
 /**
- * Start keeping this workspace's Gmail connection alive. Idempotent, and safe
- * to call again when the workspace changes.
+ * Start tracking this workspace's Gmail connection. Idempotent, and safe to
+ * call again when the workspace changes. Adopts cached tokens; never mints.
  */
 export function startGmailKeepAlive(wid: string | undefined | null, clientIdFallback?: string): void {
   stopGmailKeepAlive();
@@ -177,16 +213,14 @@ export function startGmailKeepAlive(wid: string | undefined | null, clientIdFall
   currentWid = wid;
   fallbackClientId = clientIdFallback;
 
-  void refreshGmailTokens(wid, clientIdFallback);
-  timer = setInterval(() => { void refreshGmailTokens(wid, clientIdFallback); }, REFRESH_EVERY_MS);
-
+  void adoptCachedTokens(wid);
   document.addEventListener('visibilitychange', onFocus);
   window.addEventListener('online', onFocus);
 }
 
 export function stopGmailKeepAlive(): void {
-  if (timer) { clearInterval(timer); timer = null; }
   document.removeEventListener('visibilitychange', onFocus);
   window.removeEventListener('online', onFocus);
   currentWid = null;
+  fallbackClientId = undefined;
 }

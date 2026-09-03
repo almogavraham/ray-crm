@@ -535,8 +535,9 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
           const wid = needWid();
           const eng = imageEngine ?? 'pollinations';
           setWorking(`יוצר תמונה ב-${ENGINE_BY_ID[eng].label}…`);
-          const { url, model } = await generateImageWith(eng, act.prompt, act.aspect ?? '1:1', wid);
-          say(`הנה התמונה 👇 (${ENGINE_BY_ID[eng].label}${model ? ` · ${model}` : ''}) אם היא מתאימה — אפשר לפרסם, לתזמן, או להנפיש לסרטון.`, [
+          const { url, model, charged, currency } = await generateImageWith(eng, act.prompt, act.aspect ?? '1:1', wid);
+          const cost = charged ? ` · חויב ${currency === 'ILS' ? '₪' : '$'}${charged.toFixed(2)}` : '';
+          say(`הנה התמונה 👇 (${ENGINE_BY_ID[eng].label}${model ? ` · ${model}` : ''}${cost}) אם היא מתאימה — אפשר לפרסם, לתזמן, או להנפיש לסרטון.`, [
             { type: 'image', url, caption: act.label || act.prompt.slice(0, 80) },
           ], videoEngine ? [{ type: 'generate_video', prompt: `${act.prompt}. Subtle natural motion, slow camera push-in.`, imageUrl: url, aspect: '16:9', label: `🎬 הנפש לסרטון (${ENGINE_BY_ID[videoEngine].label})` }] : undefined);
           markDone(msgIdx, key);
@@ -553,10 +554,11 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
           }
           const eng = videoEngine;
           setWorking(`מייצר וידאו ב-${ENGINE_BY_ID[eng].label}…`);
-          const { url } = await generateVideoWith(eng, act.prompt, act.aspect ?? '16:9', wid, {
+          const { url, charged, currency } = await generateVideoWith(eng, act.prompt, act.aspect ?? '16:9', wid, {
             duration: act.duration ?? 5, imageUrl: act.imageUrl, onStage: setWorking,
           });
-          say(`הסרטון מוכן 🎬 (${ENGINE_BY_ID[eng].label})\n${url}\nאפשר להוריד אותו מהקישור, או לבקש גרסה אחרת.`, [
+          const vcost = charged ? ` · חויב ${currency === 'ILS' ? '₪' : '$'}${charged.toFixed(2)}` : '';
+          say(`הסרטון מוכן 🎬 (${ENGINE_BY_ID[eng].label}${vcost})\n${url}\nאפשר להוריד אותו מהקישור, או לבקש גרסה אחרת.`, [
             { type: 'quote', label: 'פרומפט', text: act.prompt },
           ]);
           markDone(msgIdx, key);

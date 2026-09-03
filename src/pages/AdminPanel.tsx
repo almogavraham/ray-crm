@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import MorningPaymentsPanel from '../components/MorningPaymentsPanel';
 import type { EngineId, EngineKind, EngineStatus } from '../lib/mediaEngines';
+import type { EngineBudgets, ProviderId } from '../lib/engineBudgets';
+import { PROVIDERS, PROVIDER_BY_ID, PRICE, CLIENT_MULTIPLIER, fmtMoney, loadEngineBudgets, setProviderLoaded, addEngineTokens, sumField } from '../lib/engineBudgets';
 import { ENGINES, fetchEngineStatus, saveMediaKeys, testEngine } from '../lib/mediaEngines';
 import {
   Users, Building2, TrendingUp, Shield, AlertTriangle, CheckCircle2,
@@ -2017,6 +2019,37 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
     getAdminQuota().then(q => { setQuota(q); setQuotaLoading(false); });
   }, []);
 
+  /* ── Media-engine budgets (per provider) ───────────────────────────────── */
+  const [engineBudgets, setEngineBudgets] = useState<EngineBudgets>({});
+  const [loadedInput,   setLoadedInput]   = useState<Record<string, string>>({});
+  const [grantWs,       setGrantWs]       = useState<string>('');
+  const [grantProvider, setGrantProvider] = useState<ProviderId>('google');
+  const [grantAmount,   setGrantAmount]   = useState('');
+  const [grantBusy,     setGrantBusy]     = useState(false);
+  useEffect(() => { void loadEngineBudgets().then(setEngineBudgets); }, []);
+
+  const saveLoaded = async (provider: ProviderId) => {
+    const amt = parseFloat(loadedInput[provider] ?? '');
+    if (isNaN(amt) || amt < 0) return;
+    await setProviderLoaded(provider, amt);
+    setEngineBudgets(b => ({ ...b, [provider]: { loaded: amt, usedReal: b[provider]?.usedReal ?? 0 } }));
+    setLoadedInput(i => ({ ...i, [provider]: '' }));
+    onToast(`יתרת ${PROVIDER_BY_ID[provider].label} עודכנה ✓`, 'success');
+  };
+
+  const grantEngine = async () => {
+    const amt = parseFloat(grantAmount);
+    if (!grantWs || isNaN(amt) || amt <= 0) return;
+    setGrantBusy(true);
+    try {
+      await addEngineTokens(grantWs, grantProvider, amt);
+      onToast(`${fmtMoney(amt, PROVIDER_BY_ID[grantProvider].currency)} ${PROVIDER_BY_ID[grantProvider].label} נוספו ✓`, 'success');
+      setGrantAmount('');
+      onRefresh();
+    } catch (e) { onToast(`שגיאה: ${(e as Error).message}`, 'error'); }
+    finally { setGrantBusy(false); }
+  };
+
   /* Real admin cost per workspace — virtual dollars ÷ 2 = real Anthropic cost */
   const realAdminCostForWs = (ws: WorkspaceProfile): number => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2273,6 +2306,122 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
           <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
           עלות לי = וירטואלי ÷ 2 (מארק-אפ ×2)
         </span>
+      </div>
+
+      {/* ── MEDIA ENGINE METERS ─────────────────────────────────────────────
+          One meter per provider, in the currency the operator pays it in.
+          Imagen and Veo share the Google meter because they share the bill. */}
+      <div className="rounded-2xl p-5 space-y-4" style={{ background: 'rgba(20,184,166,0.06)', border: '1px solid rgba(20,184,166,0.25)' }}>
+        <div>
+          <p className="text-white/50 text-xs font-semibold uppercase tracking-widest">🎨 מנועי תמונות ווידאו — כסף אמיתי לפי ספק</p>
+          <p className="text-white/35 text-[11px] mt-1">כל יצירה מחייבת את הלקוח ×2 מהמחיר האמיתי ומורידה את המחיר האמיתי מהמד. הלקוח לא יכול ליצור בלי יתרה בספק המתאים.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {PROVIDERS.map(pv => {
+            // A freshly set meter has `loaded` and no `usedReal` yet; without
+            // the defaults the first render said "NaN₪".
+            const raw = engineBudgets[pv.id];
+            const b = { loaded: Number(raw?.loaded ?? 0), usedReal: Number(raw?.usedReal ?? 0) };
+            const remaining = b.loaded - b.usedReal;
+            const promised  = sumField(workspaces, 'engineBalances', pv.id) / CLIENT_MULTIPLIER;
+            const free      = remaining - promised;
+            const pct       = b.loaded > 0 ? Math.max(0, Math.min(100, Math.round((remaining / b.loaded) * 100))) : 0;
+            const prices    = pv.engines.map(e => `${e}: ${fmtMoney(PRICE[e], pv.currency)}`).join(' · ');
+            return (
+              <div key={pv.id} className="rounded-xl p-4 space-y-2" style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${pv.color}40` }}>
+                <div className="flex items-center justify-between">
+                  <a href={pv.billingUrl} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-300 hover:underline">טעינה ↗</a>
+                  <span className="font-bold text-sm" style={{ color: pv.color }}>{pv.label}</span>
+                </div>
+                <div className="flex items-end gap-2 justify-end">
+                  <span className="text-[11px] text-white/40 mb-1">נשאר מתוך {fmtMoney(b.loaded, pv.currency)}</span>
+                  <span className={`text-3xl font-black tabular-nums ${remaining > b.loaded * 0.3 ? 'text-emerald-400' : remaining > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                    {fmtMoney(remaining, pv.currency)}
+                  </span>
+                </div>
+                <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: pv.color }} />
+                </div>
+                <div className="flex justify-between text-[10px] text-white/45">
+                  <span>הובטח ללקוחות: {fmtMoney(promised, pv.currency)}</span>
+                  <span className={free < 0 ? 'text-red-300 font-bold' : ''}>פנוי להקצאה: {fmtMoney(free, pv.currency)}</span>
+                </div>
+                <p className="text-[10px] text-white/30">מחיר אמיתי ליצירה — {prices}</p>
+                <div className="flex gap-1.5 pt-1">
+                  <input type="number" min="0" step="0.01" dir="ltr"
+                    placeholder={`סה"כ טענת ב-${pv.currency === 'ILS' ? '₪' : '$'}`}
+                    value={loadedInput[pv.id] ?? ''}
+                    onChange={e => setLoadedInput(i => ({ ...i, [pv.id]: e.target.value }))}
+                    className="flex-1 bg-white/5 border border-white/15 rounded-lg px-2 py-1.5 text-xs text-white/90 placeholder-white/25 focus:outline-none text-center" />
+                  <button onClick={() => void saveLoaded(pv.id)} disabled={!loadedInput[pv.id]}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-40"
+                    style={{ background: pv.color }}>עדכן</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Grant engine credit to a workspace */}
+        <div className="rounded-xl p-4 flex flex-wrap items-end gap-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div className="flex-1 min-w-[180px]">
+            <label className="block text-[10px] text-white/45 mb-1">סביבת עבודה</label>
+            <select value={grantWs} onChange={e => setGrantWs(e.target.value)}
+              className="w-full bg-white/5 border border-white/15 rounded-lg px-2 py-2 text-xs text-white/90 focus:outline-none">
+              <option value="">בחר סביבה…</option>
+              {workspaces.map(w => <option key={w.id} value={w.id} style={{ color: '#111' }}>{w.name}</option>)}
+            </select>
+          </div>
+          <div className="min-w-[170px]">
+            <label className="block text-[10px] text-white/45 mb-1">ספק</label>
+            <select value={grantProvider} onChange={e => setGrantProvider(e.target.value as ProviderId)}
+              className="w-full bg-white/5 border border-white/15 rounded-lg px-2 py-2 text-xs text-white/90 focus:outline-none">
+              {PROVIDERS.map(pv => <option key={pv.id} value={pv.id} style={{ color: '#111' }}>{pv.label} ({pv.currency})</option>)}
+            </select>
+          </div>
+          <div className="w-28">
+            <label className="block text-[10px] text-white/45 mb-1">סכום ללקוח ({PROVIDER_BY_ID[grantProvider].currency === 'ILS' ? '₪' : '$'})</label>
+            <input type="number" min="0" step="0.5" dir="ltr" value={grantAmount} onChange={e => setGrantAmount(e.target.value)}
+              className="w-full bg-white/5 border border-white/15 rounded-lg px-2 py-2 text-xs text-white/90 focus:outline-none text-center" />
+          </div>
+          <button onClick={() => void grantEngine()} disabled={grantBusy || !grantWs || !grantAmount}
+            className="px-4 py-2 rounded-lg text-xs font-bold text-white disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg,#14b8a6,#0d9488)' }}>
+            {grantBusy ? '…' : '➕ הוסף יתרת מנוע'}
+          </button>
+          <p className="w-full text-[10px] text-white/30">עלות אמיתית לך = מחצית מהסכום שהלקוח מקבל (מארק-אפ ×2), ורק כשהוא באמת יוצר.</p>
+        </div>
+
+        {/* Per-workspace engine balances */}
+        {workspaces.some(w => w.engineBalances && Object.values(w.engineBalances).some(v => Number(v) > 0)) && (
+          <div className="overflow-x-auto" dir="ltr">
+            <table className="w-full text-xs" dir="rtl">
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                  <th className="text-right px-3 py-2 text-white/50 font-semibold">סביבה</th>
+                  {PROVIDERS.map(pv => <th key={pv.id} className="text-center px-3 py-2 font-semibold" style={{ color: pv.color }}>{pv.label.split(' ')[0]}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {workspaces.filter(w => w.engineBalances && Object.values(w.engineBalances).some(v => Number(v) > 0)).map(w => (
+                  <tr key={w.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <td className="px-3 py-2 text-white/80 font-semibold">{w.name}</td>
+                    {PROVIDERS.map(pv => {
+                      const bal = Number(w.engineBalances?.[pv.id] ?? 0);
+                      const used = Number(w.engineUsed?.[pv.id] ?? 0);
+                      return (
+                        <td key={pv.id} className="px-3 py-2 text-center tabular-nums">
+                          <span className={bal > 0 ? 'text-white/85 font-bold' : 'text-white/25'}>{fmtMoney(bal, pv.currency)}</span>
+                          {used > 0 && <span className="block text-[9px] text-white/35">שימוש אמיתי {fmtMoney(used, pv.currency)}</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ── Workspace table ────────────────────────────────────────────────── */}

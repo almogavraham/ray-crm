@@ -42,6 +42,57 @@ const ENGINES = {
   runway:       { kind: 'video', keys: ['runway'] },
 };
 
+/* ── Money ────────────────────────────────────────────────────────────────
+ * Budgets are per PROVIDER (that is how the bills arrive: Imagen and Veo share
+ * one Google balance), metered in the currency the operator pays in. A
+ * generation charges the customer's virtual balance real × 2 — the same margin
+ * as Anthropic tokens — and records the real price on the operator's meter.
+ * Pollinations is free and skips all of it.
+ * Keep PRICE in step with src/lib/engineBudgets.ts, which shows these numbers. */
+const PROVIDER_OF = { imagen: 'google', veo: 'google', dalle: 'openai', ideogram: 'ideogram', kling: 'kling', runway: 'runway' };
+const CURRENCY = { google: 'ILS', openai: 'USD', ideogram: 'USD', kling: 'USD', runway: 'USD' };
+const PRICE = { pollinations: 0, imagen: 0.15, veo: 10, dalle: 0.04, ideogram: 0.08, kling: 0.14, runway: 0.25 };
+const CLIENT_MULTIPLIER = 2;
+
+/** Refuse before spending the operator's money when the workspace has none of it. */
+async function requireEngineBalance(db, wid, engine) {
+  const provider = PROVIDER_OF[engine];
+  if (!provider) return null;
+  const price = PRICE[engine] ?? 0;
+  const snap = await db.collection('workspaces').doc(wid).get();
+  const bal = Number(snap.data()?.engineBalances?.[provider] ?? 0);
+  const need = price * CLIENT_MULTIPLIER;
+  if (bal + 1e-9 < need) {
+    const cur = CURRENCY[provider] === 'ILS' ? '₪' : '$';
+    throw new HttpsError('resource-exhausted',
+      `אין מספיק יתרה ל-${provider} בסביבה זו (יש ${cur}${bal.toFixed(2)}, נדרש ${cur}${need.toFixed(2)}). האדמין יכול להוסיף בלוח האדמין ← טוקנים ← מנועי מדיה.`);
+  }
+  return { provider, price, charged: need };
+}
+
+/** Record a successful generation: customer virtual balance, operator meter. */
+async function chargeEngine(db, wid, engine, meta) {
+  const { provider, price, charged } = meta;
+  const entry = {
+    id: `eu_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    provider, type: 'usage', amount: -charged, engine,
+    description: `${engine} generation`, timestamp: new Date().toISOString(),
+  };
+  const wsRef = db.collection('workspaces').doc(wid);
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(wsRef);
+    const bal = Number(snap.data()?.engineBalances?.[provider] ?? 0);
+    tx.update(wsRef, {
+      [`engineBalances.${provider}`]: Math.max(0, bal - charged),
+      [`engineUsed.${provider}`]: admin.firestore.FieldValue.increment(price),
+      engineHistory: admin.firestore.FieldValue.arrayUnion(entry),
+    });
+  });
+  await db.doc('system/engineBudgets').set(
+    { [provider]: { usedReal: admin.firestore.FieldValue.increment(price) } }, { merge: true },
+  ).catch(e => console.warn('[chargeEngine] meter update failed', e.message));
+}
+
 /** Every key name the admin page may write. Anything else is dropped. */
 const KEY_NAMES = ['openai', 'google', 'ideogram', 'klingAccessKey', 'klingSecretKey', 'runway', 'heygen', 'canva'];
 
@@ -227,6 +278,19 @@ exports.generateMedia = onCall(
     if (!def.keys.every(k => keys[k])) {
       throw new HttpsError('failed-precondition', `המנוע ${engine} לא מוגדר — הוסף מפתח בלוח האדמין ← אינטגרציות`);
     }
+    const db = admin.firestore();
+    const charge = await requireEngineBalance(db, workspaceId, engine);
+
+    // Wraps a finished result: charge, then hand back what was charged so the
+    // chat can say so. Long-running video engines charge on task completion
+    // in mediaTaskStatus instead, when the file actually exists.
+    const done = async (result) => {
+      if (charge && result.url) {
+        await chargeEngine(db, workspaceId, engine, charge);
+        return { ...result, charged: charge.charged, currency: CURRENCY[charge.provider] };
+      }
+      return result;
+    };
 
     try {
       switch (engine) {
@@ -241,7 +305,7 @@ exports.generateMedia = onCall(
             if (!r.ok) { last = `HTTP ${r.status}`; continue; }
             const bytes = Buffer.from(await r.arrayBuffer());
             if (bytes.length < 500) { last = 'empty image'; continue; }
-            return { url: await store(workspaceId, bytes, 'image/jpeg', 'jpg'), engine, model: models[i] };
+            return done({ url: await store(workspaceId, bytes, 'image/jpeg', 'jpg'), engine, model: models[i] });
           }
           throw new Error(`Pollinations: ${last || 'no image'}`);
         }
@@ -256,7 +320,7 @@ exports.generateMedia = onCall(
           if (!r.ok) throw new Error(d.error?.message ?? `HTTP ${r.status}`);
           const b64 = d.data?.[0]?.b64_json;
           if (!b64) throw new Error('DALL·E returned no image');
-          return { url: await store(workspaceId, Buffer.from(b64, 'base64'), 'image/png', 'png'), engine, model: 'dall-e-3' };
+          return done({ url: await store(workspaceId, Buffer.from(b64, 'base64'), 'image/png', 'png'), engine, model: 'dall-e-3' });
         }
 
         case 'imagen': {
@@ -275,7 +339,7 @@ exports.generateMedia = onCall(
             const b64 = d.generatedImages?.[0]?.image?.imageBytes ?? p.bytesBase64Encoded;
             if (!b64) { last = `${model} returned no image`; continue; }
             const mime = p.mimeType ?? 'image/png';
-            return { url: await store(workspaceId, Buffer.from(b64, 'base64'), mime, mime.includes('jpeg') ? 'jpg' : 'png'), engine, model };
+            return done({ url: await store(workspaceId, Buffer.from(b64, 'base64'), mime, mime.includes('jpeg') ? 'jpg' : 'png'), engine, model });
           }
           for (const model of ['gemini-2.5-flash-image']) {
             const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keys.google}`, {
@@ -287,7 +351,7 @@ exports.generateMedia = onCall(
             const part = (d.candidates?.[0]?.content?.parts ?? []).find(x => x.inlineData?.mimeType?.startsWith('image/'));
             if (!part) { last = `${model} returned no image`; continue; }
             const mime = part.inlineData.mimeType;
-            return { url: await store(workspaceId, Buffer.from(part.inlineData.data, 'base64'), mime, mime.includes('jpeg') ? 'jpg' : 'png'), engine, model };
+            return done({ url: await store(workspaceId, Buffer.from(part.inlineData.data, 'base64'), mime, mime.includes('jpeg') ? 'jpg' : 'png'), engine, model });
           }
           throw new Error(`Imagen: ${last}`);
         }
@@ -303,7 +367,7 @@ exports.generateMedia = onCall(
           const src = d.data?.[0]?.url;
           if (!src) throw new Error('Ideogram returned no image');
           // Ideogram URLs expire; keep our own copy.
-          return { url: await store(workspaceId, await fetchBytes(src), 'image/png', 'png'), engine, model: 'V_2' };
+          return done({ url: await store(workspaceId, await fetchBytes(src), 'image/png', 'png'), engine, model: 'V_2' });
         }
 
         case 'veo': {
@@ -331,11 +395,11 @@ exports.generateMedia = onCall(
             const pred = d.response?.predictions?.[0] ?? {};
             const b64 = s.bytesBase64Encoded ?? pred.bytesBase64Encoded;
             const uri = s.video?.uri ?? pred.uri ?? pred.gcsUri;
-            if (b64) return { url: await store(workspaceId, Buffer.from(b64, 'base64'), 'video/mp4', 'mp4'), engine, model: used };
+            if (b64) return done({ url: await store(workspaceId, Buffer.from(b64, 'base64'), 'video/mp4', 'mp4'), engine, model: used });
             if (uri) {
               const dl = uri.startsWith('gs://') ? uri.replace('gs://', 'https://storage.googleapis.com/') : uri;
               const bytes = await fetchBytes(dl, { 'x-goog-api-key': keys.google });
-              return { url: await store(workspaceId, bytes, 'video/mp4', 'mp4'), engine, model: used };
+              return done({ url: await store(workspaceId, bytes, 'video/mp4', 'mp4'), engine, model: used });
             }
             throw new Error('Veo finished without a video');
           }
@@ -388,6 +452,7 @@ exports.mediaTaskStatus = onCall({ region: 'us-central1', timeoutSeconds: 60 }, 
   const { engine, taskId, workspaceId } = request.data ?? {};
   if (!taskId || !workspaceId) throw new HttpsError('invalid-argument', 'taskId and workspaceId are required');
   const keys = await loadKeys();
+  const db = admin.firestore();
 
   if (engine === 'kling') {
     const jwt = klingJwt(keys.klingAccessKey, keys.klingSecretKey);
@@ -398,7 +463,10 @@ exports.mediaTaskStatus = onCall({ region: 'us-central1', timeoutSeconds: 60 }, 
     if (t.task_status === 'failed') return { status: 'failed', message: t.task_status_msg ?? '' };
     const v = t.task_status === 'succeed' && t.task_result?.videos?.[0];
     if (!v) return { status: 'processing', message: t.task_status_msg ?? '' };
-    return { status: 'done', url: await store(workspaceId, await fetchBytes(v.url), 'video/mp4', 'mp4'), thumbnailUrl: v.cover_image_url ?? null };
+    const url = await store(workspaceId, await fetchBytes(v.url), 'video/mp4', 'mp4');
+    const meta = { provider: 'kling', price: PRICE.kling, charged: PRICE.kling * CLIENT_MULTIPLIER };
+    await chargeEngine(db, workspaceId, 'kling', meta);
+    return { status: 'done', url, thumbnailUrl: v.cover_image_url ?? null, charged: meta.charged, currency: 'USD' };
   }
 
   if (engine === 'runway') {
@@ -411,7 +479,10 @@ exports.mediaTaskStatus = onCall({ region: 'us-central1', timeoutSeconds: 60 }, 
     if (d.status !== 'SUCCEEDED') return { status: 'processing', progress: d.progress ?? 0 };
     const src = d.output?.[0];
     if (!src) return { status: 'failed', message: 'no output' };
-    return { status: 'done', url: await store(workspaceId, await fetchBytes(src), 'video/mp4', 'mp4') };
+    const url = await store(workspaceId, await fetchBytes(src), 'video/mp4', 'mp4');
+    const meta = { provider: 'runway', price: PRICE.runway, charged: PRICE.runway * CLIENT_MULTIPLIER };
+    await chargeEngine(db, workspaceId, 'runway', meta);
+    return { status: 'done', url, charged: meta.charged, currency: 'USD' };
   }
 
   throw new HttpsError('invalid-argument', `No task polling for ${engine}`);

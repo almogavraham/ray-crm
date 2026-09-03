@@ -192,15 +192,15 @@ export function setPreferredEngine(wid: string, kind: EngineKind, id: EngineId):
 
 /* ── Generation ───────────────────────────────────────────────────────────── */
 
-interface GenResult { url?: string; taskId?: string; engine: EngineId; model?: string }
+interface GenResult { url?: string; taskId?: string; engine: EngineId; model?: string; charged?: number; currency?: 'ILS' | 'USD' }
 
 export async function generateImageWith(
   engine: EngineId, prompt: string, aspect: MediaAspect, workspaceId: string,
-): Promise<{ url: string; model?: string }> {
+): Promise<{ url: string; model?: string; charged?: number; currency?: 'ILS' | 'USD' }> {
   const fn = httpsCallable<object, GenResult>(functions, 'generateMedia');
   const r = (await fn({ engine, prompt, aspect, workspaceId })).data;
   if (!r.url) throw new Error('המנוע לא החזיר תמונה');
-  return { url: r.url, model: r.model };
+  return { url: r.url, model: r.model, charged: r.charged, currency: r.currency };
 }
 
 /**
@@ -210,20 +210,20 @@ export async function generateImageWith(
 export async function generateVideoWith(
   engine: EngineId, prompt: string, aspect: MediaAspect, workspaceId: string,
   opts: { duration?: 5 | 10; imageUrl?: string; onStage?: (s: string) => void } = {},
-): Promise<{ url: string; thumbnailUrl?: string }> {
+): Promise<{ url: string; thumbnailUrl?: string; charged?: number; currency?: 'ILS' | 'USD' }> {
   const gen = httpsCallable<object, GenResult>(functions, 'generateMedia');
   opts.onStage?.('שולח למנוע…');
   const r = (await gen({ engine, prompt, aspect, workspaceId, duration: opts.duration ?? 5, imageUrl: opts.imageUrl })).data;
-  if (r.url) return { url: r.url };
+  if (r.url) return { url: r.url, charged: r.charged, currency: r.currency };
   if (!r.taskId) throw new Error('המנוע לא החזיר משימה');
 
-  const poll = httpsCallable<object, { status: string; url?: string; thumbnailUrl?: string; message?: string; progress?: number }>(functions, 'mediaTaskStatus');
+  const poll = httpsCallable<object, { status: string; url?: string; thumbnailUrl?: string; message?: string; progress?: number; charged?: number; currency?: 'ILS' | 'USD' }>(functions, 'mediaTaskStatus');
   const started = Date.now();
   // Up to 6 minutes; video engines routinely take 2–4.
   while (Date.now() - started < 6 * 60_000) {
     await new Promise(res => setTimeout(res, 8000));
     const s = (await poll({ engine, taskId: r.taskId, workspaceId })).data;
-    if (s.status === 'done' && s.url) return { url: s.url, thumbnailUrl: s.thumbnailUrl };
+    if (s.status === 'done' && s.url) return { url: s.url, thumbnailUrl: s.thumbnailUrl, charged: s.charged, currency: s.currency };
     if (s.status === 'failed') throw new Error(s.message || 'המנוע נכשל');
     const secs = Math.round((Date.now() - started) / 1000);
     opts.onStage?.(`מייצר וידאו… ${secs}s${s.progress ? ` · ${Math.round(Number(s.progress) * 100)}%` : ''}`);

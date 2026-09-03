@@ -718,6 +718,10 @@ export type WorkspaceProfile = {
   tokenBalance?: number;         // USD remaining (e.g. 8.42)
   tokenUsed?: number;            // USD consumed total (cumulative)
   tokenPlanAllocation?: number;  // USD granted by current plan
+  /* Media-engine credit, per provider, in that provider's currency. Granted by
+     the admin, charged by generateMedia. See lib/engineBudgets.ts. */
+  engineBalances?: Partial<Record<'google' | 'openai' | 'ideogram' | 'kling' | 'runway', number>>;
+  engineUsed?:     Partial<Record<'google' | 'openai' | 'ideogram' | 'kling' | 'runway', number>>;
   // System message — shown as a top banner to all workspace users
   systemMessage?: string;
   /**
