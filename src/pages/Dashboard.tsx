@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import ChatLauncherBar from '../components/ChatLauncherBar';
 import {
   Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
   ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
@@ -1770,41 +1771,27 @@ export default function Dashboard({
           The general AI assistant keeps its own launcher and is deliberately not
           part of this group. */}
       {createPortal(
-        <div
-          className="fixed z-50 flex items-center gap-2 flex-wrap justify-center px-2"
-          style={{
-            top: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            maxWidth: 'min(96vw, 900px)',
-          }}>
-          {([
-            { key: 'mail',   label: 'RAY MAIL',       icon: Mail,      badge: mailBadge,
+        <ChatLauncherBar
+          storageKey={`ray_chatbar_${workspace?.id ?? 'default'}`}
+          items={[
+            { key: 'mail',   label: 'RAY MAIL',       icon: Mail,      badge: <ChatBadge {...mailBadge} />,
               title: 'RAY MAIL — העוזר האישי שלך למיילים',
               bg: 'linear-gradient(135deg,#0369a1,#0891b2)', shadow: 'rgba(8,145,178,0.45)',
               open: () => setShowMailChat(true) },
-            { key: 'sales',  label: 'RAY SALES',    icon: Sparkles,  badge: salesBadge,
+            { key: 'sales',  label: 'RAY SALES',      icon: Sparkles,  badge: <ChatBadge {...salesBadge} />,
               title: 'RAY SALES — שותף המכירות החכם שלך',
               bg: 'linear-gradient(135deg,#0f766e,#0891b2)', shadow: 'rgba(13,148,136,0.45)',
               open: () => setShowCopilot(true) },
-            { key: 'mkt',    label: 'RAY Marketing',  icon: Megaphone, badge: mktBadge,
+            { key: 'mkt',    label: 'RAY Marketing',  icon: Megaphone, badge: <ChatBadge {...mktBadge} />,
               title: 'RAY Marketing — מנהל השיווק החכם שלך',
               bg: 'linear-gradient(135deg,#a21caf,#db2777)', shadow: 'rgba(192,38,211,0.45)',
               open: () => setShowMktChat(true) },
-            { key: 'auto',   label: 'בנה אוטומציה',   icon: Sparkles,  badge: autoBadge,
+            { key: 'auto',   label: 'בנה אוטומציה',   icon: Sparkles,  badge: <ChatBadge {...autoBadge} />,
               title: 'בונה האוטומציות החכם — שוחח ובנה אוטומציה',
               bg: 'linear-gradient(135deg,#7c3aed,#6366f1)', shadow: 'rgba(124,58,237,0.45)',
               open: () => setShowAutoChat(true) },
-          ] as const).map(b => (
-            <button key={b.key} onClick={b.open} title={b.title}
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl text-white font-bold text-[13px] transition-transform hover:scale-105 active:scale-95"
-              style={{ background: b.bg, boxShadow: `0 8px 28px ${b.shadow}` }}>
-              <b.icon size={16} />
-              <span>{b.label}</span>
-              <ChatBadge {...b.badge} />
-            </button>
-          ))}
-        </div>,
+          ]}
+        />,
         document.body,
       )}
 
