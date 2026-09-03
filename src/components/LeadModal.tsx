@@ -460,8 +460,15 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
     const followUpDate = followUpDays
       ? new Date(Date.now() + parseInt(followUpDays) * 86400000).toISOString()
       : undefined;
+    // ContactMethod and LeadActivityType are different vocabularies: 'phone'
+    // 'quote' 'no_answer' 'custom' are not activity types, and logging them
+    // raw gave the timeline entries it had no icon or label for.
+    const activityTypeOf: Record<ContactMethod, LeadActivityType> = {
+      phone: 'call', no_answer: 'call', email: 'email', whatsapp: 'whatsapp',
+      meeting: 'meeting', in_person: 'in_person', quote: 'note', custom: 'note',
+    };
     let newLog = appendActivity(
-      contactType,
+      activityTypeOf[contactType],
       `${contactLabels[contactType]}: ${contactNote.trim()}`,
       followUpDate ? { followUpDate, followUpDays } : undefined,
     );
@@ -481,10 +488,13 @@ JSON בלבד: {"right":["הצעה1","הצעה2"],"left":["הצעה1","הצעה2
       // Also log the task creation in activity
       newLog = [
         ...newLog,
+        // `content` + `author`, the fields the timeline reads. This entry was
+        // written with `text`, so the "task created" line rendered empty.
         {
           id: (Date.now() + 1).toString(),
           type: 'task' as LeadActivityType,
-          text: `משימה נוצרה: ${postContactTaskDesc.trim()} — ${taskDateStr}`,
+          content: `משימה נוצרה: ${postContactTaskDesc.trim()} — ${taskDateStr}`,
+          author: currentUser || 'מנהל',
           timestamp: new Date().toISOString(),
         },
       ];
@@ -2246,6 +2256,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                             in_person: `פגישה עם ${data.company}`,
                             meeting: `פגישה נקבעה עם ${data.company}`,
                             quote: `מעקב על הצעת מחיר — ${data.company}`,
+                            no_answer: `נסה שוב להשיג את ${data.company}`,
                             custom: customContactLabel ? `${customContactLabel} — ${data.company}` : `מעקב עם ${data.company}`,
                           };
                           setPostContactTaskDesc(labels[contactType]);

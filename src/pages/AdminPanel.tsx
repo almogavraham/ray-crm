@@ -2088,7 +2088,7 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
   const clientTokens    = formatTokenCount(Math.round(totalClientBalance * 300_000));
 
   const sorted = [...workspaces]
-    .filter(ws => !search || ws.name?.includes(search) || ws.ownerEmail?.includes(search))
+    .filter(ws => !search || ws.name?.includes(search) || ws.email?.includes(search))
     .sort((a, b) => (b.tokenUsed ?? 0) - (a.tokenUsed ?? 0));
 
   // ── Exposure risk: if all client balances were used, can admin cover it?
@@ -2331,7 +2331,7 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-white/35 mt-0.5">{ws.ownerEmail}</div>
+                      <div className="text-[11px] text-white/35 mt-0.5">{ws.email}</div>
                     </td>
                     {/* Plan */}
                     <td className="px-3 py-3.5 text-center">

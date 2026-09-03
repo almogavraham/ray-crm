@@ -462,7 +462,9 @@ export default function EmailAgent({ workspaceId, workspace, leads, onToast, onN
       const fresh = await loadDrafts(wid);
       setDrafts(fresh);
       onToast?.(total ? `עובדו ${total} מיילים` : 'אין מיילים חדשים', 'info');
-      if (total) setTab('drafts');
+      // Drafts live above the inbox list; there is no 'drafts' tab, and
+      // setting one left the body blank right after processing succeeded.
+      if (total) setTab('inbox');
     } catch (err) {
       onToast?.(`שגיאה: ${(err as Error).message}`, 'error');
     } finally {
@@ -715,7 +717,7 @@ export default function EmailAgent({ workspaceId, workspace, leads, onToast, onN
       done: emailAnyConnected,
       partial: smtpConnected && !oauthConnected, // has SMTP but not OAuth
       action: smtpConnected && !oauthConnected
-        ? () => setTab('accounts')       // guide them to add OAuth in accounts tab
+        ? () => { setTab('settings'); setSettingsSubTab('email'); } // OAuth is added under settings → email
         : () => onNavigate?.('integrations'),
       actionLabel: smtpConnected && !oauthConnected
         ? 'הפעל קריאת תיבת דואר →'

@@ -2831,8 +2831,11 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
     setConnectingPlatform(platform);
     try {
       const code = await openOAuthPopup(platform, credClientId.trim());
+      // The exchange takes one options object. It was being called with four
+      // positional arguments, so `platform` arrived undefined and every OAuth
+      // connection failed at the token step after the popup succeeded.
       const { accessToken, refreshToken, expiresIn, accountName, accountId } =
-        await exchangeSocialToken(platform, code, credClientId.trim(), credClientSecret.trim());
+        await exchangeSocialToken({ platform, code, workspaceId: workspace?.id ?? '' });
       const conn: SocialConnection = {
         platform,
         connected: true,
@@ -2981,7 +2984,9 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
       id: 'profile', emoji: '🏢', label: 'פרופיל עסקי',
       desc: 'שם, קהל יעד, סגנון ויזואלי — כך ה-AI יוצר תוכן',
       done: !!(productProfile?.productName) && (cfg.businessDescription?.length ?? 0) > 15,
-      action: () => { setShowOnboarding(true); setTab('posts'); },
+      // The onboarding banner renders inside the autopilot tab; 'posts' was
+      // removed, and targeting it blanked the page instead of showing it.
+      action: () => { setShowOnboarding(true); setTab('autopilot'); },
       actionLabel: 'הגדר פרופיל →',
       color: '#8b5cf6',
     },
@@ -3650,7 +3655,7 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
                   {/* Shortcut to add more */}
                   {!isConnected && socialConns.filter(c=>c.connected).length === 0 && (
                     <button
-                      onClick={() => setTab('connections')}
+                      onClick={() => setTab('settings')}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-dashed border-indigo-300 dark:border-indigo-700 text-indigo-500"
                     >
                       <Plus size={10} /> חבר רשת חברתית
@@ -5295,7 +5300,7 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
                     <div className="flex items-center justify-between">
                       <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400">מדיה לקמפיין</label>
                       <button
-                        onClick={() => { setTab('studio'); setStudioSubTab('media'); }}
+                        onClick={() => setTab('studio')}
                         className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all"
                         style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: '#fff' }}>
                         <Monitor size={11}/> פתח סטודיו
@@ -5328,7 +5333,7 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
                           </button>
                         )}
                         <div
-                          onClick={() => { setTab('studio'); setStudioSubTab('media'); }}
+                          onClick={() => setTab('studio')}
                           className="flex items-center justify-center gap-2 py-2.5 rounded-xl cursor-pointer transition-all hover:opacity-80"
                           style={{ border: `1px solid ${isDark ? 'rgba(124,58,237,0.2)' : 'rgba(124,58,237,0.18)'}`, background: isDark ? 'rgba(124,58,237,0.03)' : 'rgba(124,58,237,0.02)' }}>
                           <Monitor size={14} style={{ color: '#7c3aed', opacity: 0.7 }}/>
@@ -5343,7 +5348,7 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
                     <div className="flex items-center justify-between">
                       <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400">טקסט הקמפיין / פוסט</label>
                       <button
-                        onClick={() => { setTab('studio'); setStudioSubTab('media'); }}
+                        onClick={() => setTab('studio')}
                         className="text-[10px] font-semibold" style={{ color: '#6366f1' }}>✨ ערוך בסטודיו</button>
                     </div>
                     <textarea
@@ -5907,7 +5912,7 @@ Write ALL titles and body text in the SAME LANGUAGE as the user's request.${imag
                           })}
                           {!isConnected && socialConns.filter(c => c.connected).length === 0 && (
                             <button
-                              onClick={() => setTab('connections')}
+                              onClick={() => setTab('settings')}
                               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-dashed border-indigo-300 dark:border-indigo-700 text-indigo-500"
                             >
                               <Plus size={10} /> חבר רשת חברתית

@@ -487,6 +487,11 @@ export type AccountData = {
   monthlyRetainer: number; // keep for backward compat
   projects: Project[];
   updatedAt: string;
+  /* Written by the account card; read by the assistant for context. They were
+     missing here, so the assistant's reads were typed as always-empty and its
+     "client materials" answers were dead code. */
+  files?: ClientFile[];
+  proposals?: Proposal[];
 };
 
 export type DealStage = 'new' | 'proposal' | 'negotiation' | 'won' | 'lost';
@@ -746,6 +751,7 @@ export type WorkspaceProfile = {
     // Google OAuth client id — required for INBOX READ access (App Password can
     // only send). Used by the email agent and the copilot's in-chat connect.
     oauthClientId?: string;
+    oauthProvider?: 'gmail' | 'outlook';
   };
   // AI Profile — configures the AI assistant for this workspace
   aiProfile?: {

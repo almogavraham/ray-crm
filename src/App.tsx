@@ -410,7 +410,7 @@ function AppInner() {
   // admin panel would hide the very workspace the admin just chose to enter.
   const [page, setPage]               = useState<Page>(
     getImpersonation() ? 'dashboard' : isAdminDomain ? 'admin' : 'home');
-  const [settingsDefaultSection, setSettingsDefaultSection] = useState<'profile' | 'integrations' | undefined>(undefined);
+  const [settingsDefaultSection, setSettingsDefaultSection] = useState<'integrations' | undefined>(undefined);
   const [emailAgentDefaultTab, setEmailAgentDefaultTab] = useState<'inbox' | 'workflows' | undefined>(undefined);
   const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
   /* Read by callbacks that must not change identity when the list does — an

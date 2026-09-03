@@ -212,7 +212,7 @@ export function openOAuthPopup(
       if (e.data?.type !== 'oauth_callback') return;
       clearTimeout(timeout);
       window.removeEventListener('message', handler);
-      popup.close();
+      popup?.close();
       if (e.data.error) {
         reject(new Error(e.data.error));
       } else if (e.data.code) {
