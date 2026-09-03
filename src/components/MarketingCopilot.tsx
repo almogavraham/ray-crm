@@ -583,8 +583,12 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
             duration: act.duration ?? 5, imageUrl: act.imageUrl, onStage: setWorking,
           });
           const vcost = charged ? ` · חויב ${currency === 'ILS' ? '₪' : '$'}${charged.toFixed(2)}` : '';
-          say(`הסרטון מוכן 🎬 (${ENGINE_BY_ID[eng].label}${vcost})\n${url}\nאפשר להוריד אותו מהקישור, או לבקש גרסה אחרת.`, [
-            { type: 'quote', label: 'פרומפט', text: act.prompt },
+          // The video plays in the chat. The storage URL stays out of the text:
+          // it is a 200-character token string nobody should have to read.
+          say(`הסרטון מוכן 🎬 (${ENGINE_BY_ID[eng].label}${vcost}) — אפשר לפרסם, לתזמן, או לבקש גרסה אחרת.`, [
+            { type: 'video', url, caption: (act.label ?? '').replace(/^🎬\s*/, '') || act.prompt.slice(0, 80) },
+          ], [
+            { type: 'schedule_post', platform: 'facebook', caption: '', imageUrl: url, hoursFromNow: 24, label: '📅 תזמן את הסרטון לפוסט' },
           ]);
           markDone(msgIdx, key);
           break;

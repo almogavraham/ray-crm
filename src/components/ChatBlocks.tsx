@@ -31,6 +31,7 @@ export type ChatBlock =
   | { type: 'timeline';  title?: string; items: TimelineItem[] }
   | { type: 'post';      platform?: string; caption: string; hashtags?: string[]; cta?: string; imageUrl?: string; imagePrompt?: string }
   | { type: 'image';     url: string; caption?: string }
+  | { type: 'video';     url: string; caption?: string; poster?: string }
   | { type: 'quote';     text: string; label?: string };
 
 export interface BarItem      { label: string; value: number; hint?: string; color?: string }
@@ -61,6 +62,7 @@ export function sanitiseBlocks(raw: unknown): ChatBlock[] {
         case 'compare':   return b.a && b.b            ? (b as unknown as ChatBlock) : null;
         case 'post':      return str(b.caption)        ? (b as unknown as ChatBlock) : null;
         case 'image':     return safeUrl(b.url)        ? (b as unknown as ChatBlock) : null;
+        case 'video':     return safeUrl(b.url)        ? (b as unknown as ChatBlock) : null;
         case 'quote':     return str(b.text)           ? (b as unknown as ChatBlock) : null;
         default:          return null;
       }
@@ -102,6 +104,7 @@ export default function ChatBlockView({ block, accent, onLeadClick, onCopy }: Pr
     case 'timeline':  return <Timeline  b={block} accent={accent} />;
     case 'post':      return <PostCard  b={block} accent={accent} onCopy={onCopy} />;
     case 'image':     return <ImageCard b={block} />;
+    case 'video':     return <VideoCard b={block} />;
     case 'quote':     return <QuoteCard b={block} accent={accent} />;
     default:          return null;
   }
@@ -370,6 +373,24 @@ function ImageCard({ b }: { b: Extract<ChatBlock, { type: 'image' }> }) {
         <img src={url} alt={str(b.caption)} className="w-full object-cover" style={{ maxHeight: 300 }} />
       </a>
       {b.caption && <div className="px-2.5 py-1.5 text-[10px] text-slate-500 text-right">{str(b.caption)}</div>}
+    </div>
+  );
+}
+
+/* ── video — plays in place; the file itself is never shown as a URL ─────── */
+function VideoCard({ b }: { b: Extract<ChatBlock, { type: 'video' }> }) {
+  const url = safeUrl(b.url);
+  if (!url) return null;
+  return (
+    <div className="mt-2 rounded-xl overflow-hidden border border-slate-200 bg-black">
+      <video src={url} controls playsInline preload="metadata"
+        poster={safeUrl(b.poster) || undefined}
+        className="w-full" style={{ maxHeight: 320, background: '#000' }} />
+      <div className="px-2.5 py-1.5 flex items-center justify-between gap-2 bg-white">
+        <a href={url} download target="_blank" rel="noopener noreferrer"
+          className="text-[10px] font-bold text-slate-500 hover:text-slate-800">⬇ הורד</a>
+        {b.caption && <span className="text-[10px] text-slate-500 text-right truncate">{str(b.caption)}</span>}
+      </div>
     </div>
   );
 }
