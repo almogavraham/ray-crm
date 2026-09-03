@@ -195,9 +195,16 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         return r.ok ? { ok: true, message: 'המפתח תקין' } : { ok: false, message: d.error?.message ?? `HTTP ${r.status}` };
       }
       case 'dalle': {
-        const r = await fetch('https://api.openai.com/v1/models/dall-e-3', { headers: { Authorization: `Bearer ${keys.openai}` } });
+        // Newest image model first. The engine id stays 'dalle' for the rest of
+        // the app; what it calls is whichever OpenAI image model the project
+        // allows, gpt-image-1.5 preferred.
+        let r = await fetch('https://api.openai.com/v1/models/gpt-image-1.5', { headers: { Authorization: `Bearer ${keys.openai}` } });
+        if (r.ok) return { ok: true, message: 'המפתח תקין · gpt-image-1.5 זמין' };
+        const first = await r.json().catch(() => ({}));
+        if (r.status === 401) r = { status: 401, ok: false, json: async () => first };
+        else r = await fetch('https://api.openai.com/v1/models/dall-e-3', { headers: { Authorization: `Bearer ${keys.openai}` } });
         const d = await r.json().catch(() => ({}));
-        if (r.ok) return { ok: true, message: 'המפתח תקין' };
+        if (r.ok) return { ok: true, message: 'המפתח תקין · dall-e-3 זמין (gpt-image-1.5 חסום בפרויקט)' };
         const msg = d.error?.message ?? `HTTP ${r.status}`;
         // OpenAI answers "model does not exist" for a valid key whose project
         // has no access to the image model — a project/permissions problem,
@@ -214,7 +221,7 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
           return { ok: false, message: `המפתח נדחה (401). שמור אצלנו: ${held}. OpenAI ענה: ${msg}` };
         }
         if (/does not exist|do not have access/i.test(msg)) {
-          return { ok: false, message: 'המפתח תקין, אבל לפרויקט הזה אין גישה ל-DALL·E 3. ב-platform.openai.com ← Settings ← Project ← Limits ← אפשר Model access ל-dall-e-3, או צור מפתח בפרויקט ה-Default' };
+          return { ok: false, message: 'המפתח תקין, אבל לפרויקט הזה אין גישה למודלי תמונה. ב-platform.openai.com ← Settings ← Project ← Limits ← "Allow or block models": סמן gpt-image-1.5 (ו-dall-e-3) במצב Allow, או בחר Block בלי סימונים כדי לאפשר הכל' };
         }
         return { ok: false, message: msg };
       }
@@ -340,16 +347,31 @@ exports.generateMedia = onCall(
         }
 
         case 'dalle': {
-          const r = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${keys.openai}` },
-            body: JSON.stringify({ model: 'dall-e-3', prompt, n: 1, size: IMAGE_SIZE[aspect] ?? IMAGE_SIZE['1:1'], response_format: 'b64_json', quality: 'standard' }),
-          });
-          const d = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(d.error?.message ?? `HTTP ${r.status}`);
-          const b64 = d.data?.[0]?.b64_json;
-          if (!b64) throw new Error('DALL·E returned no image');
-          return done({ url: await store(workspaceId, Buffer.from(b64, 'base64'), 'image/png', 'png'), engine, model: 'dall-e-3' });
+          // gpt-image-1.5 is the current model; it returns base64 by default
+          // and rejects `response_format`. dall-e-3 is kept as the fallback
+          // for a project that only allows the older model.
+          const attempts = [
+            { model: 'gpt-image-1.5', body: { model: 'gpt-image-1.5', prompt, n: 1, size: aspect === '16:9' ? '1536x1024' : aspect === '9:16' ? '1024x1536' : '1024x1024', quality: 'medium' } },
+            { model: 'dall-e-3',      body: { model: 'dall-e-3', prompt, n: 1, size: IMAGE_SIZE[aspect] ?? IMAGE_SIZE['1:1'], response_format: 'b64_json', quality: 'standard' } },
+          ];
+          let last = '';
+          for (const a of attempts) {
+            const r = await fetch('https://api.openai.com/v1/images/generations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${keys.openai}` },
+              body: JSON.stringify(a.body),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) {
+              last = d.error?.message ?? `HTTP ${r.status}`;
+              if (outOfCredit(last) || r.status === 401) throw new Error(last);
+              continue;   // model blocked/unknown in this project → try the next
+            }
+            const b64 = d.data?.[0]?.b64_json;
+            if (!b64) { last = `${a.model} returned no image`; continue; }
+            return done({ url: await store(workspaceId, Buffer.from(b64, 'base64'), 'image/png', 'png'), engine, model: a.model });
+          }
+          throw new Error(`OpenAI: ${last}`);
         }
 
         case 'imagen': {

@@ -76,9 +76,9 @@ export const ENGINES: EngineDef[] = [
     color: '#4285f4',
   },
   {
-    id: 'dalle', kind: 'image', label: 'DALL·E 3', vendor: 'OpenAI',
-    bestFor: 'אילוסטרציות, סגנון גרפי, קונספטים מופשטים. מבין פרומפטים מורכבים היטב.',
-    cost: 'כ-$0.04 לתמונה סטנדרטית 1024×1024, כ-$0.08 ל-HD. נדרש קרדיט מראש בחשבון OpenAI (נפרד ממנוי ChatGPT).',
+    id: 'dalle', kind: 'image', label: 'OpenAI GPT-Image 1.5', vendor: 'OpenAI',
+    bestFor: 'המודל העדכני של OpenAI: פוטוריאליזם, טקסט קריא בתמונה, עריכה לפי הנחיה. נופל ל-DALL·E 3 אם הפרויקט לא מאפשר אותו.',
+    cost: 'כ-$0.04 לתמונה באיכות medium, כ-$0.17 ב-high. נדרש קרדיט מראש בחשבון OpenAI (נפרד ממנוי ChatGPT).',
     keyUrl: 'https://platform.openai.com/api-keys',
     keyFields: [{ name: 'openai', label: 'OpenAI API Key', placeholder: 'sk-…', secret: true }],
     steps: [
@@ -88,7 +88,7 @@ export const ENGINES: EngineDef[] = [
       'העתק את המפתח מיד — הוא מוצג פעם אחת בלבד. מתחיל ב-sk-.',
       'הדבק כאן, שמור, ולחץ "בדוק חיבור".',
     ],
-    caveats: ['מנוי ChatGPT Plus לא מכסה את זה — צריך קרדיט בפלטפורמת ה-API.', 'DALL·E מסנן פרומפטים עם שמות מותגים ואנשים אמיתיים.'],
+    caveats: ['מנוי ChatGPT Plus לא מכסה את זה — צריך קרדיט בפלטפורמת ה-API.', 'בפרויקט חדש מודלי התמונה לפעמים חסומים: Settings ← Project ← Limits ← "Allow or block models" ← סמן gpt-image-1.5 ו-dall-e-3 במצב Allow (או Block בלי סימונים = הכל פתוח).', 'OpenAI מסנן פרומפטים עם שמות מותגים ואנשים אמיתיים.'],
     color: '#10b981',
   },
   {
