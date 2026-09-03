@@ -211,6 +211,14 @@ export interface EmailAgentConfig {
   agentInstructions:    string;            // personal system-prompt
   agentPersonality:     string;            // legacy one-liner style
   salesGoals:           string[];          // ['מכירה','ליד חם','פגישה','הצעת מחיר',…]
+  /**
+   * Monthly revenue target, in shekels. 0 or undefined means no target set.
+   *
+   * Distinct from salesGoals, which say what the agent should aim for in a
+   * conversation. This is the number the month is measured against, and it is
+   * what makes progress reportable rather than just activity.
+   */
+  monthlySalesTarget?:  number;
 
   // ── Reply behavior ─────────────────────────────────────────────────────────
   autoSend:             boolean;           // legacy — keep for compat

@@ -56,6 +56,7 @@ const DEFAULT_CONFIG: EmailAgentConfig = {
   agentInstructions:   '',
   agentPersonality:    'מקצועי, ידידותי ומשכנע',
   salesGoals:          ['ליד חם', 'פגישה'],
+  monthlySalesTarget:  0,
   autoSend:            false,
   requireApproval:     true,
   confidenceThreshold: 90,
@@ -1518,6 +1519,67 @@ export default function EmailAgent({ workspaceId, workspace, leads, onToast, onN
                   placeholder="תאר את העסק, המוצרים/שירותים, מחירים, קהל יעד, יתרון תחרותי — כל מה שהסוכן צריך לדעת כדי למכור..." />
                 <p className="text-[10px] text-slate-400 mt-1">{config.businessDescription.length} תווים</p>
               </div>
+              {/* Monthly revenue target.
+               *
+               * salesGoals below say what the agent should aim for inside a
+               * conversation. This is the number the month is measured
+               * against — without it the page can report activity but never
+               * whether the month is going well. Progress counts leads that
+               * actually became customers this month, not pipeline. */}
+              {(() => {
+                const target = config.monthlySalesTarget ?? 0;
+                const now = new Date();
+                const closedThisMonth = (leads ?? []).filter(l => {
+                  if (l.status !== 'לקוח פעיל') return false;
+                  const d = l.lastUpdate ? new Date(l.lastUpdate) : null;
+                  return !!d && !Number.isNaN(d.getTime())
+                    && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                });
+                const achieved = closedThisMonth.reduce((s, l) => s + (l.budget ?? 0), 0);
+                const pct = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
+                const bar = pct >= 100 ? '#10b981' : pct >= 60 ? '#6366f1' : pct >= 30 ? '#f59e0b' : '#ef4444';
+
+                return (
+                  <div className="mb-5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-900/10 p-4">
+                    <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2">
+                      יעד מכירות חודשי (₪)
+                    </label>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <input
+                        type="number" min="0" step="100" dir="ltr"
+                        value={target || ''}
+                        placeholder="0"
+                        onChange={e => setConfig(p => ({ ...p, monthlySalesTarget: Math.max(0, Number(e.target.value) || 0) }))}
+                        className="w-40 rounded-xl px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                      />
+                      {target > 0 && (
+                        <span className="text-[13px] font-semibold" style={{ color: bar }}>
+                          ₪{achieved.toLocaleString('he-IL')} מתוך ₪{target.toLocaleString('he-IL')} · {pct}%
+                        </span>
+                      )}
+                    </div>
+
+                    {target > 0 ? (
+                      <>
+                        <div className="mt-3 h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                          <div className="h-full rounded-full transition-all"
+                            style={{ width: `${pct}%`, background: bar }} />
+                        </div>
+                        <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                          {closedThisMonth.length === 0
+                            ? 'עדיין לא נסגרו עסקאות החודש.'
+                            : `${closedThisMonth.length} לקוחות נסגרו החודש${pct >= 100 ? ' — היעד הושג ✓' : ` · חסרים ₪${(target - achieved).toLocaleString('he-IL')}`}`}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-slate-400">
+                        הזן יעד כדי לעקוב אחרי ההתקדמות החודשית מול העסקאות שנסגרו בפועל.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Sales Goals */}
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">יעדי מכירה — מה הסוכן מנסה להשיג?</label>
