@@ -48,6 +48,7 @@ import {
 } from './lib/statusConfig';
 import type { StatusConfig } from './lib/statusConfig';
 import { markNotificationRead } from './lib/notifications';
+import { checkTokenBalance } from './lib/tokenAlerts';
 import LegalPages from './pages/LegalPages';
 import CheckoutPage from './pages/CheckoutPage';
 import ApiDocsPage from './pages/ApiDocsPage';
@@ -1336,6 +1337,16 @@ function AppInner() {
       window.history.replaceState({}, '', `/${slug}`);
     }
   }, [isWorkspaceUser, wid, workspace?.slug]); // eslint-disable-line
+
+  // ─── Warn before the AI credit runs out ───────────────────────────────────
+  // Until now the only sign was the sidebar meter changing colour, which nobody
+  // watches — so the first a customer knew of it was a feature that quietly
+  // stopped answering. Keyed on the balance, so it re-evaluates when the number
+  // moves; the alert itself fires once per threshold crossing.
+  useEffect(() => {
+    if (!workspace?.id) return;
+    void checkTokenBalance(workspace);
+  }, [workspace?.id, workspace?.tokenBalance, workspace?.tokenPlanAllocation]); // eslint-disable-line
 
   // ─── Auto-start product tour on first entry into the main app ────────────
   useEffect(() => {

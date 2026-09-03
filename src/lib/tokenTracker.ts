@@ -196,11 +196,19 @@ export const TOPUP_PACKAGES = [
 /* ── Plan token config (read from Firestore system/config) ──────────────── */
 export type PlanTokenConfig = Record<string, number>; // plan → USD amount
 
+/**
+ * What each plan is worth in AI credit, in dollars of real Anthropic spend.
+ *
+ * These are the operator's cost, not a price shown to anyone: the customer sees
+ * a token count, never this figure. Kept in dollars because that is the unit
+ * the credit is actually bought in — converting to tokens here would bake in a
+ * rate that changes with the model.
+ */
 export const DEFAULT_PLAN_TOKEN_AMOUNTS: PlanTokenConfig = {
-  trial:      0.5,   // מתנת פתיחה — $0.50 = ~150K טוקנים
-  basic:      10,    // Basic — $10 = ~3M טוקנים
-  pro:        20,    // Pro — $20 = ~6M טוקנים
-  enterprise: 40,    // Enterprise — $40 = ~12M טוקנים
+  trial:      0.5,   // מתנת פתיחה — $0.50
+  basic:      10,    // Basic — $10
+  pro:        20,    // Pro — $20
+  enterprise: 50,    // Enterprise — $50
 };
 
 export async function getPlanTokenConfig(): Promise<PlanTokenConfig> {
