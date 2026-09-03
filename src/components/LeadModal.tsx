@@ -1045,59 +1045,38 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
                 </button>
               )}
 
-              {data.phone && (
+              {/* The "call" button is gone: the phone number in the header is
+                  already a tel: link, so this was a second control for the same
+                  action taking space from the ones that do something else.
+
+                  The design button is gone too — the leads screen's "עצב מחדש"
+                  opens the same card editor, so there were two entry points to
+                  one thing. */}
+
+              {/* Scheduling actions, pushed to the far side. In RTL an auto
+                  margin-right is what moves a group away from the start edge. */}
+              <div className="flex items-center gap-2 mr-auto">
                 <button
-                  onClick={() => window.open(`tel:${data.phone}`, '_blank')}
-                  className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
+                  onClick={() => setShowContactModal(true)}
+                  className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-amber-500/20"
                 >
-                  <Phone size={13} />{t('leadModal.call')}
+                  <PhoneCall size={13} />תיעוד פנייה
                 </button>
-              )}
 
-              {/* CONTACT LOG BUTTON */}
-              <button
-                onClick={() => setShowContactModal(true)}
-                className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-amber-500/20"
-              >
-                <PhoneCall size={13} />תיעוד פנייה
-              </button>
-
-              {/* MEETING BUTTON */}
-              <button
-                onClick={() => setShowMeetingModal(true)}
-                className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-purple-500/20"
-              >
-                <Calendar size={13} />קבע פגישה
-              </button>
-
-              {/* CUSTOMIZE BUTTON */}
-              {onWorkspaceUpdate && (
                 <button
-                  onClick={() => setShowCustomize(v => !v)}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                    showCustomize
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
-                      : 'bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 hover:text-white'
-                  }`}
+                  onClick={() => setShowMeetingModal(true)}
+                  className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:shadow-lg hover:shadow-purple-500/20"
                 >
-                  🎨 עיצוב
+                  <Calendar size={13} />קבע פגישה
                 </button>
-              )}
+              </div>
+            </div>
 
-              {/* AI RESEARCH BUTTON */}
-              <button
-                onClick={runAiResearch}
-                disabled={aiScoring}
-                className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all mr-auto"
-              >
-                {aiScoring ? (
-                  <><Loader2 size={13} className="animate-spin" />{t('leadModal.aiScoring')}</>
-                ) : (
-                  <><Brain size={13} />{t('leadModal.aiScore')}</>
-                )}
-              </button>
-
-              {/* NEXT BEST ACTION BUTTON */}
+            {/* The two AI actions get a row of their own. They are not ways to
+                contact the lead — they are the system doing work on it — and
+                sitting in the same row made them read as one more way to send a
+                message. */}
+            <div className="flex flex-wrap items-center gap-2 px-4 md:px-5 pb-3">
               <button
                 onClick={handleNextBestAction}
                 disabled={nbaLoading}
@@ -1106,6 +1085,18 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
               >
                 {nbaLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 הפעולה הבאה
+              </button>
+
+              <button
+                onClick={runAiResearch}
+                disabled={aiScoring}
+                className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all"
+              >
+                {aiScoring ? (
+                  <><Loader2 size={13} className="animate-spin" />{t('leadModal.aiScoring')}</>
+                ) : (
+                  <><Brain size={13} />{t('leadModal.aiScore')}</>
+                )}
               </button>
             </div>
 
