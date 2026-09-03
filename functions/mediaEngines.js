@@ -187,7 +187,16 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
       case 'dalle': {
         const r = await fetch('https://api.openai.com/v1/models/dall-e-3', { headers: { Authorization: `Bearer ${keys.openai}` } });
         const d = await r.json().catch(() => ({}));
-        return r.ok ? { ok: true, message: 'המפתח תקין' } : { ok: false, message: d.error?.message ?? `HTTP ${r.status}` };
+        if (r.ok) return { ok: true, message: 'המפתח תקין' };
+        const msg = d.error?.message ?? `HTTP ${r.status}`;
+        // OpenAI answers "model does not exist" for a valid key whose project
+        // has no access to the image model — a project/permissions problem,
+        // not a wrong key. Say which, so the fix is in the right place.
+        if (r.status === 401) return { ok: false, message: 'המפתח נדחה (401) — בדוק שהודבק נכון ונשמר' };
+        if (/does not exist|do not have access/i.test(msg)) {
+          return { ok: false, message: 'המפתח תקין, אבל לפרויקט הזה אין גישה ל-DALL·E 3. ב-platform.openai.com ← Settings ← Project ← Limits ← אפשר Model access ל-dall-e-3, או צור מפתח בפרויקט ה-Default' };
+        }
+        return { ok: false, message: msg };
       }
       case 'ideogram': {
         // Ideogram has no free "who am I"; a deliberately empty request returns

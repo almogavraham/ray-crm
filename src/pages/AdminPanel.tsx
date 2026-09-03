@@ -3528,15 +3528,24 @@ function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|
   };
   useEffect(() => { void load(); }, []);
 
-  const handleSave = async () => {
+  /**
+   * Save. `only` restricts it to one engine's fields — the button inside each
+   * card. The page-level button used to be the sole way to save and sat ~700px
+   * below the field; a key pasted into a card and never scrolled past was
+   * never saved, and the test button then ran against the old key.
+   */
+  const handleSave = async (only?: string[]) => {
     const keys: Record<string, string> = {};
-    for (const [k, v] of Object.entries(draft)) if (v.trim()) keys[k] = v.trim();
+    for (const [k, v] of Object.entries(draft)) {
+      if (only && !only.includes(k)) continue;
+      if (v.trim()) keys[k] = v.trim();
+    }
     if (!Object.keys(keys).length) { onToast('לא הוזן מפתח חדש', 'info'); return; }
     setSaving(true);
     try {
       const saved = await saveMediaKeys(keys);
-      onToast(`נשמרו ${saved.length} מפתחות ✅`, 'success');
-      setDraft({});
+      onToast(`נשמרו ${saved.length} מפתחות ✅ — לחץ "בדוק חיבור" כדי לוודא`, 'success');
+      setDraft(d => { const n = { ...d }; for (const k of saved) delete n[k]; return n; });
       setResults({});
       await load();
     } catch (e) { onToast(`שגיאה בשמירה: ${(e as Error).message}`, 'error'); }
@@ -3638,6 +3647,15 @@ function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|
                       })}
 
                       <div className="flex items-center gap-2 justify-end">
+                        {e.keyFields.length > 0 && (
+                          <button type="button"
+                            onClick={() => void handleSave(e.keyFields.map(f => f.name))}
+                            disabled={saving || !e.keyFields.some(f => (draft[f.name] ?? '').trim())}
+                            className="px-3 py-1.5 rounded-xl text-[11px] font-bold text-white disabled:opacity-40"
+                            style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)' }}>
+                            {saving ? 'שומר…' : '💾 שמור מפתח'}
+                          </button>
+                        )}
                         {e.keyFields.length > 0 && (
                           <button type="button" onClick={() => void handleTest(e.id)} disabled={testing === e.id || !connected}
                             className="px-3 py-1.5 rounded-xl text-[11px] font-bold disabled:opacity-40"

@@ -230,20 +230,29 @@ export default function MarketingCopilot({
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
   const [imageEngine, setImageEngine]   = useState<EngineId | null>(null);
   const [videoEngine, setVideoEngine]   = useState<EngineId | null>(null);
+  /* The prompt is built inside `ask`, which the opening briefing calls from a
+     mount effect — before the status fetch has resolved. Read from refs so the
+     model sees what is connected NOW, and gate the briefing on the fetch, so
+     the first message cannot say "no video engine" while Veo is connected. */
+  const engineRef = useRef<{ status: EngineStatus | null; image: EngineId | null; video: EngineId | null }>({ status: null, image: null, video: null });
+  const [enginesLoaded, setEnginesLoaded] = useState(false);
   useEffect(() => {
-    fetchEngineStatus().then(st => {
-      setEngineStatus(st);
-      setImageEngine(getPreferredEngine(workspaceId ?? '', 'image', st));
-      setVideoEngine(getPreferredEngine(workspaceId ?? '', 'video', st));
-    }).catch(() => {
+    const apply = (st: EngineStatus) => {
+      const img = getPreferredEngine(workspaceId ?? '', 'image', st);
+      const vid = getPreferredEngine(workspaceId ?? '', 'video', st);
+      engineRef.current = { status: st, image: img, video: vid };
+      setEngineStatus(st); setImageEngine(img); setVideoEngine(vid);
+      setEnginesLoaded(true);
+    };
+    fetchEngineStatus().then(apply).catch(() => {
       // Status unknown: still offer the free engine so image generation works.
-      setEngineStatus({ pollinations: true, imagen: false, dalle: false, ideogram: false, veo: false, kling: false, runway: false });
-      setImageEngine('pollinations');
+      apply({ pollinations: true, imagen: false, dalle: false, ideogram: false, veo: false, kling: false, runway: false });
     });
   }, [workspaceId]);
   const pickEngine = (kind: EngineKind, id: EngineId) => {
     setPreferredEngine(workspaceId ?? '', kind, id);
-    if (kind === 'image') setImageEngine(id); else setVideoEngine(id);
+    if (kind === 'image') { setImageEngine(id); engineRef.current.image = id; }
+    else { setVideoEngine(id); engineRef.current.video = id; }
   };
 
   const refreshKnowledge = useCallback(async () => {
@@ -359,9 +368,10 @@ export default function MarketingCopilot({
         ? `סוכן: ${cfg.agentName || 'RAY'} · טון: ${cfg.replyTone} · אמוג'י: ${cfg.emojiUsage} · CTA: ${cfg.ctaStyle} · האשטגים: ${cfg.hashtagStrategy} · תדירות: ${cfg.postFrequency} · אישור ידני לפני פרסום: ${cfg.requireApproval ? 'כן' : 'לא'} · אוטופיילוט: ${cfg.autopilotEnabled ? 'פעיל' : 'כבוי'}${cfg.contentPillars?.length ? ` · נושאי תוכן: ${cfg.contentPillars.join(', ')}` : ''}`
         : '(אין עדיין הגדרות סוכן — ברירות מחדל)';
 
-      const imgOpts = connectedEngines(engineStatus, 'image').map(e => e.label);
-      const vidOpts = connectedEngines(engineStatus, 'video').map(e => e.label);
-      const engineCtx = `תמונות: ${imageEngine ? ENGINE_BY_ID[imageEngine].label : 'אין'}${imgOpts.length > 1 ? ` (זמינים: ${imgOpts.join(', ')})` : ''} · וידאו: ${videoEngine ? ENGINE_BY_ID[videoEngine].label : 'לא מחובר מנוע וידאו — אמור שהאדמין צריך לחבר Veo/Kling/Runway בלוח האדמין ← אינטגרציות'}${vidOpts.length > 1 ? ` (זמינים: ${vidOpts.join(', ')})` : ''}`;
+      const { status: stNow, image: imgNow, video: vidNow } = engineRef.current;
+      const imgOpts = connectedEngines(stNow, 'image').map(e => e.label);
+      const vidOpts = connectedEngines(stNow, 'video').map(e => e.label);
+      const engineCtx = `תמונות: ${imgNow ? ENGINE_BY_ID[imgNow].label : 'אין'}${imgOpts.length > 1 ? ` (זמינים: ${imgOpts.join(', ')})` : ''} · וידאו: ${vidNow ? ENGINE_BY_ID[vidNow].label : 'לא מחובר מנוע וידאו — אמור שהאדמין צריך לחבר Veo/Kling/Runway בלוח האדמין ← אינטגרציות'}${vidOpts.length > 1 ? ` (זמינים: ${vidOpts.join(', ')})` : ''}`;
 
       const planCtx = pendingPlan
         ? `יש תוכנית אוטופיילוט שממתינה לאישור: "${pendingPlan.title}" (${pendingPlan.posts.length} פוסטים). אפשר להציע approve_plan.`
@@ -497,11 +507,11 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
      with mount-only deps the cleared chat just sat empty until the window was
      closed and reopened. */
   useEffect(() => {
-    if (session.booted || session.busy) return;
+    if (session.booted || session.busy || !enginesLoaded) return;
     updateSession('marketing', { booted: true });
     void ask(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.booted]);
+  }, [session.booted, enginesLoaded]);
 
   /* ── Executing an action ────────────────────────────────────────────────── */
   const markDone = (msgIdx: number, key: string) =>
@@ -533,7 +543,7 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
         case 'generate_image': {
           if (!act.prompt) return;
           const wid = needWid();
-          const eng = imageEngine ?? 'pollinations';
+          const eng = engineRef.current.image ?? imageEngine ?? 'pollinations';
           setWorking(`יוצר תמונה ב-${ENGINE_BY_ID[eng].label}…`);
           const { url, model, charged, currency } = await generateImageWith(eng, act.prompt, act.aspect ?? '1:1', wid);
           const cost = charged ? ` · חויב ${currency === 'ILS' ? '₪' : '$'}${charged.toFixed(2)}` : '';
@@ -548,11 +558,12 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
         case 'generate_video': {
           if (!act.prompt) return;
           const wid = needWid();
-          if (!videoEngine) {
+          const vEng = engineRef.current.video ?? videoEngine;
+          if (!vEng) {
             say('אין מנוע וידאו מחובר. האדמין יכול לחבר Veo, Kling או Runway בלוח האדמין ← אינטגרציות — יש שם הוראות מדויקות לכל אחד.');
             return;
           }
-          const eng = videoEngine;
+          const eng = vEng;
           setWorking(`מייצר וידאו ב-${ENGINE_BY_ID[eng].label}…`);
           const { url, charged, currency } = await generateVideoWith(eng, act.prompt, act.aspect ?? '16:9', wid, {
             duration: act.duration ?? 5, imageUrl: act.imageUrl, onStage: setWorking,
