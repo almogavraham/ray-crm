@@ -198,7 +198,20 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         try { ids = await googleModels(keys.google, method, engine); }
         catch (e) { return { ok: false, message: String(e.message) }; }
         if (!ids.length) {
-          return { ok: false, message: `המפתח תקין אבל לא רואה מודלי ${engine === 'veo' ? 'Veo' : 'Imagen'} — בדוק שהחיוב פעיל בפרויקט של המפתח (console.cloud.google.com ← Billing)` };
+          // Before blaming billing, check whether the models exist under a
+          // different method — that is a code fix on our side, not the user's.
+          let seen = [];
+          try {
+            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keys.google}&pageSize=200`);
+            const d = await r.json().catch(() => ({}));
+            seen = (d.models ?? []).filter(m => String(m.name).includes(engine)).map(m => `${String(m.name).replace(/^models\//, '')} [${(m.supportedGenerationMethods ?? []).join('/')}]`);
+          } catch { /* diagnostic only */ }
+          return {
+            ok: false,
+            message: seen.length
+              ? `המפתח רואה ${seen.length} מודלים אבל אף אחד לא תומך ב-${method}: ${seen.slice(0, 4).join(', ')}`
+              : `המפתח תקין אבל לא רואה מודלי ${engine === 'veo' ? 'Veo' : 'Imagen'} בכלל — בדוק שהחיוב פעיל בפרויקט של המפתח (console.cloud.google.com ← Billing)`,
+          };
         }
         return { ok: true, message: `המפתח תקין · זמין: ${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ` (+${ids.length - 3})` : ''}` };
       }
