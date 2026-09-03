@@ -1620,6 +1620,7 @@ function AppInner() {
         onNotificationClick={handleNotificationClick}
         userInitials={displayInitials}
         userName={displayName}
+        userEmail={user?.email ?? undefined}
         allowedPages={
           isWorkspaceUser
             // Workspace users: prefer workspace-level page override; fall back to profile allowedPages

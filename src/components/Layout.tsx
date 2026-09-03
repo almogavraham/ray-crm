@@ -9,6 +9,7 @@ import {
 import type { Page, WorkspaceProfile } from '../types';
 import type { AppNotification } from '../lib/notifications';
 import { useLang } from '../contexts/LangContext';
+import ProfilePanel from './ProfilePanel';
 import { formatBalance, balancePercent, formatTokenDisplay } from '../lib/tokenTracker';
 import { db } from '../lib/firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
@@ -33,6 +34,9 @@ interface LayoutProps {
   tokenLowAlert?: boolean;
   userInitials?: string;
   userName?: string;
+  /** Signed-in address, for the profile panel. Not on WorkspaceProfile — that
+   *  is the workspace owner, who is not necessarily the person looking. */
+  userEmail?: string;
   allowedPages?: Page[];
   isAdmin?: boolean;
   isSuperAdmin?: boolean;
@@ -724,7 +728,7 @@ function MobileBottomNav({ currentPage, go, overdueBadge, isDark, allowedPages, 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 export default function Layout({
   children, currentPage, onPageChange, onNewLead,
-  overdueBadge = 0, tokenLowAlert = false, userInitials = 'A', userName = 'משתמש',
+  overdueBadge = 0, tokenLowAlert = false, userInitials = 'A', userName = 'משתמש', userEmail,
   allowedPages = [], isAdmin = false, isSuperAdmin = false,
   onSignOut, logoUrl, workspaceName, workspace, theme = 'dark',
   onAiClick, showAiPanel = false, aiInsightBadge = 0, wakeWordEnabled = false, onToggleWakeWord,
@@ -801,6 +805,8 @@ export default function Layout({
 
   const sidebarW = collapsed ? 'w-14' : 'w-[220px]';
   const mainMr   = collapsed ? 'md:mr-14' : 'md:mr-[220px]';
+
+  const [showProfile, setShowProfile] = useState(false);
 
   return (
     <div className="min-h-screen flex" dir={dir} style={{ backgroundColor: tk.pageContentBg }}>
@@ -879,6 +885,20 @@ export default function Layout({
         </div>
       </div>
 
+      {showProfile && (
+        <ProfilePanel
+          userName={userName}
+          userEmail={userEmail}
+          userInitials={userInitials}
+          isAdmin={isAdmin}
+          workspace={workspace}
+          onClose={() => setShowProfile(false)}
+          onGoSettings={() => onPageChange('settings')}
+          onGoBilling={() => onPageChange('billing')}
+          onSignOut={onSignOut}
+        />
+      )}
+
       {/* ── Mobile Bottom Navigation ────────────────────────────────────── */}
       <MobileBottomNav
         currentPage={currentPage}
@@ -939,13 +959,19 @@ export default function Layout({
                 isDark={isDark}
               />
 
-              {/* Avatar */}
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[11px] font-bold cursor-default"
+              {/* Avatar — the account control.
+                  It carried the user's initials and `cursor-default`: it looked
+                  like the account button every other product puts here, and did
+                  nothing at all. */}
+              <button
+                onClick={() => setShowProfile(true)}
+                title={`${userName} — פרופיל`}
+                aria-label="פרופיל משתמש וסביבת עבודה"
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[11px] font-bold transition-transform hover:scale-105 active:scale-95"
                 style={{ background: 'linear-gradient(135deg, #4f46e5, #3b82f6)' }}
               >
                 {userInitials}
-              </div>
+              </button>
             </div>
           </div>
 
