@@ -2089,9 +2089,28 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
     .sort((a, b) => (b.tokenUsed ?? 0) - (a.tokenUsed ?? 0));
 
   // ── Exposure risk: if all client balances were used, can admin cover it?
-  const maxExposure    = totalClientBalance / 2; // real Anthropic cost if ALL virtual used
+  //
+  // A customer's virtual dollar costs half a real one — the 50% margin the
+  // top-up webhook charges against. Named rather than left as a bare /2, since
+  // changing the margin has to change both places together.
+  const REAL_COST_RATIO = 0.5;
+  const maxExposure    = totalClientBalance * REAL_COST_RATIO; // real Anthropic cost if ALL virtual used
   const exposureRisk   = maxExposure - realRemaining; // positive = admin could run out
   const isAdminLow     = realRemaining < 2 || (quota.totalBudget > 0 && realRemainPct < 20);
+
+  /**
+   * What is left to give away, as opposed to what is left at Anthropic.
+   *
+   * `realRemaining` only falls when a customer *spends*, so granting a plan
+   * changed nothing on screen and it was possible to keep handing out credit
+   * that is already promised elsewhere. This falls the moment tokens are
+   * granted — by purchase or by signup — which is the number to check before
+   * granting more. It can go negative, and that is the point: it means more has
+   * been promised than is held.
+   */
+  const freeToAllocate  = realRemaining - maxExposure;
+  const committedTokens = formatTokenCount(Math.round(maxExposure * 300_000));
+  const freeTokens      = formatTokenCount(Math.round(Math.max(0, freeToAllocate) * 300_000));
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
@@ -2150,6 +2169,27 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
             <p className="text-white/35 text-xs mt-2">
               השתמשת ב-${totalRealUsed.toFixed(4)} ({realUsedPct}%) · {usedTokens} טוקנים בפועל
             </p>
+
+            {/* The figure to check before granting more. The balance above only
+                moves when a customer spends, so handing out a plan changed
+                nothing on screen — and it was possible to keep promising credit
+                that is already spoken for. */}
+            <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-x-8 gap-y-3">
+              <div>
+                <p className="text-white/40 text-[11px] font-semibold">כבר הובטח ללקוחות</p>
+                <p className="text-amber-300 text-lg font-black tabular-nums">${maxExposure.toFixed(2)}</p>
+                <p className="text-white/30 text-[10px]">{committedTokens} טוקנים</p>
+              </div>
+              <div>
+                <p className="text-white/40 text-[11px] font-semibold">פנוי להקצאה</p>
+                <p className={`text-lg font-black tabular-nums ${freeToAllocate > 2 ? 'text-emerald-400' : freeToAllocate > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                  ${freeToAllocate.toFixed(2)}
+                </p>
+                <p className="text-white/30 text-[10px]">
+                  {freeToAllocate < 0 ? 'הובטח יותר ממה שיש — טען ב-Anthropic' : `${freeTokens} טוקנים`}
+                </p>
+              </div>
+            </div>
           </div>
           {/* Right — update budget */}
           <div className="flex flex-col gap-2 items-start sm:items-end">
