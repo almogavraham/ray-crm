@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import ImageProvidersSection from '../components/ImageProvidersSection';
 import {
   Webhook, Copy, CheckCircle2, RefreshCw, Loader2,
   AlertTriangle, ExternalLink, TrendingUp, Users,
@@ -2760,7 +2761,13 @@ export default function Integrations({
          ══════════════════════════════════════════════════════════════════════ */}
       <EmailSection workspace={workspace} onToast={onToast} onWorkspaceUpdate={onWorkspaceUpdate} />
 
-      {/* AI media tools section removed — API keys are managed in the Admin Console → Integrations. */}
+      {/* ══════════════════════════════════════════════════════════════════════
+           AI IMAGE PROVIDERS — Google Imagen, OpenAI DALL·E
+           Previously there was nowhere in the product to connect these: the AI
+           Studio held keys for ElevenLabs, Hunter and Ideogram, and no image
+           model was among them.
+         ══════════════════════════════════════════════════════════════════════ */}
+      <ImageProvidersSection workspace={workspace} onToast={onToast} onWorkspaceUpdate={onWorkspaceUpdate} />
 
       {/* ══════════════════════════════════════════════════════════════════════
            WHATSAPP BUSINESS
