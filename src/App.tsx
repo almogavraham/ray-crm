@@ -6,7 +6,8 @@ import './index.css';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Overview from './pages/Overview';
-import AiAssistant from './pages/AiAssistant';
+import AssistantWindow from './components/AssistantWindow';
+import { setChatScope } from './lib/chatSessionStore';
 import Kanban from './pages/Kanban';
 import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
@@ -1254,6 +1255,16 @@ function AppInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* Point the chat store at this workspace, so one client's conversations can
+     never surface in another's window.
+
+     This lived on the leads screen, which meant every OTHER page ran against
+     the 'default' scope: open the assistant from the home page and it saw four
+     empty chats, so its cross-chat digest had nothing to read. Scope belongs
+     where the workspace is known — here — not on whichever page happens to be
+     mounted. */
+  useEffect(() => { setChatScope(workspace?.id); }, [workspace?.id]);
+
   // for as long as the app is open (see lib/gmailKeepAlive.ts).
   useEffect(() => {
     const wid = workspace?.id;
@@ -1980,31 +1991,12 @@ function AppInner() {
         />
       )}
 
-      {/* ── AI Side Panel ──────────────────────────────────────────────────── */}
+      {/* ── AI assistant window ────────────────────────────────────────────
+          A floating, draggable window like the other four chats rather than a
+          pinned drawer behind a dimming backdrop. The drawer covered the screen
+          the user was asking about, and any stray click dismissed it. */}
       {showAiPanel && (
-        <>
-          {/* Backdrop — desktop only (mobile panel is always full-screen, no backdrop needed) */}
-          {!aiPanelExpanded && (
-            <div
-              className="hidden md:block fixed inset-0 top-14 z-40 bg-black/20"
-              onClick={() => setShowAiPanel(false)}
-            />
-          )}
-
-          {/* Drawer — full-screen on mobile, side panel on desktop
-              Mobile: use inset-0 (top+right+bottom+left=0) instead of h-screen.
-              position:fixed + inset-0 adapts to the visual viewport on iOS/Android,
-              so when the soft keyboard opens the panel shrinks from the bottom and
-              the input bar stays visible. h-screen (100vh) does NOT shrink on iOS. */}
-          <div
-            className={`fixed z-50 flex flex-col shadow-2xl transition-all duration-300 ${
-              aiPanelExpanded
-                ? 'inset-0'
-                : 'inset-0 md:top-14 md:right-auto md:bottom-0 md:w-[380px] md:rounded-tr-2xl md:rounded-br-2xl'
-            }`}
-            style={{ boxShadow: '8px 0 40px rgba(0,0,0,0.5)' }}
-          >
-            <AiAssistant
+            <AssistantWindow
               leads={leads}
               team={team}
               currentUser={displayName}
@@ -2029,8 +2021,6 @@ function AppInner() {
               prefillQuery={aiPrefill ?? undefined}
               statusConfigs={statusConfigs}
             />
-          </div>
-        </>
       )}
 
 

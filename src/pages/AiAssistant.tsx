@@ -21,6 +21,7 @@ import { getAnthropicProxy } from '../lib/anthropicClient';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
 import { doc, getDoc, setDoc, collection, onSnapshot, getDocs, query, orderBy, limit, addDoc } from 'firebase/firestore';
 import { buildLeadContext } from '../lib/leadContext';
+import { buildChatDigest, useBrainSources } from '../lib/chatDigest';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface ToolAction {
@@ -72,6 +73,12 @@ interface AiAssistantProps {
   prefillQuery?: { query: string; nonce: number };
   /** Custom status configurations for status context */
   statusConfigs?: StatusConfig[];
+  /**
+   * Pointer handlers from `useDraggableWindow`, spread on the header so the
+   * assistant can be dragged like the other four chats. Absent on phones and
+   * wherever the panel is not floating.
+   */
+  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
 }
 
 /* ─── Tool definitions ───────────────────────────────────────────────────── */
@@ -1156,10 +1163,13 @@ export default function AiAssistant({
   currentPage, insights = [], wakeActivated = false,
   prefillQuery,
   statusConfigs = DEFAULT_STATUS_CONFIGS,
+  dragHandleProps,
 }: AiAssistantProps) {
 
   const { t, dir } = useLang();
   const wsId = workspace?.id;
+  /** Which specialist chats this one can currently read. */
+  const brainSources = useBrainSources();
   const [messages,          setMessages]          = useState<Message[]>(() => loadLocalHistory(wsId));
   const [input,             setInput]             = useState('');
   const [loading,           setLoading]           = useState(false);
@@ -1946,7 +1956,16 @@ export default function AiAssistant({
       type: 'text' as const,
       text: `\n══ הקשר דף נוכחי ══\nהמשתמש נמצא כרגע בדף: **${pageLabel}**\nסיכום מהיר: ${leads.length} לידים סה"כ | ${hotCount} פעילים | ${overdueCount} משימות באיחור\n${insights.length > 0 ? `תובנות פעילות: ${insights.slice(0,3).map(i => i.title).join(' | ')}` : ''}\nאם המשתמש שואל שאלה כללית — התייחס לדף שבו הוא נמצא כנקודת ההתחלה.${convModeRef.current ? '\n\n⚠️ מצב שיחה קולית פעיל: ענה בקצרה (1-3 משפטים), ללא אמוג\'ים, ללא תבליטים. תשובות קצרות ומדוברות בלבד.' : ''}`,
     };
-    const systemBlocks = [...baseBlocks, pageContextBlock];
+    /* The assistant is the brain: it also reads what the four specialist chats
+       have been discussing, so "מה סיכמנו עם השיווק?" has an answer here
+       instead of only inside RAY MARKETING. A digest, not a transcript — four
+       full conversations would dwarf the pipeline data in the same prompt and
+       cost real money on every message. Skipped entirely when they are empty,
+       rather than sending a heading with nothing under it. */
+    const digest = buildChatDigest();
+    const systemBlocks = digest
+      ? [...baseBlocks, pageContextBlock, { type: 'text' as const, text: digest }]
+      : [...baseBlocks, pageContextBlock];
 
     // Build API messages (only role + content for API)
     const apiMessages = updatedMsgs.map(m => ({ role: m.role, content: m.content }));
@@ -2414,10 +2433,15 @@ export default function AiAssistant({
         </div>
       )}
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* ── Header — also the drag handle when floating ─────────────────────── */}
       <div
+        {...(dragHandleProps ?? {})}
         className="flex items-center justify-between px-3 py-2.5 flex-shrink-0 gap-2"
-        style={{ background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid rgba(99,102,241,0.15)' }}
+        style={{
+          background: 'rgba(99,102,241,0.08)',
+          borderBottom: '1px solid rgba(99,102,241,0.15)',
+          ...((dragHandleProps?.style as React.CSSProperties) ?? {}),
+        }}
       >
         {/* ── Left: RAY identity ── */}
         <div className="flex items-center gap-2.5 min-w-0">
@@ -2434,8 +2458,14 @@ export default function AiAssistant({
               </span>
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
             </div>
+            {/* Says what this chat can see. The assistant reads the specialist
+                chats, and a capability nobody can tell is there is a capability
+                nobody uses — so it is named, and named honestly: it lists the
+                chats that actually have a conversation to read. */}
             <div className="text-[10px] truncate" style={{ color: 'rgba(255,255,255,0.3)' }}>
-              claude-opus-4-6
+              {brainSources.length > 0
+                ? `המוח המרכזי · קורא גם את ${brainSources.join(' · ')}`
+                : 'claude-opus-4-6'}
             </div>
           </div>
         </div>

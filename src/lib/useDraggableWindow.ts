@@ -16,7 +16,7 @@
  * of small betrayal that makes a feature feel broken.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 /** Below this width the modal/bottom-sheet behaviour is kept. */
 const FLOAT_MIN_WIDTH = 640;
@@ -78,13 +78,19 @@ export function useDraggableWindow(key: string) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Measure after mount so the default position can centre the real size.
-  useEffect(() => {
+  /**
+   * Place the window as soon as it is in the DOM.
+   *
+   * This used to wait for a `requestAnimationFrame`, which does not fire while
+   * the tab is hidden or throttled — and the window is `visibility: hidden`
+   * until it has a position, so a chat opened in a background tab stayed
+   * invisible with no way to recover. A layout effect runs synchronously after
+   * mount, when the element is measurable, so the position is always set and
+   * the window still never flashes at the corner first.
+   */
+  useLayoutEffect(() => {
     if (!floating || pos) return;
-    const id = requestAnimationFrame(() => {
-      setPos(clamp(readStored(key) ?? defaultPos(key, panelRef.current), panelRef.current));
-    });
-    return () => cancelAnimationFrame(id);
+    setPos(clamp(readStored(key) ?? defaultPos(key, panelRef.current), panelRef.current));
   }, [floating, pos, key]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {

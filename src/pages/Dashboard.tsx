@@ -22,7 +22,7 @@ import AutomationChat from '../components/AutomationChat';
 import SalesCopilot from '../components/SalesCopilot';
 import MarketingCopilot from '../components/MarketingCopilot';
 import RayMailChat from '../components/RayMailChat';
-import { useChatBadge, setChatScope } from '../lib/chatSessionStore';
+import { useChatBadge } from '../lib/chatSessionStore';
 import LeadViewBar from '../components/LeadViewBar';
 import LeadFilterPanel from '../components/LeadFilterPanel';
 import LeadColumnsPanel from '../components/LeadColumnsPanel';
@@ -576,7 +576,6 @@ export default function Dashboard({
     return [...s].sort((a, b) => a.localeCompare(b, 'he'));
   }, [team, leads]);
 
-  useEffect(() => { setChatScope(workspace?.id); }, [workspace?.id]);
   const salesBadge = useChatBadge('sales');
   const mktBadge   = useChatBadge('marketing');
   const mailBadge  = useChatBadge('mail');

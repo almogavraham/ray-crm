@@ -137,7 +137,12 @@ export function clearSession(id: ChatId): void {
   emit();
 }
 
-function subscribe(cb: () => void): () => void {
+/**
+ * Subscribe to ANY session changing. Exported because a consumer that reads
+ * across chats — the assistant's cross-chat digest — has no single session to
+ * hang a subscription on.
+ */
+export function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
 }
