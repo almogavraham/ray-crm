@@ -310,7 +310,7 @@ export default function SalesCopilot({
         : mailMode === 'smtp' ? `מייל מחובר לשליחה בלבד (${mailAddr}) דרך App Password. קריאת תיבת הדואר דורשת חיבור OAuth — אם המשתמש מבקש לעבור על מיילים, אמור לו בקצרה שהוא יכול לחבר קריאת מיילים בלחיצה על הכפתור "חבר קריאת מיילים" כאן בצ'אט. אל תתיימר לקרוא מיילים.`
         : 'לא מחובר מייל. אם המשתמש מבקש מיילים — הפנה אותו לכפתור "חבר קריאת מיילים" כאן בצ\'אט.';
 
-      const system = `אתה "RAY Copilot" — שותף מכירות בכיר של המשתמש, לא בוט. אתה מדבר עברית, ישיר, חד ומעשי. אתה לא מנומס יתר על המידה ולא מציף במלל.
+      const system = `אתה "RAY SALES" — שותף מכירות בכיר של המשתמש, לא בוט. אתה מדבר עברית, ישיר, חד ומעשי. אתה לא מנומס יתר על המידה ולא מציף במלל.
 
 ## מי אתה
 מנהל מכירות מנוסה שמסתכל על הפייפליין של ${currentUser} ואומר לו את האמת: מה בוער, מה מבוזבז, איפה הכסף, ומה לעשות עכשיו. אתה יוזם — מצביע על דברים שהוא לא שאל עליהם אם הם חשובים.
@@ -471,7 +471,7 @@ create_task | change_status | flag_lead | mark_hot | set_followup | open_lead | 
           id: `${Date.now()}-copilot`, description: desc,
           date: new Date().toISOString().split('T')[0], time: '09:00',
           priority: act.priority || 'medium', completed: false,
-          assignedTo: lead.assignedTo || currentUser, assignedBy: 'RAY Copilot',
+          assignedTo: lead.assignedTo || currentUser, assignedBy: 'RAY SALES',
           createdAt: new Date().toISOString(), leadId: lead.id,
         });
         onToast?.(`✓ נוצרה משימה: ${desc}`, 'success');
@@ -540,7 +540,7 @@ create_task | change_status | flag_lead | mark_hot | set_followup | open_lead | 
           </div>
           <div className="flex items-center gap-2">
             <div className="text-right">
-              <div className="text-white font-black text-sm">RAY Copilot</div>
+              <div className="text-white font-black text-sm">RAY SALES</div>
               <div className="text-cyan-100 text-[10px]">שותף המכירות שלך · מנתח, מציע, ומבצע</div>
             </div>
             <div className="w-9 h-9 rounded-2xl bg-white/20 flex items-center justify-center">

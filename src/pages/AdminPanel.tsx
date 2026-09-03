@@ -94,8 +94,8 @@ const FEATURE_LABELS: Record<string, string> = {
   workflows:    'בונה אוטומציות',
   integrations: 'אינטגרציות',
   'ai-studio':      'AI Studio',
-  'email-agent':    'סוכן מכירות AI',
-  'marketing-agent':'סוכן שיווק',
+  'email-agent':    'RAY SALES',
+  'marketing-agent':'RAY MARKETING',
 };
 
 const PAGE_LABELS: Partial<Record<Page, string>> = {
@@ -112,8 +112,8 @@ const PAGE_LABELS: Partial<Record<Page, string>> = {
   integrations:     'אינטגרציות',
   ai:               'עוזר AI',
   'ai-studio':      'AI Studio',
-  'email-agent':    'סוכן מכירות AI',
-  'marketing-agent':'סוכן שיווק',
+  'email-agent':    'RAY SALES',
+  'marketing-agent':'RAY MARKETING',
   settings:         'הגדרות',
   billing:          'מנוי ותשלום',
   team:             'ניהול צוות',
@@ -2434,7 +2434,7 @@ function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage,
       label: 'תוכן ושיווק', emoji: '🎨', color: 'text-pink-400',
       rows: [
         { id: 'content',          name: 'קריאייטיב',       type: 'page' },
-        { id: 'marketing-agent',  name: 'סוכן שיווק',      type: 'page' },
+        { id: 'marketing-agent',  name: 'RAY MARKETING',      type: 'page' },
       ],
     },
     {
@@ -2442,7 +2442,7 @@ function FeaturesTab({ flags, onToggle, onSave, saving, planPages, onTogglePage,
       rows: [
         { id: 'ai',           name: 'עוזר AI',           type: 'page' },
         { id: 'ai-studio',    name: 'AI Studio',         type: 'page' },
-        { id: 'email-agent',  name: 'סוכן מכירות AI',   type: 'page' },
+        { id: 'email-agent',  name: 'RAY SALES',   type: 'page' },
         { id: 'agents',       name: 'סוכנים חכמים',     type: 'page' },
         { id: 'workflows',    name: 'בונה אוטומציות',   type: 'page' },
       ],

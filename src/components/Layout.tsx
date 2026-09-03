@@ -71,7 +71,7 @@ const NAV_GROUPS = [
     label: 'שיווק',
     labelKey: 'nav.groupMarketing',
     items: [
-      { page: 'marketing-agent'  as Page, label: 'סוכן שיווק',    labelKey: 'nav.marketingAgent', icon: Megaphone },
+      { page: 'marketing-agent'  as Page, label: 'RAY MARKETING',    labelKey: 'nav.marketingAgent', icon: Megaphone },
       { page: 'analytics'        as Page, label: 'אנליטיקס',      labelKey: 'nav.analytics',      icon: BarChart3 },
       { page: 'overview'         as Page, label: 'דוחות',          labelKey: 'nav.overview',       icon: BarChart3 },
     ],
@@ -82,7 +82,7 @@ const NAV_GROUPS = [
     items: [
       { page: 'ai'           as Page, label: 'עוזר AI',           labelKey: 'nav.ai',           icon: Sparkles     },
       { page: 'ai-studio'    as Page, label: 'AI Studio',         labelKey: 'nav.aiStudio',     icon: Clapperboard },
-      { page: 'email-agent'  as Page, label: 'סוכן מכירות AI',   labelKey: 'nav.emailAgent',   icon: Mail         },
+      { page: 'email-agent'  as Page, label: 'RAY SALES',   labelKey: 'nav.emailAgent',   icon: Mail         },
       { page: 'agents'       as Page, label: 'סוכנים AI',         labelKey: 'nav.agents',       icon: Bot          },
       // The automation studio had no nav entry at all — the page existed but
       // only ever redirected, so nothing could reach it.
