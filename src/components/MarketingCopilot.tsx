@@ -1056,14 +1056,23 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3" style={{ background: '#faf5ff' }}>
-          {msgs.map((m, i) => (
+          {msgs.map((m, i) => {
+            // Messages written before the video block existed carry the mp4 URL
+            // in their text. Show those as a player too, and drop the URL from
+            // the text: history should not look worse than new replies do.
+            const mp4 = m.role === 'assistant' && !m.blocks?.some(b => b.type === 'video')
+              ? m.text.match(/https:\/\/[^\s]+\.mp4(\?[^\s]*)?/)?.[0] ?? null
+              : null;
+            const text = mp4 ? m.text.replace(mp4, '').replace(/\n{2,}/g, '\n').trim() : m.text;
+            const blocks: ChatBlock[] = mp4 ? [{ type: 'video', url: mp4 }, ...(m.blocks ?? [])] : (m.blocks ?? []);
+            return (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-start' : 'justify-end'}`}>
               <div className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
                 m.role === 'user' ? 'text-white' : 'bg-white text-slate-700 border border-slate-200'}`}
                 style={m.role === 'user' ? { background: 'linear-gradient(135deg,#a21caf,#db2777)' } : undefined}>
-                {m.text}
+                {text}
 
-                {m.blocks?.map((b, j) => (
+                {blocks.map((b, j) => (
                   <ChatBlockView key={j} block={b} accent={ACCENT}
                     onCopy={() => onToast?.('הועתק ללוח', 'success')} />
                 ))}
@@ -1091,7 +1100,8 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {(busy || working) && (
             <div className="flex justify-end">
