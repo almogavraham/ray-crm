@@ -118,6 +118,16 @@ export async function gatherBusinessContext(
     if (recent.length) p.push(`פוסטים אחרונים שפורסמו (להימנע מחזרתיות): ${recent.join(' · ')}`);
   }
 
+  // What the user uploaded to teach the agent — price lists, past ads, brand
+  // guides. Read here, not only in the chat, so a plan generated on the page
+  // draws on the same materials; a photo shown to one agent should not have
+  // to be shown to the other.
+  try {
+    const { loadMaterials, materialsContext } = await import('./marketingMaterials');
+    const mat = materialsContext(await loadMaterials(wid));
+    if (mat) p.push('', mat);
+  } catch { /* materials are optional */ }
+
   return { text: p.join('\n'), profile };
 }
 

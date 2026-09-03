@@ -1488,8 +1488,18 @@ function TaskRow({ task, onComplete, onDelete, onEdit, onLeadClick, isCompleting
       onMouseLeave={() => setHovered(false)}
     >
       <div
-        className="flex items-center gap-3 px-5 py-3.5"
+        className={`flex items-center gap-3 px-5 py-3.5 ${task.completed ? '' : 'cursor-pointer'}`}
         style={{ borderRight: `4px solid ${dp.borderRight}`, borderBottom: `1px solid ${c.divider}` }}
+        // The whole row opens the task. The row already looks clickable — it
+        // highlights on hover — and the only way in was a 12px pencil icon.
+        // Clicks that started on a control inside the row (complete, the lead
+        // chip, WhatsApp, edit, delete) keep their own meaning; in select mode
+        // a row click toggles selection, which is what a row click means there.
+        onClick={e => {
+          if ((e.target as HTMLElement).closest('button, a, input, textarea, select')) return;
+          if (selectMode) { toggleSelect(task.id); return; }
+          if (!task.completed) onEdit(task);
+        }}
       >
         {/* Selection checkbox */}
         {selectMode && (
