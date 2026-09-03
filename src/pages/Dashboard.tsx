@@ -2,10 +2,10 @@ import { useState, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import ChatLauncherBar from '../components/ChatLauncherBar';
 import {
-  Search, Filter, Download, Flame, CheckCircle2, Rocket, Users,
+  Search, Download, Flame, CheckCircle2, Rocket, Users,
   ChevronDown, Bell, ArrowUpDown, ArrowUp, ArrowDown, X, Trash2,
-  Sparkles, MessageCircle, FileSpreadsheet, Snowflake, AlertCircle,
-  Zap, Clock, BarChart2, SlidersHorizontal, Mail, Send, PhoneOff, ShieldAlert, Megaphone,
+  Sparkles, MessageCircle, FileSpreadsheet, Snowflake,
+  BarChart2, Mail, Send, Megaphone,
   UserCheck, UserMinus, Settings2, Plus, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import type { Lead, LeadStatus, WorkspaceProfile, StandaloneTask, TeamMember, CardLayoutSettings } from '../types';
@@ -24,12 +24,18 @@ import MarketingCopilot from '../components/MarketingCopilot';
 import RayMailChat from '../components/RayMailChat';
 import { useChatBadge, setChatScope } from '../lib/chatSessionStore';
 import LeadViewBar from '../components/LeadViewBar';
+import LeadFilterPanel from '../components/LeadFilterPanel';
+import LeadColumnsPanel from '../components/LeadColumnsPanel';
 import { LeadCardsView } from '../components/LeadBoardView';
 import Kanban from './Kanban';
+import type { ViewMode } from '../components/LeadViewBar';
+import type { LeadFilters } from '../lib/leadFilters';
 import {
-  loadLeadViews, saveLeadViews, isDirty, BUILT_IN_VIEWS, EMPTY_FILTERS,
-} from '../lib/leadViews';
-import type { LeadView, ViewMode, LeadViewFilters } from '../lib/leadViews';
+  EMPTY_LEAD_FILTERS, matchesLeadFilters, activeFilterCount,
+  parseLeadDate, daysSinceLeadDate, isTaskOverdue, isUntreated,
+} from '../lib/leadFilters';
+import type { LeadColumnKey } from '../lib/leadColumns';
+import { COLUMN_BY_KEY, loadColumnKeys, saveColumnKeys } from '../lib/leadColumns';
 import { collection, doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useLang } from '../contexts/LangContext';
@@ -126,41 +132,11 @@ const safeStr = (v: unknown) => (v == null ? '' : String(v));
 const safeArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const safeNum = (v: unknown) => (isFinite(Number(v)) ? Number(v) : 0);
 
-/**
- * Parse a lead's `lastUpdate` into a timestamp.
- *
- * Leads are stamped with `new Date().toLocaleDateString('he-IL')`, which yields
- * DOT-separated dates ("5.8.2026") — not slashes. Handling only '/' made every
- * freshly-created lead parse as 0, so it sorted to the very bottom of the
- * default (lastUpdate desc) ordering and looked like it had vanished.
- * Accepts ISO, dot- and slash-separated, and numeric timestamps.
- */
-function parseDate(d: string | undefined): number {
-  if (!d) return 0;
-  const s = String(d).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {                 // ISO
-    const ts = new Date(s.slice(0, 10) + 'T00:00:00').getTime();
-    return isNaN(ts) ? 0 : ts;
-  }
-  if (/^\d{10,}$/.test(s)) {                          // epoch millis
-    const ts = Number(s);
-    return isNaN(ts) ? 0 : ts;
-  }
-  const sep = s.includes('/') ? '/' : '.';            // he-IL uses dots
-  const p = s.split(sep);
-  if (p.length !== 3) return 0;
-  const [day, month, yearRaw] = p.map(Number);
-  if (!day || !month || !yearRaw) return 0;
-  const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
-  const ts = new Date(year, month - 1, day).getTime();
-  return isNaN(ts) ? 0 : ts;
-}
-
-function daysSince(s: string) {
-  const ts = parseDate(s);
-  if (!ts) return 0;
-  return Math.max(0, Math.floor((Date.now() - ts) / 86400000));
-}
+/* Date parsing lives in lib/leadFilters — the filter predicate needs the same
+   rules, and a second copy here is exactly how "5.8.2026" once parsed as 0 on
+   one screen and correctly on another. */
+const parseDate = parseLeadDate;
+const daysSince = daysSinceLeadDate;
 
 function isTaskDueSoon(dateStr: string) {
   try {
@@ -168,12 +144,6 @@ function isTaskDueSoon(dateStr: string) {
     const now = new Date(new Date().toDateString());
     const diff = Math.floor((d.getTime() - now.getTime()) / 86400000);
     return diff >= 0 && diff <= 1;
-  } catch { return false; }
-}
-
-function isTaskOverdue(dateStr: string) {
-  try {
-    return new Date(dateStr + 'T00:00:00') < new Date(new Date().toDateString());
   } catch { return false; }
 }
 
@@ -260,13 +230,22 @@ export default function Dashboard({
   // Use the workspace's custom lead sources (same list edited from the lead card) —
   // falls back to the default list when the workspace hasn't customized it.
   const ALL_SOURCES = workspace?.leadSources?.length ? workspace.leadSources : DEFAULT_SOURCES;
+  /**
+   * Every filter, in one object.
+   *
+   * They used to be eight separate `useState`s spread across four controls, two
+   * of which filtered by source and two by "untreated" — so the toolbar could
+   * read "הכל" while the list was filtered. One shape, one predicate, one
+   * panel: the badge and the list now cannot disagree.
+   */
+  const [filters, setFilters] = useState<LeadFilters>(EMPTY_LEAD_FILTERS);
+  const patch = useCallback(<K extends keyof LeadFilters>(k: K, v: LeadFilters[K]) => {
+    setFilters(f => ({ ...f, [k]: v }));
+  }, []);
+
   const [newSourceInput, setNewSourceInput] = useState('');
   const [editingSources,  setEditingSources] = useState(false);
-  const [search,         setSearch]         = useState('');
-  const [activeStatus,   setActiveStatus]   = useState<LeadStatus | 'הכל'>('הכל');
   const [tasksExpanded,  setTasksExpanded]  = useState(false); // "היום שלי" starts collapsed on entry
-  const [sourceFilter,   setSourceFilter]   = useState('');
-  const [showFilters,    setShowFilters]    = useState(false);
   const [emailLead,      setEmailLead]      = useState<Lead | null>(null);
   const [whatsAppLead,   setWhatsAppLead]   = useState<Lead | null>(null);
   const [sortField,      setSortField]      = useState<SortField>('lastUpdate');
@@ -276,8 +255,6 @@ export default function Dashboard({
   const [deleteConfirm,  setDeleteConfirm]  = useState(false);
   const [bannerDismissed,setBannerDismissed]= useState(false);
   const [showExcelImport,setShowExcelImport]= useState(false);
-  type QuickFilter = 'hot' | 'objections' | 'new' | null;
-  const [quickFilter,    setQuickFilter]    = useState<QuickFilter>(null);
   const [pageSize,       setPageSize]       = useState<number>(() => {
     const stored = Number(localStorage.getItem('ray-crm-leads-page-size'));
     return [20, 50, 100].includes(stored) ? stored : 50;
@@ -298,17 +275,28 @@ export default function Dashboard({
   const [bulkContent,     setBulkContent]     = useState('');
   const [bulkStep,        setBulkStep]        = useState<1 | 2 | 3>(1);
 
-  // ── Advanced filter panel ───────────────────────────────────────────────────
-  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
-  const [filterObjection,    setFilterObjection]    = useState('');
-  const [filterSource,       setFilterSource]       = useState('');
-  const [filterNoAnswer,     setFilterNoAnswer]     = useState(false);
-  const [filterUntreated,    setFilterUntreated]    = useState(false);
-
-  /* ── Saved views + display mode ─────────────────────────────────────────── */
-  const [views,     setViews]     = useState<LeadView[]>(BUILT_IN_VIEWS);
-  const [activeView, setActiveView] = useState<string>('all');
+  /* ── Display mode + the two panels above the list ───────────────────────── */
   const [viewMode,  setViewMode]  = useState<ViewMode>('table');
+  const [openPanel, setOpenPanel] = useState<'filters' | 'columns' | null>(null);
+
+  /** Which columns the table shows, and in what order. A preference about one
+   *  person's own screen, so it is stored locally rather than shared. */
+  const [columnKeys, setColumnKeys] = useState<LeadColumnKey[]>(
+    () => loadColumnKeys(workspace?.id ?? ''),
+  );
+  const changeColumns = useCallback((next: LeadColumnKey[]) => {
+    setColumnKeys(next);
+    saveColumnKeys(workspace?.id ?? '', next);
+  }, [workspace?.id]);
+  // Switching workspace must not carry the previous one's layout across.
+  useEffect(() => { setColumnKeys(loadColumnKeys(workspace?.id ?? '')); }, [workspace?.id]);
+
+  /** A column's header text. The money column is renamed per workspace, so its
+   *  label comes from the workspace rather than the column definition. */
+  const colLabel = useCallback((k: LeadColumnKey): string => {
+    if (k === 'budget') return workspace?.cardLeftField?.label ?? COLUMN_BY_KEY.budget.label;
+    return COLUMN_BY_KEY[k]?.label ?? k;
+  }, [workspace?.cardLeftField?.label]);
 
   // ── Editing task from My Day ─────────────────────────────────────────────────
   const [editingDashTask, setEditingDashTask] = useState<DashTask | null>(null);
@@ -354,7 +342,7 @@ export default function Dashboard({
   const onboarding    = leads.filter(l => l.status === 'בתהליך').length;
   const newLeads      = leads.filter(l => l.status === 'חדש').length;
   const conversionRate = leads.length > 0 ? Math.round((activeClients / leads.length) * 100) : 0;
-  const untreatedCount = leads.filter(l => l.status === 'חדש' && !safeArr(l.activityLog).length && !l.lastContactDate).length;
+  const untreatedCount = leads.filter(isUntreated).length;
 
   // ── Bulk messaging helpers ───────────────────────────────────────────────────
   const getBulkTargetLeads = () => {
@@ -495,23 +483,7 @@ export default function Dashboard({
   };
 
   const filtered = useMemo(() => {
-    const q = safeStr(search).toLowerCase();
-    const weekAgo = Date.now() - 7 * 86400000;
-    const base = leads.filter(l => {
-      const matchSearch = !q || [l.company, l.contactName, l.phone, l.email].some(f => safeStr(f).toLowerCase().includes(q));
-      const matchStatus = activeStatus === 'הכל' || l.status === activeStatus;
-      const matchSource = !sourceFilter || l.source === sourceFilter;
-      let matchQuick = true;
-      if (quickFilter === 'hot')        matchQuick = isHotLead(l);
-      if (quickFilter === 'objections') matchQuick = !!(l as any).objection;
-      if (quickFilter === 'new')        matchQuick = parseDate(l.lastUpdate) >= weekAgo || l.status === 'חדש';
-      // Advanced filters
-      const matchObjection  = !filterObjection || (l as any).objection === filterObjection;
-      const matchAdvSource  = !filterSource || l.source === filterSource;
-      const matchNoAnswer   = !filterNoAnswer || ((l as any).nextFollowUpDate && new Date((l as any).nextFollowUpDate) < new Date());
-      const matchUntreated  = !filterUntreated || (l.status === 'חדש' && !safeArr(l.activityLog).length && !l.lastContactDate);
-      return matchSearch && matchStatus && matchSource && matchQuick && matchObjection && matchAdvSource && matchNoAnswer && matchUntreated;
-    });
+    const base = leads.filter(l => matchesLeadFilters(l, filters, { isHot: isHotLead }));
     return [...base].sort((a, b) => {
       let cmp = 0;
       if (sortField === 'company')    cmp = safeStr(a.company).localeCompare(safeStr(b.company), 'he');
@@ -522,14 +494,14 @@ export default function Dashboard({
       if (sortField === 'createdAt')  cmp = (a.createdAt ?? 0) - (b.createdAt ?? 0);
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [leads, search, activeStatus, sourceFilter, sortField, sortDir, quickFilter, filterObjection, filterSource, filterNoAnswer, filterUntreated, isHotLead]);
+  }, [leads, filters, sortField, sortDir, isHotLead]);
 
   // How many of the filtered leads to actually render on screen (20/50/100 — user-controlled).
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   // Reset to page 1 whenever the active filters/search/sort change (NOT when the
   // underlying leads data itself refreshes via the realtime listener — that
   // shouldn't yank the user back to page 1 mid-browse).
-  useEffect(() => { setPageNum(1); }, [search, activeStatus, sourceFilter, quickFilter, filterObjection, filterSource, filterNoAnswer, filterUntreated, sortField, sortDir]);
+  useEffect(() => { setPageNum(1); }, [filters, sortField, sortDir]);
   // Clamp if the current page no longer exists (e.g. leads were deleted).
   useEffect(() => { if (pageNum > totalPages) setPageNum(totalPages); }, [pageNum, totalPages]);
   const paged = useMemo(() => filtered.slice((pageNum - 1) * pageSize, pageNum * pageSize), [filtered, pageSize, pageNum]);
@@ -583,7 +555,7 @@ export default function Dashboard({
     if (!onWorkspaceUpdate) return;
     const updated = ALL_SOURCES.filter(x => x !== s);
     await onWorkspaceUpdate({ leadSources: updated });
-    if (sourceFilter === s) setSourceFilter('');
+    if (filters.source === s) patch('source', '');
     onToast?.('מקור הוסר', 'info');
   };
 
@@ -595,72 +567,14 @@ export default function Dashboard({
   const [showMktChat,  setShowMktChat]  = useState(false);
   const [showMailChat, setShowMailChat] = useState(false);
 
-  /* Chat sessions are stored per workspace so one client's conversation can
-     never surface in another's window. */
-  // Load the workspace's saved views once the workspace is known.
-  useEffect(() => {
-    if (!workspace?.id) return;
-    let alive = true;
-    void loadLeadViews(workspace.id).then(v => { if (alive) setViews(v); });
-    return () => { alive = false; };
-  }, [workspace?.id]);
-
-  /** The live filter state, in the shape a view stores. */
-  const currentFilters: LeadViewFilters = {
-    search, activeStatus: String(activeStatus), sourceFilter,
-    quickFilter: quickFilter ?? null,
-    filterObjection, filterSource, filterNoAnswer, filterUntreated,
-    sortField: String(sortField), sortDir,
-  };
-
-  const applyFilters = (f: LeadViewFilters) => {
-    setSearch(f.search);
-    setActiveStatus(f.activeStatus as LeadStatus | 'הכל');
-    setSourceFilter(f.sourceFilter);
-    setQuickFilter((f.quickFilter ?? null) as QuickFilter);
-    setFilterObjection(f.filterObjection);
-    setFilterSource(f.filterSource);
-    setFilterNoAnswer(f.filterNoAnswer);
-    setFilterUntreated(f.filterUntreated);
-    setSortField(f.sortField as SortField);
-    setSortDir(f.sortDir);
-    setPageNum(1);
-  };
-
-  const pickView = (v: LeadView) => { setActiveView(v.id); setViewMode(v.mode); applyFilters(v.filters); };
-
-  const persistViews = async (next: LeadView[]) => {
-    setViews(next);
-    if (!workspace?.id) { onToast?.('אין סביבת עבודה — התצוגה לא נשמרה', 'error'); return; }
-    try { await saveLeadViews(workspace.id, next); }
-    catch (e) { onToast?.(`שמירת התצוגה נכשלה: ${(e as Error).message}`, 'error'); }
-  };
-
-  const saveViewAs = (name: string) => {
-    const v: LeadView = {
-      id: `v_${Date.now()}`, name, mode: viewMode,
-      filters: currentFilters, createdBy: currentUser, createdAt: Date.now(),
-    };
-    void persistViews([...views, v]);
-    setActiveView(v.id);
-    onToast?.(`התצוגה "${name}" נשמרה ✓`, 'success');
-  };
-
-  const updateActiveView = () => {
-    const next = views.map(v => v.id === activeView && !v.builtIn
-      ? { ...v, mode: viewMode, filters: currentFilters } : v);
-    void persistViews(next);
-    onToast?.('התצוגה עודכנה ✓', 'success');
-  };
-
-  const deleteView = (id: string) => {
-    const v = views.find(x => x.id === id);
-    if (!v || v.builtIn) return;
-    if (!window.confirm(`למחוק את התצוגה "${v.name}"?`)) return;
-    void persistViews(views.filter(x => x.id !== id));
-    if (activeView === id) pickView(BUILT_IN_VIEWS[0]);
-    onToast?.('התצוגה נמחקה', 'info');
-  };
+  /** Names available for the "משויך ל" filter — the team, plus anyone already
+   *  assigned who is no longer on it, so their leads stay findable. */
+  const assigneeNames = useMemo(() => {
+    const s = new Set<string>();
+    (team ?? []).forEach(m => m.name && s.add(m.name));
+    leads.forEach(l => { if (l.assignedTo) s.add(l.assignedTo); });
+    return [...s].sort((a, b) => a.localeCompare(b, 'he'));
+  }, [team, leads]);
 
   useEffect(() => { setChatScope(workspace?.id); }, [workspace?.id]);
   const salesBadge = useChatBadge('sales');
@@ -941,16 +855,16 @@ export default function Dashboard({
               autoComplete="off"
               spellCheck={false}
               placeholder="חיפוש..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+              value={filters.search}
+              onChange={e => patch('search', e.target.value)}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault(); }}
               className="w-full pr-8 pl-6 py-1.5 text-xs focus:outline-none rounded-xl transition-all"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
               onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.5)'; e.target.style.boxShadow = '0 0 0 2px rgba(99,102,241,0.12)'; }}
               onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; e.target.style.boxShadow = ''; }}
             />
-            {search && (
-              <button type="button" onClick={() => setSearch('')} className="absolute left-2 top-1/2 -translate-y-1/2" tabIndex={-1}
+            {filters.search && (
+              <button type="button" onClick={() => patch('search', '')} className="absolute left-2 top-1/2 -translate-y-1/2" tabIndex={-1}
                 style={{ color: 'rgba(255,255,255,0.3)' }}>
                 <X size={11} />
               </button>
@@ -960,41 +874,9 @@ export default function Dashboard({
           {/* Divider */}
           <div className="w-px h-5 flex-shrink-0" style={{ background: 'rgba(255,255,255,0.08)' }} />
 
-          {/* Quick filters */}
-          <button type="button" onClick={() => setQuickFilter(quickFilter === 'hot' ? null : 'hot')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            title="לידים חמים — פעילות אחרונה בשבוע או ציון AI גבוה"
-            style={quickFilter === 'hot'
-              ? { background: 'rgba(249,115,22,0.2)', border: '1px solid rgba(249,115,22,0.45)', color: '#fb923c', boxShadow: '0 0 10px rgba(249,115,22,0.2)' }
-              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
-            }>
-            <Flame size={11} />
-            <span className="hidden sm:inline">חמים</span>
-          </button>
-
-          <button type="button" onClick={() => setQuickFilter(quickFilter === 'objections' ? null : 'objections')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            title="לידים עם התנגדות — סטטוס לא רלוונטי עם סיבה"
-            style={quickFilter === 'objections'
-              ? { background: 'rgba(239,68,68,0.18)', border: '1px solid rgba(239,68,68,0.4)', color: '#f87171', boxShadow: '0 0 10px rgba(239,68,68,0.18)' }
-              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
-            }>
-            <ShieldAlert size={11} />
-            <span className="hidden sm:inline">התנגדויות</span>
-          </button>
-
-          <button type="button" onClick={() => setQuickFilter(quickFilter === 'new' ? null : 'new')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            title="לידים חדשים — הצטרפו השבוע"
-            style={quickFilter === 'new'
-              ? { background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.45)', color: '#a5b4fc', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
-              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
-            }>
-            <Zap size={11} />
-            <span className="hidden sm:inline">חדשים</span>
-          </button>
-
-          {/* AI score sort */}
+          {/* Sorting is not filtering, so it stays in the toolbar: this button
+              changes the ORDER of the list, never which leads are in it. Every
+              control that narrows the list now lives in one panel. */}
           <button type="button"
             onClick={() => { setSortField('aiScore'); setSortDir(sortField === 'aiScore' && sortDir === 'desc' ? 'asc' : 'desc'); }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
@@ -1036,26 +918,6 @@ export default function Dashboard({
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Untreated leads filter */}
-          <button type="button"
-            onClick={() => setFilterUntreated(v => !v)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            title="לידים חדשים שלא טופלו — אין יומן פעילות ואין תאריך מגע"
-            style={filterUntreated
-              ? { background: 'rgba(245,158,11,0.22)', border: '1px solid rgba(245,158,11,0.5)', color: '#fbbf24', boxShadow: '0 0 10px rgba(245,158,11,0.2)' }
-              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
-            }>
-            <AlertCircle size={11} />
-            <span className="hidden sm:inline">לא טופלו</span>
-            {untreatedCount > 0 && (
-              <span className="text-[9px] font-black px-1 py-0.5 rounded-full"
-                style={filterUntreated
-                  ? { background: 'rgba(245,158,11,0.35)', color: '#fbbf24' }
-                  : { background: 'rgba(245,158,11,0.18)', color: '#fbbf24' }
-                }>{untreatedCount}</span>
-            )}
-          </button>
-
           {/* Bulk messaging button */}
           <button type="button"
             onClick={() => { setShowBulkModal(true); setBulkStep(1); }}
@@ -1064,34 +926,6 @@ export default function Dashboard({
             style={{ background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.28)', color: '#818cf8' }}>
             <Send size={11} />
             <span className="hidden sm:inline">דיוור המוני</span>
-          </button>
-
-          {/* Advanced filter toggle */}
-          <button type="button"
-            onClick={() => setShowAdvancedFilter(v => !v)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            title="סינון מתקדם"
-            style={showAdvancedFilter || filterObjection || filterSource || filterNoAnswer
-              ? { background: 'rgba(139,92,246,0.22)', border: '1px solid rgba(139,92,246,0.45)', color: '#c4b5fd', boxShadow: '0 0 10px rgba(139,92,246,0.18)' }
-              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.4)' }
-            }>
-            <Filter size={11} />
-            <span className="hidden sm:inline">סינון מתקדם</span>
-            {(filterObjection || filterSource || filterNoAnswer) && (
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#c4b5fd' }} />
-            )}
-          </button>
-
-          {/* Source filter */}
-          <button type="button" onClick={() => setShowFilters(v => !v)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0"
-            style={showFilters || sourceFilter
-              ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.45)', color: '#818cf8', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
-              : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.38)' }
-            }>
-            <SlidersHorizontal size={11} />
-            <span className="hidden sm:inline">מקור</span>
-            {sourceFilter && <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#818cf8' }} />}
           </button>
 
           <button type="button" onClick={exportExcel} disabled={exporting}
@@ -1137,15 +971,15 @@ export default function Dashboard({
         {/* Row 2: Status tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto px-3 pb-3 scrollbar-hide" dir="rtl"
           style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-          <button type="button" onClick={() => setActiveStatus('הכל')}
+          <button type="button" onClick={() => patch('status', 'הכל')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex-shrink-0 transition-all mt-2"
-            style={activeStatus === 'הכל'
+            style={filters.status === 'הכל'
               ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.5)', color: '#818cf8', boxShadow: '0 0 10px rgba(99,102,241,0.18)' }
               : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.32)' }
             }>
             הכל
             <span className="text-[9px] font-black px-1 py-0.5 rounded-full"
-              style={activeStatus === 'הכל'
+              style={filters.status === 'הכל'
                 ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8' }
                 : { background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.28)' }
               }>{leads.length}</span>
@@ -1153,9 +987,9 @@ export default function Dashboard({
           {statusConfigs.map(cfg => {
             const s = cfg.label;
             const neon = cfg.color;
-            const active = activeStatus === s;
+            const active = filters.status === s;
             return (
-              <button type="button" key={s} onClick={() => setActiveStatus(activeStatus === s ? 'הכל' : s)}
+              <button type="button" key={s} onClick={() => patch('status', filters.status === s ? 'הכל' : s)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex-shrink-0 transition-all mt-2"
                 style={active
                   ? { background: `${neon}22`, border: `1px solid ${neon}55`, color: neon, boxShadow: `0 0 12px ${neon}28` }
@@ -1182,134 +1016,57 @@ export default function Dashboard({
               <Settings2 size={13} />
             </button>
           )}
+          {onWorkspaceUpdate && (
+            <button
+              type="button"
+              onClick={() => setEditingSources(v => !v)}
+              title="ערוך את רשימת מקורות הלידים"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-bold flex-shrink-0 mt-2 transition-all"
+              style={editingSources
+                ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.45)', color: '#a5b4fc' }
+                : { border: '1px solid rgba(99,102,241,0.3)', color: 'rgba(165,180,252,0.6)' }}
+            >
+              <Megaphone size={12} />
+              <span className="hidden sm:inline">מקורות</span>
+            </button>
+          )}
         </div>
 
-        {/* Source filter panel */}
-        {showFilters && (
-          <div className="px-3 pb-3 pt-2 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.28)' }}>מקור:</span>
-              {['', ...ALL_SOURCES].map(s => (
-                <button type="button" key={s} onClick={() => setSourceFilter(s)}
-                  className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
-                  style={sourceFilter === s
-                    ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.4)' }
-                    : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.38)', border: '1px solid rgba(255,255,255,0.08)' }
-                  }>
-                  {s || 'הכל'}
-                </button>
-              ))}
-              {onWorkspaceUpdate && (
-                <button type="button" onClick={() => setEditingSources(v => !v)}
-                  className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1"
-                  style={editingSources
-                    ? { background: 'rgba(99,102,241,0.28)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.4)' }
-                    : { background: 'transparent', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <Settings2 size={11} /> {editingSources ? 'סיום' : 'ערוך מקורות'}
-                </button>
-              )}
-            </div>
-
-            {editingSources && onWorkspaceUpdate && (
-              <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
-                <div className="flex flex-wrap gap-1.5">
-                  {ALL_SOURCES.map(s => (
-                    <span key={s} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold"
-                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)' }}>
-                      {s}
-                      <button type="button" onClick={() => removeSourceItem(s)} title="הסר מקור">
-                        <X size={11} className="text-red-400 hover:text-red-300" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="flex gap-1.5">
-                  <input value={newSourceInput} onChange={e => setNewSourceInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addSourceItem()}
-                    placeholder="הוסף מקור חדש..." dir="rtl"
-                    className="flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
-                    style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff' }} />
-                  <button type="button" onClick={addSourceItem}
-                    className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
-                    style={{ background: 'rgba(99,102,241,0.9)', color: '#fff' }}>
-                    <Plus size={12} /> הוסף
-                  </button>
-                </div>
+        {/* Source list editor — workspace configuration, so it sits with the
+            status editor rather than inside a filter. Filtering BY source now
+            happens in the one filter panel; this is where the list itself is
+            maintained. */}
+        {editingSources && onWorkspaceUpdate && (
+          <div className="px-3 pb-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+              <div className="flex items-center justify-between">
+                <button type="button" onClick={() => setEditingSources(false)}
+                  className="text-[10px] font-bold" style={{ color: 'rgba(255,255,255,0.4)' }}>סיום</button>
+                <span className="text-[11px] font-black" style={{ color: '#a5b4fc' }}>מקורות הלידים</span>
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Advanced filter panel */}
-        {showAdvancedFilter && (
-          <div className="px-3 pb-4 pt-3 space-y-3" style={{ borderTop: '1px solid rgba(139,92,246,0.15)', background: 'rgba(139,92,246,0.04)' }}>
-            <div className="flex items-center justify-between">
-              <button type="button" onClick={() => { setFilterObjection(''); setFilterSource(''); setFilterNoAnswer(false); }}
-                className="text-[10px] font-bold transition-colors"
-                style={{ color: 'rgba(255,255,255,0.25)' }}>
-                נקה הכל
-              </button>
-              <span className="text-[11px] font-bold" style={{ color: '#c4b5fd' }}>סינון מתקדם</span>
-            </div>
-
-            {/* Filter by source */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold flex-shrink-0" style={{ color: 'rgba(255,255,255,0.35)' }}>מקור:</span>
-              {['', ...ALL_SOURCES].map(s => (
-                <button type="button" key={s} onClick={() => setFilterSource(filterSource === s ? '' : s)}
-                  className="px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all"
-                  style={filterSource === s && s !== ''
-                    ? { background: 'rgba(139,92,246,0.28)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.4)' }
-                    : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.07)' }
-                  }>
-                  {s || 'הכל'}
+              <div className="flex flex-wrap gap-1.5">
+                {ALL_SOURCES.map(s => (
+                  <span key={s} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)' }}>
+                    {s}
+                    <button type="button" onClick={() => removeSourceItem(s)} title="הסר מקור">
+                      <X size={11} className="text-red-400 hover:text-red-300" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-1.5">
+                <input value={newSourceInput} onChange={e => setNewSourceInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addSourceItem()}
+                  placeholder="הוסף מקור חדש..." dir="rtl"
+                  className="flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff' }} />
+                <button type="button" onClick={addSourceItem}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
+                  style={{ background: 'rgba(99,102,241,0.9)', color: '#fff' }}>
+                  <Plus size={12} /> הוסף
                 </button>
-              ))}
-            </div>
-
-            {/* Filter by objection */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold flex-shrink-0" style={{ color: 'rgba(255,255,255,0.35)' }}>התנגדות:</span>
-              <input
-                type="text"
-                placeholder="הקלד התנגדות..."
-                value={filterObjection}
-                onChange={e => setFilterObjection(e.target.value)}
-                className="flex-1 max-w-[200px] px-3 py-1 text-xs rounded-lg focus:outline-none transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }}
-                onFocus={e => { e.target.style.borderColor = 'rgba(139,92,246,0.5)'; }}
-                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
-              />
-              {filterObjection && (
-                <button type="button" onClick={() => setFilterObjection('')} style={{ color: 'rgba(255,255,255,0.3)' }}>
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-
-            {/* Toggle filters */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <button type="button"
-                onClick={() => setFilterNoAnswer(v => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
-                style={filterNoAnswer
-                  ? { background: 'rgba(239,68,68,0.18)', border: '1px solid rgba(239,68,68,0.4)', color: '#f87171' }
-                  : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.38)' }
-                }>
-                <PhoneOff size={11} />
-                לא ענו (פגישה שעברה)
-              </button>
-
-              <button type="button"
-                onClick={() => setFilterUntreated(v => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
-                style={filterUntreated
-                  ? { background: 'rgba(245,158,11,0.18)', border: '1px solid rgba(245,158,11,0.4)', color: '#fbbf24' }
-                  : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.38)' }
-                }>
-                <AlertCircle size={11} />
-                לא טופלו ({untreatedCount})
-              </button>
+              </div>
             </div>
           </div>
         )}
@@ -1356,20 +1113,46 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* ── Saved views + display mode ── */}
+      {/* ── Display mode + the two panels that decide what the list shows ── */}
       <LeadViewBar
-        views={views}
-        activeId={activeView}
         mode={viewMode}
-        filters={currentFilters}
-        dirty={isDirty(views.find(v => v.id === activeView) ?? null, currentFilters, viewMode)}
-        onPick={pickView}
         onMode={setViewMode}
-        onSaveAs={saveViewAs}
-        onUpdate={updateActiveView}
-        onRevert={() => { const v = views.find(x => x.id === activeView); if (v) pickView(v); }}
-        onDelete={deleteView}
+        filterCount={activeFilterCount(filters)}
+        filtersOpen={openPanel === 'filters'}
+        onToggleFilters={() => setOpenPanel(p => (p === 'filters' ? null : 'filters'))}
+        showColumns={viewMode === 'table'}
+        columnsOpen={openPanel === 'columns'}
+        onToggleColumns={() => setOpenPanel(p => (p === 'columns' ? null : 'columns'))}
       />
+
+      {/* One panel at a time: both are wide, and two open at once pushes the
+          list they are filtering off the bottom of the screen. */}
+      {openPanel === 'filters' && (
+        <div className="rounded-xl overflow-hidden mb-3"
+          style={{ background: 'rgba(10,15,30,0.88)', border: '1px solid rgba(139,92,246,0.25)', backdropFilter: 'blur(16px)' }}>
+          <LeadFilterPanel
+            filters={filters}
+            onChange={setFilters}
+            onClose={() => setOpenPanel(null)}
+            sources={ALL_SOURCES}
+            team={assigneeNames}
+            untreatedCount={untreatedCount}
+            budgetLabel={workspace?.cardLeftField?.label ?? t('dashboard.budget')}
+          />
+        </div>
+      )}
+
+      {openPanel === 'columns' && viewMode === 'table' && (
+        <div className="rounded-xl overflow-hidden mb-3"
+          style={{ background: 'rgba(10,15,30,0.88)', border: '1px solid rgba(99,102,241,0.25)', backdropFilter: 'blur(16px)' }}>
+          <LeadColumnsPanel
+            keys={columnKeys}
+            onChange={changeColumns}
+            onClose={() => setOpenPanel(null)}
+            budgetLabel={workspace?.cardLeftField?.label ?? t('dashboard.budget')}
+          />
+        </div>
+      )}
 
       {/* Board and cards replace BOTH the mobile list and the desktop table —
           they are already responsive, so there is no separate mobile variant. */}
@@ -1556,17 +1339,13 @@ export default function Dashboard({
       <div className="hidden md:block rounded-xl overflow-hidden"
         style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(8px)' }}>
         <table className="w-full" style={{ tableLayout: 'fixed' }}>
-          {/* Fixed column widths – header and data cells always align */}
+          {/* Widths come from the column definitions, so a column added in the
+              editor cannot end up with a header and a body cell of different
+              sizes — the classic symptom of two hand-maintained lists. */}
           <colgroup>
-            <col style={{ width: '40px' }} />   {/* checkbox */}
-            <col style={{ width: '9%' }} />     {/* createdAt — first */}
-            <col style={{ width: '20%' }} />    {/* company */}
-            <col style={{ width: '11%' }} />    {/* contact */}
-            <col style={{ width: '10%' }} />    {/* status */}
-            <col style={{ width: '9%' }} />     {/* budget */}
-            <col style={{ width: '9%' }} />     {/* lastUpdate */}
-            <col style={{ width: '6%' }} />     {/* aiScore */}
-            <col style={{ width: '26%' }} />    {/* actions */}
+            <col style={{ width: '40px' }} />
+            {columnKeys.map(k => <col key={k} style={{ width: COLUMN_BY_KEY[k]?.width ?? '10%' }} />)}
+            <col style={{ width: '210px' }} />
           </colgroup>
           <thead>
             <tr style={{ background: 'rgba(10,15,30,0.85)', borderBottom: '1px solid rgba(99,102,241,0.18)' }}>
@@ -1576,20 +1355,23 @@ export default function Dashboard({
                   onChange={toggleSelectAll}
                   className="rounded cursor-pointer accent-indigo-500" />
               </th>
-              <DarkSortTh label="תאריך יצירה"               field="createdAt"  current={sortField} dir={sortDir} onSort={handleSort} />
-              <DarkSortTh label={t('dashboard.company')}    field="company"    current={sortField} dir={sortDir} onSort={handleSort} />
-              <th className="text-right px-4 py-3 text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.35)' }}>{t('dashboard.contact')}</th>
-              <DarkSortTh label={t('common.status')}        field="status"     current={sortField} dir={sortDir} onSort={handleSort} />
-              <DarkSortTh label={workspace?.cardLeftField?.label ?? t('dashboard.budget')} field="budget" current={sortField} dir={sortDir} onSort={handleSort} />
-              <DarkSortTh label={t('dashboard.lastUpdate')} field="lastUpdate" current={sortField} dir={sortDir} onSort={handleSort} />
-              <DarkSortTh label={t('dashboard.score')}      field="aiScore"    current={sortField} dir={sortDir} onSort={handleSort} />
+              {columnKeys.map(k => {
+                const def = COLUMN_BY_KEY[k];
+                if (!def) return null;
+                const label = colLabel(k);
+                return def.sortField
+                  ? <DarkSortTh key={k} label={label} field={def.sortField as SortField}
+                      current={sortField} dir={sortDir} onSort={handleSort} />
+                  : <th key={k} className="text-right px-4 py-3 text-[11px] font-bold"
+                      style={{ color: 'rgba(255,255,255,0.35)' }}>{label}</th>;
+              })}
               <th className="text-right px-4 py-3 text-[11px] font-bold" style={{ color: 'rgba(255,255,255,0.35)' }}>{t('common.actions')}</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-center py-16">
+                <td colSpan={columnKeys.length + 2} className="text-center py-16">
                   <div className="flex flex-col items-center gap-3">
                     <Search size={32} style={{ color: 'rgba(99,102,241,0.2)' }} />
                     <span className="text-sm" style={{ color: 'rgba(255,255,255,0.2)' }}>{t('dashboard.noLeads')}</span>
@@ -1602,6 +1384,104 @@ export default function Dashboard({
               const neon = statusConfigs.find(c => c.label === lead.status)?.color ?? NEON[lead.status] ?? '#6366f1';
               const temp = getTemperature(lead);
               const isVIP = budget >= 15000;
+              const openTasks = safeArr<import('../types').Task>(lead.tasks).filter(tk => !tk.completed);
+              const overdueTasks = openTasks.filter(tk => isTaskOverdue(tk.date)).length;
+              const muted = { color: 'rgba(255,255,255,0.18)' };
+
+              /** One cell. Every column is rendered here, so the switch is the
+               *  single place that has to know a column exists. */
+              const cell = (k: LeadColumnKey): React.ReactNode => {
+                switch (k) {
+                  case 'createdAt':
+                    return lead.createdAt
+                      ? new Date(lead.createdAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                      : '—';
+                  case 'company':
+                    return (
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {temp === 'hot'  && <Flame size={10} className="text-orange-400 flex-shrink-0" />}
+                          {temp === 'cold' && <Snowflake size={10} className="text-cyan-400 flex-shrink-0" />}
+                          <span className="font-bold text-white text-sm truncate">{safeStr(lead.company)}</span>
+                          {isVIP && <span className="text-[8px] font-black text-amber-900 px-1 py-0.5 rounded flex-shrink-0" style={{ background: 'linear-gradient(90deg,#fbbf24,#f59e0b)' }}>VIP</span>}
+                          {lead.waitingContent && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold flex-shrink-0" style={{ background: 'rgba(245,158,11,0.14)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.22)' }}>תוכן</span>}
+                        </div>
+                        {/* The source shows under the name only when it is not
+                            already a column of its own, so turning that column
+                            on does not print it twice. */}
+                        {!columnKeys.includes('source') && safeStr(lead.source) && (
+                          <span className="text-xs" style={{ color: 'rgba(255,255,255,0.28)' }}>{safeStr(lead.source)}</span>
+                        )}
+                      </div>
+                    );
+                  case 'contactName':
+                    return <span className="block truncate">{safeStr(lead.contactName) || '—'}</span>;
+                  case 'phone':
+                    return lead.phone
+                      ? <span dir="ltr" className="block truncate text-xs">{safeStr(lead.phone)}</span>
+                      : <span style={muted}>—</span>;
+                  case 'email':
+                    return lead.email
+                      ? <span dir="ltr" className="block truncate text-xs">{safeStr(lead.email)}</span>
+                      : <span style={muted}>—</span>;
+                  case 'status':
+                    return (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: `${neon}18`, color: neon, border: `1px solid ${neon}38`, boxShadow: `0 0 6px ${neon}28` }}>
+                        {lead.status}
+                      </span>
+                    );
+                  case 'source':
+                    return safeStr(lead.source) || <span style={muted}>—</span>;
+                  case 'budget':
+                    return budget > 0
+                      ? <span className="font-black text-xs" style={{ color: neon }}>{workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}{isVIP && ' 🌟'}</span>
+                      : <span style={muted}>—</span>;
+                  case 'lastUpdate':
+                    return <span className="text-xs">{safeStr(lead.lastUpdate) || '—'}</span>;
+                  case 'aiScore':
+                    return <ScoreRing score={getEffectiveScore(lead)} />;
+                  case 'assignedTo':
+                    return lead.assignedTo
+                      ? <span className="block truncate">{lead.assignedTo}</span>
+                      : <span style={muted}>לא משויך</span>;
+                  case 'openTasks':
+                    // The overdue count is the part worth acting on, so it is
+                    // coloured separately rather than folded into one number.
+                    return openTasks.length === 0
+                      ? <span style={muted}>—</span>
+                      : (
+                        <span className="flex items-center gap-1">
+                          <span className="font-bold text-xs">{openTasks.length}</span>
+                          {overdueTasks > 0 && (
+                            <span className="text-[9px] font-black px-1 rounded-full"
+                              style={{ background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>{overdueTasks} באיחור</span>
+                          )}
+                        </span>
+                      );
+                  case 'nextFollowUp':
+                    return lead.nextFollowUpDate
+                      ? <span className="text-xs" style={new Date(lead.nextFollowUpDate) < new Date() ? { color: '#f87171' } : undefined}>
+                          {new Date(lead.nextFollowUpDate).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' })}
+                        </span>
+                      : <span style={muted}>—</span>;
+                  case 'lastContact':
+                    return lead.lastContactDate
+                      ? <span className="text-xs">{new Date(lead.lastContactDate).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' })}</span>
+                      : <span style={muted}>—</span>;
+                  case 'objection':
+                    return lead.objection
+                      ? <span className="block truncate text-xs" title={lead.objection}>{lead.objection}</span>
+                      : <span style={muted}>—</span>;
+                  case 'campaign':
+                    return lead.utmCampaign
+                      ? <span className="block truncate text-xs" title={lead.utmCampaign}>{lead.utmCampaign}</span>
+                      : <span style={muted}>—</span>;
+                  default:
+                    return null;
+                }
+              };
+
               return (
                 <tr key={lead.id}
                   className="transition-all cursor-pointer"
@@ -1621,44 +1501,13 @@ export default function Dashboard({
                     <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(lead.id)}
                       className="rounded cursor-pointer accent-indigo-500" />
                   </td>
-                  {/* createdAt — first column */}
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-xs`} style={{ color: 'rgba(255,255,255,0.32)' }}>
-                    {lead.createdAt
-                      ? new Date(lead.createdAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' })
-                      : '—'}
-                  </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} overflow-hidden`}>
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {temp === 'hot'    && <Flame size={10} className="text-orange-400 flex-shrink-0" />}
-                        {temp === 'cold'   && <Snowflake size={10} className="text-cyan-400 flex-shrink-0" />}
-                        <span className="font-bold text-white text-sm truncate">{safeStr(lead.company)}</span>
-                        {isVIP && <span className="text-[8px] font-black text-amber-900 px-1 py-0.5 rounded flex-shrink-0" style={{ background: 'linear-gradient(90deg,#fbbf24,#f59e0b)' }}>VIP</span>}
-                        {lead.waitingContent && <span className="text-[9px] px-1.5 py-0.5 rounded font-bold flex-shrink-0" style={{ background: 'rgba(245,158,11,0.14)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.22)' }}>תוכן</span>}
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {safeStr(lead.source) && <span className="text-xs" style={{ color: 'rgba(255,255,255,0.28)' }}>{safeStr(lead.source)}</span>}
-                      </div>
-                    </div>
-                  </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm overflow-hidden`} style={{ color: 'rgba(255,255,255,0.55)' }}>
-                    <span className="block truncate">{safeStr(lead.contactName)}</span>
-                  </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}>
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                      style={{ background: `${neon}18`, color: neon, border: `1px solid ${neon}38`, boxShadow: `0 0 6px ${neon}28` }}>
-                      {lead.status}
-                    </span>
-                  </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm`}>
-                    {budget > 0
-                      ? <span className="font-black text-xs" style={{ color: neon }}>{workspace?.cardLeftField?.prefix ?? '₪'}{budget.toLocaleString()}{isVIP && ' 🌟'}</span>
-                      : <span style={{ color: 'rgba(255,255,255,0.18)' }}>—</span>}
-                  </td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'} text-xs`} style={{ color: 'rgba(255,255,255,0.32)' }}>{safeStr(lead.lastUpdate)}</td>
-                  <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`}>
-                    <ScoreRing score={getEffectiveScore(lead)} />
-                  </td>
+                  {columnKeys.map(k => (
+                    <td key={k}
+                      className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm overflow-hidden`}
+                      style={{ color: 'rgba(255,255,255,0.5)' }}>
+                      {cell(k)}
+                    </td>
+                  ))}
                   <td className={`px-4 ${compact ? 'py-2' : 'py-3'}`} onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1 flex-wrap">
                       {lead.phone && (

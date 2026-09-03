@@ -1,20 +1,20 @@
 /**
- * LeadViewBar — the saved-view + display-mode strip above the leads table.
+ * LeadViewBar — how the leads list is displayed, and the two panels that
+ * change what is in it.
  *
- * Sits where the eye already goes before scanning rows, so switching context
- * ("show me the pipeline as a board") is one click rather than re-applying four
- * filters. Mirrors the pattern people already know from other CRMs: named tabs
- * on the right, display toggle on the left.
+ * Named saved views used to live here as tabs. They were removed: three
+ * display modes plus a filter panel already answer "show me X as a board", and
+ * a strip of named tabs that silently drift from the filters actually applied
+ * is a list you stop trusting.
  *
- * The "unsaved changes" state is explicit on purpose. Silently drifting away
- * from a named view is how people end up trusting a list that no longer means
- * what its name says.
+ * The filter and column buttons sit beside the display switcher because all
+ * three answer the same question — what am I looking at — and having them in
+ * one place is what stops a fifth filter control appearing in the toolbar
+ * later.
  */
 
-import { useState } from 'react';
-import { Table2, LayoutGrid, Columns3, Plus, Check, X, Trash2, RotateCcw } from 'lucide-react';
-import type { LeadView, ViewMode, LeadViewFilters } from '../lib/leadViews';
-import { activeFilterCount } from '../lib/leadViews';
+import { Table2, LayoutGrid, Columns3, SlidersHorizontal, Columns } from 'lucide-react';
+export type ViewMode = 'table' | 'board' | 'cards';
 
 const MODES: { key: ViewMode; icon: React.ElementType; label: string }[] = [
   { key: 'table', icon: Table2,     label: 'טבלה' },
@@ -23,45 +23,35 @@ const MODES: { key: ViewMode; icon: React.ElementType; label: string }[] = [
 ];
 
 interface Props {
-  views: LeadView[];
-  activeId: string;
   mode: ViewMode;
-  filters: LeadViewFilters;
-  dirty: boolean;
-  onPick: (v: LeadView) => void;
   onMode: (m: ViewMode) => void;
-  onSaveAs: (name: string) => void;
-  onUpdate: () => void;
-  onRevert: () => void;
-  onDelete: (id: string) => void;
+  /** How many filters are narrowing the list right now. */
+  filterCount: number;
+  filtersOpen: boolean;
+  onToggleFilters: () => void;
+  /** Columns only exist in table mode, so the button only appears there. */
+  showColumns: boolean;
+  columnsOpen: boolean;
+  onToggleColumns: () => void;
 }
 
 export default function LeadViewBar({
-  views, activeId, mode, filters, dirty,
-  onPick, onMode, onSaveAs, onUpdate, onRevert, onDelete,
+  mode, onMode, filterCount, filtersOpen, onToggleFilters,
+  showColumns, columnsOpen, onToggleColumns,
 }: Props) {
-  const [naming, setNaming] = useState(false);
-  const [name, setName] = useState('');
-  const active = views.find(v => v.id === activeId) ?? null;
-  const count = activeFilterCount(filters);
-
-  const commit = () => {
-    const n = name.trim();
-    if (!n) return;
-    onSaveAs(n);
-    setName(''); setNaming(false);
-  };
+  const chip =
+    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all flex-shrink-0';
 
   return (
-    <div className="flex items-center gap-2 flex-wrap-reverse justify-between mb-3" dir="rtl">
+    <div className="flex items-center gap-2 flex-wrap justify-between mb-3" dir="rtl">
 
-      {/* Display mode — left side, away from the view tabs it does not belong to */}
+      {/* Display mode */}
       <div className="flex items-center gap-1 rounded-xl p-0.5 flex-shrink-0"
         style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
         {MODES.map(m => {
           const on = mode === m.key;
           return (
-            <button key={m.key} onClick={() => onMode(m.key)} title={m.label}
+            <button key={m.key} type="button" onClick={() => onMode(m.key)} title={m.label}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors"
               style={on
                 ? { background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff' }
@@ -73,71 +63,35 @@ export default function LeadViewBar({
         })}
       </div>
 
-      {/* Saved views */}
-      <div className="flex items-center gap-1.5 flex-wrap justify-end flex-1 min-w-0">
-        {dirty && (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button onClick={onRevert} title="בטל שינויים וחזור לתצוגה השמורה"
-              className="p-1.5 rounded-lg text-[11px]"
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)' }}>
-              <RotateCcw size={12} />
-            </button>
-            {active && !active.builtIn && (
-              <button onClick={onUpdate}
-                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1"
-                style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.35)', color: '#34d399' }}>
-                <Check size={12} />עדכן
-              </button>
-            )}
-          </div>
-        )}
-
-        {naming ? (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <input
-              autoFocus value={name} onChange={e => setName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setNaming(false); setName(''); } }}
-              placeholder="שם התצוגה"
-              className="w-32 rounded-lg px-2 py-1.5 text-[11px] text-right focus:outline-none"
-              style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(99,102,241,0.5)', color: '#fff' }} />
-            <button onClick={commit} className="p-1.5 rounded-lg"
-              style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}><Check size={12} /></button>
-            <button onClick={() => { setNaming(false); setName(''); }} className="p-1.5 rounded-lg"
-              style={{ color: 'rgba(255,255,255,0.35)' }}><X size={12} /></button>
-          </div>
-        ) : (
-          <button onClick={() => setNaming(true)}
-            title={count ? `שמור את ${count} הפילטרים הפעילים כתצוגה` : 'שמור תצוגה חדשה'}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex-shrink-0"
-            style={{ background: 'rgba(255,255,255,0.05)', border: '1px dashed rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)' }}>
-            <Plus size={12} />שמור תצוגה
+      {/* The panels that decide what the list contains and how it is laid out */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {showColumns && (
+          <button type="button" onClick={onToggleColumns}
+            title="בחר אילו עמודות מוצגות ובאיזה סדר"
+            className={chip}
+            style={columnsOpen
+              ? { background: 'rgba(99,102,241,0.22)', border: '1px solid rgba(99,102,241,0.5)', color: '#a5b4fc' }
+              : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.45)' }}>
+            <Columns size={12} />
+            ערוך עמודות
           </button>
         )}
 
-        <div className="w-px h-5 flex-shrink-0" style={{ background: 'rgba(255,255,255,0.1)' }} />
-
-        {views.map(v => {
-          const on = v.id === activeId;
-          return (
-            <div key={v.id} className="relative group flex-shrink-0">
-              <button onClick={() => onPick(v)}
-                className="px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors"
-                style={on
-                  ? { background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.45)', color: '#a5b4fc' }
-                  : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.5)' }}>
-                {v.name}
-                {on && dirty && <span title="יש שינויים שלא נשמרו" className="mr-1" style={{ color: '#fbbf24' }}>•</span>}
-              </button>
-              {!v.builtIn && (
-                <button onClick={() => onDelete(v.id)} title="מחק תצוגה"
-                  className="absolute -top-1.5 -left-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                  style={{ background: '#7f1d1d', color: '#fca5a5' }}>
-                  <Trash2 size={9} />
-                </button>
-              )}
-            </div>
-          );
-        })}
+        <button type="button" onClick={onToggleFilters}
+          title="כל הסינונים — מקור, סוכן, תקציב, תאריכים ומצב טיפול"
+          className={chip}
+          style={filtersOpen || filterCount > 0
+            ? { background: 'rgba(139,92,246,0.22)', border: '1px solid rgba(139,92,246,0.5)', color: '#c4b5fd', boxShadow: '0 0 10px rgba(139,92,246,0.18)' }
+            : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'rgba(255,255,255,0.45)' }}>
+          <SlidersHorizontal size={12} />
+          סינון מתקדם
+          {filterCount > 0 && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full"
+              style={{ background: 'rgba(139,92,246,0.35)', color: '#ddd6fe' }}>
+              {filterCount}
+            </span>
+          )}
+        </button>
       </div>
     </div>
   );
