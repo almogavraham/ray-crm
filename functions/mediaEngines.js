@@ -204,7 +204,15 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         // not a wrong key. Say which, so the fix is in the right place.
         // OpenAI's own 401 text names the key it saw, masked (sk-proj-***abcd),
         // which is the one fact that settles "did my paste arrive intact".
-        if (r.status === 401) return { ok: false, message: `המפתח נדחה (401). OpenAI: ${msg}` };
+        if (r.status === 401) {
+          // Show the key AS WE HOLD IT (masked) next to what OpenAI saw, so the
+          // operator can compare both against the key page: a mismatch means
+          // the wrong key was saved; a match that is still rejected means the
+          // key was revoked at OpenAI and a fresh one is needed.
+          const k = keys.openai;
+          const held = `${k.slice(0, 12)}…${k.slice(-4)} (${k.length} תווים)`;
+          return { ok: false, message: `המפתח נדחה (401). שמור אצלנו: ${held}. OpenAI ענה: ${msg}` };
+        }
         if (/does not exist|do not have access/i.test(msg)) {
           return { ok: false, message: 'המפתח תקין, אבל לפרויקט הזה אין גישה ל-DALL·E 3. ב-platform.openai.com ← Settings ← Project ← Limits ← אפשר Model access ל-dall-e-3, או צור מפתח בפרויקט ה-Default' };
         }

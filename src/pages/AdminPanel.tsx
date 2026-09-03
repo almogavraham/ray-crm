@@ -3554,6 +3554,12 @@ function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|
   };
 
   const handleTest = async (id: EngineId) => {
+    // A key typed but not yet saved would be tested as the OLD key and reported
+    // as rejected. Save the card's draft first, then test what is stored.
+    const def = ENGINES.find(e => e.id === id);
+    if (def && def.keyFields.some(f => (draft[f.name] ?? '').trim())) {
+      await handleSave(def.keyFields.map(f => f.name));
+    }
     setTesting(id);
     try {
       setResults(r => ({ ...r, [id]: { ok: false, message: '…' } }));
@@ -3658,10 +3664,10 @@ function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|
                           </button>
                         )}
                         {e.keyFields.length > 0 && (
-                          <button type="button" onClick={() => void handleTest(e.id)} disabled={testing === e.id || !connected}
+                          <button type="button" onClick={() => void handleTest(e.id)} disabled={testing === e.id || saving || (!connected && !e.keyFields.some(f => (draft[f.name] ?? '').trim()))}
                             className="px-3 py-1.5 rounded-xl text-[11px] font-bold disabled:opacity-40"
                             style={{ background: `${e.color}22`, color: e.color, border: `1px solid ${e.color}55` }}>
-                            {testing === e.id ? 'בודק…' : '🔌 בדוק חיבור'}
+                            {testing === e.id ? 'בודק…' : e.keyFields.some(f => (draft[f.name] ?? '').trim()) ? '💾 שמור ובדוק' : '🔌 בדוק חיבור'}
                           </button>
                         )}
                       </div>
