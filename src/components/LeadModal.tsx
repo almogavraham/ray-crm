@@ -92,14 +92,28 @@ interface LeadModalProps {
   onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
   onWorkspaceUpdate?: (updates: Partial<WorkspaceProfile>) => Promise<void>;
   statusConfigs?: StatusConfig[];
+  /**
+   * Which remembered position this card uses. Several cards can be open at
+   * once, so they cannot all be "the lead card" — that would stack them on one
+   * spot and have them overwrite each other's saved position.
+   */
+  windowKey?: string;
+  /** Stacking order, so the focused card draws over the others. */
+  zIndex?: number;
+  /** Raise this card. Fired on any pointer down inside it. */
+  onFocus?: () => void;
 }
 
-export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, team = [], onToast, onWorkspaceUpdate, statusConfigs = DEFAULT_STATUS_CONFIGS }: LeadModalProps) {
+export default function LeadModal({
+  lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, team = [],
+  onToast, onWorkspaceUpdate, statusConfigs = DEFAULT_STATUS_CONFIGS,
+  windowKey = 'lead-card', zIndex = 50, onFocus,
+}: LeadModalProps) {
   const { t, dir } = useLang();
   /* Wider and taller than a chat window: the card carries two columns of detail
      and a tab strip, and at chat width the fields wrap into unreadable slivers. */
   const { floating, backdropProps, panelProps, handleProps } = useDraggableWindow(
-    'lead-card', { width: 'min(94vw, 760px)', height: 'min(88vh, 880px)' },
+    windowKey, { width: 'min(94vw, 760px)', height: 'min(88vh, 880px)' },
   );
   // Dynamic status list from config
   const configStatuses = useMemo(() => statusConfigs.map(c => c.label), [statusConfigs]);
@@ -926,12 +940,23 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           Phones keep the full-screen sheet: there is nothing to see behind a
           card on a 375px screen. */}
       <div
-        className={`fixed inset-0 z-50 flex items-start justify-center md:p-4 ${floating ? '' : 'overflow-y-auto'}`}
-        style={floating ? backdropProps.style : { background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+        className={`fixed inset-0 flex items-start justify-center md:p-4 ${floating ? '' : 'overflow-y-auto'}`}
+        style={{
+          // Several cards can be open at once, so the stacking order is passed
+          // in rather than fixed: the one last clicked has to draw over the
+          // rest, and a hard-coded z-50 on all of them leaves the order to
+          // whatever sequence they happen to be mounted in.
+          zIndex,
+          ...(floating ? backdropProps.style : { background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }),
+        }}
       >
         {/* Status color accent — left border of the modal */}
         <div
           {...(floating ? { ref: panelProps.ref } : {})}
+          // Capture, not bubble: a click on a button deep inside the card must
+          // still raise it, and stopPropagation anywhere in between would
+          // otherwise swallow the signal on the way up.
+          onPointerDownCapture={onFocus}
           className={floating
             ? 'bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden flex flex-col'
             : 'bg-slate-900 text-white md:rounded-2xl w-full md:max-w-2xl md:my-4 shadow-2xl border-0 md:border border-slate-700/50 overflow-hidden min-h-screen md:min-h-0'}

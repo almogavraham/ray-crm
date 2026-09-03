@@ -8,6 +8,8 @@ import Dashboard from './pages/Dashboard';
 import Overview from './pages/Overview';
 import AssistantWindow from './components/AssistantWindow';
 import { setChatScope } from './lib/chatSessionStore';
+import { useOpenLeadCards, MAX_OPEN_CARDS } from './lib/openLeadCards';
+import { useFloatingWidth } from './lib/useDraggableWindow';
 import Kanban from './pages/Kanban';
 import Tasks from './pages/Tasks';
 import Settings from './pages/Settings';
@@ -411,9 +413,38 @@ function AppInner() {
   const [settingsDefaultSection, setSettingsDefaultSection] = useState<'profile' | 'integrations' | undefined>(undefined);
   const [emailAgentDefaultTab, setEmailAgentDefaultTab] = useState<'inbox' | 'workflows' | undefined>(undefined);
   const [leads, setLeads]             = useState<Lead[]>([]);        // populated by effects
+  /* Read by callbacks that must not change identity when the list does — an
+     `onLeadClick` that is a new function on every realtime update re-renders
+     every page that receives it. */
+  const leadsRef = useRef<Lead[]>([]);
+  leadsRef.current = leads;
   const [team, setTeam]               = useState<TeamMember[]>([]);  // populated by effects
   const [settings, setSettings]       = useState<AppSettings>(loadSettings);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  /**
+   * Lead cards open right now, back to front.
+   *
+   * This used to be one `selectedLead`, so opening a card closed the previous
+   * one. That is fine for "look at this lead" and useless for comparing two,
+   * copying a figure across, or working a shortlist without losing your place.
+   *
+   * Only on a wide screen: below that a card is a full-screen sheet, and a
+   * second sheet would simply hide the first behind something the user cannot
+   * see to close.
+   */
+  const cards = useOpenLeadCards(
+    useFloatingWidth(),
+    // At the cap the least recently used card closes. Say so: a window
+    // disappearing on its own, with edits in it, reads as a bug otherwise.
+    useCallback((id: string) => {
+      const name = leadsRef.current.find(l => l.id === id)?.company;
+      addToast(
+        name ? `נסגר הכרטיס "${name}" — עד ${MAX_OPEN_CARDS} כרטיסים במקביל` : 'נסגר הכרטיס הישן ביותר',
+        'info',
+      );
+    }, []), // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  /** Opens a card, or raises it if that lead is already open. */
+  const openLead = useCallback((lead: Lead) => cards.open(lead.id), [cards]);
   const [showNewLead, setShowNewLead] = useState(false);
   const [showAiPanel,     setShowAiPanel]     = useState(false);
   const [aiPanelExpanded, setAiPanelExpanded] = useState(false);
@@ -848,7 +879,7 @@ function AppInner() {
   const handleLeadSave = async (updated: Lead) => {
     setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
     const ok = await saveLead(updated);
-    setSelectedLead(null);
+    cards.close(updated.id);
     addToast(ok ? 'הכרטיס נשמר בהצלחה ✓' : 'שגיאה בשמירה — נסה שוב', ok ? 'success' : 'error');
   };
 
@@ -917,7 +948,7 @@ function AppInner() {
   const handleLeadDelete = (id: string) => {
     const victim = leads.find(l => l.id === id);
     setLeads(prev => prev.filter(l => l.id !== id));
-    setSelectedLead(null);
+    cards.close(id);
 
     // Park a copy BEFORE erasing. If parking fails we abort the delete and put
     // the row back — losing a lead silently is the failure this exists to stop.
@@ -1694,15 +1725,15 @@ function AppInner() {
             leads={leads}
             standaloneTask={standaloneTask}
             currentUser={displayName}
-            onLeadClick={setSelectedLead}
+            onLeadClick={openLead}
             onPageChange={setPage}
           />
         )}
         {page === 'dashboard' && (
           <Dashboard
             leads={leadsForScope('leads')}
-            onLeadClick={setSelectedLead}
-            onNoteClick={setSelectedLead}
+            onLeadClick={openLead}
+            onNoteClick={openLead}
             onTaskComplete={handleTaskComplete}
             onToast={addToast}
             onBulkStatusChange={handleBulkStatusChange}
@@ -1730,8 +1761,8 @@ function AppInner() {
         {page === 'opportunities' && (
           <Dashboard
             leads={leadsForScope('opportunities')}
-            onLeadClick={setSelectedLead}
-            onNoteClick={setSelectedLead}
+            onLeadClick={openLead}
+            onNoteClick={openLead}
             onTaskComplete={handleTaskComplete}
             onToast={addToast}
             onBulkStatusChange={handleBulkStatusChange}
@@ -1755,11 +1786,11 @@ function AppInner() {
           />
         )}
         {page === 'overview' && (
-          <Overview leads={leads} onLeadClick={setSelectedLead} workspaceId={wid ?? undefined} />
+          <Overview leads={leads} onLeadClick={openLead} workspaceId={wid ?? undefined} />
         )}
         {/* 'ai' page now redirects to the shared side panel — no separate instance here */}
         {page === 'kanban' && (
-          <Kanban leads={leads} onLeadClick={setSelectedLead} onLeadSave={handleLeadUpdate} onPageChange={setPage} statusConfigs={statusConfigs} workspace={workspace ?? undefined} />
+          <Kanban leads={leads} onLeadClick={openLead} onLeadSave={handleLeadUpdate} onPageChange={setPage} statusConfigs={statusConfigs} workspace={workspace ?? undefined} />
         )}
         {/* Three nav entries led to a blank screen: the components were
             imported and never rendered, so the sidebar highlighted the item,
@@ -1773,7 +1804,7 @@ function AppInner() {
             leads={leads}
             team={team}
             currentUser={displayName}
-            onLeadClick={setSelectedLead}
+            onLeadClick={openLead}
             onToast={addToast}
           />
         )}
@@ -1783,7 +1814,7 @@ function AppInner() {
             team={team}
             standaloneTask={standaloneTask}
             currentUser={displayName}
-            onLeadClick={setSelectedLead}
+            onLeadClick={openLead}
             workspaceId={workspace?.id}
           />
         )}
@@ -1801,7 +1832,7 @@ function AppInner() {
             team={team}
             currentUser={displayName}
             standaloneTask={standaloneTask}
-            onLeadClick={setSelectedLead}
+            onLeadClick={openLead}
             onLeadTaskComplete={handleTaskComplete}
             onLeadTaskDelete={handleTaskDelete}
             onLeadAddTask={handleAddTask}
@@ -1835,7 +1866,7 @@ function AppInner() {
                 workspace={workspace}
                 team={team}
                 currentUser={displayName}
-                onLeadClick={setSelectedLead}
+                onLeadClick={openLead}
                 onToast={addToast}
                 onWorkspaceUpdate={refreshWorkspace}
               />
@@ -1865,7 +1896,7 @@ function AppInner() {
                 workspace={workspace}
                 team={team}
                 currentUser={displayName}
-                onLeadClick={setSelectedLead}
+                onLeadClick={openLead}
                 onToast={addToast}
                 onWorkspaceUpdate={refreshWorkspace}
               />
@@ -1945,35 +1976,46 @@ function AppInner() {
         <CommandPalette
           leads={leads}
           onClose={() => setShowPalette(false)}
-          onLeadClick={lead => { setSelectedLead(lead); setShowPalette(false); }}
+          onLeadClick={lead => { openLead(lead); setShowPalette(false); }}
           onPageChange={p => { setPage(p); setShowPalette(false); }}
           onNewLead={() => { setShowNewLead(true); setShowPalette(false); }}
         />
       )}
 
-      {selectedLead && (
-        <LeadModal
-          /* Keyed by lead so switching cards remounts rather than reusing the
-             open one. The card copies the lead into local state on mount and
-             does not re-read the prop; now that the list behind stays clickable,
-             an un-keyed card would keep showing the previous lead's details
-             while autosaving edits onto the newly selected one. Remounting also
-             runs the unmount flush, so pending edits on the old lead land
-             before the new card opens. */
-          key={selectedLead.id}
-          lead={selectedLead}
-          onClose={() => setSelectedLead(null)}
-          onSave={handleLeadSave}
-          onUpdate={handleLeadUpdate}
-          onDelete={handleLeadDelete}
-          workspace={workspace ?? undefined}
-          currentUser={displayName}
-          team={team}
-          onToast={addToast}
-          onWorkspaceUpdate={handleWorkspaceFieldUpdate}
-          statusConfigs={statusConfigs}
-        />
-      )}
+      {/* One window per open lead. Deriving the lead from `leads` rather than
+          storing the object means a card cannot go on showing a lead that was
+          deleted or that the realtime listener has since changed. */}
+      {cards.ids.map(id => {
+        const lead = leads.find(l => l.id === id);
+        if (!lead) return null;
+        return (
+          <LeadModal
+            /* Keyed by lead so a card never reuses another lead's state. The
+               card copies the lead into local state on mount and does not
+               re-read the prop, so without this it would show one lead's
+               details while autosaving edits onto another. Remounting also runs
+               the unmount flush, so pending edits land first. */
+            key={id}
+            lead={lead}
+            /* Position is remembered per slot, not per lead: a key per lead
+               would grow localStorage for every lead ever opened, and "the
+               second card opens beside the first" is what people expect. */
+            windowKey={cards.slotOf(id) === 0 ? 'lead-card' : `lead-card-${cards.slotOf(id)}`}
+            zIndex={cards.zOf(id)}
+            onFocus={() => cards.focus(id)}
+            onClose={() => cards.close(id)}
+            onSave={handleLeadSave}
+            onUpdate={handleLeadUpdate}
+            onDelete={handleLeadDelete}
+            workspace={workspace ?? undefined}
+            currentUser={displayName}
+            team={team}
+            onToast={addToast}
+            onWorkspaceUpdate={handleWorkspaceFieldUpdate}
+            statusConfigs={statusConfigs}
+          />
+        );
+      })}
 
       {showNewLead && (
         <NewLeadModal

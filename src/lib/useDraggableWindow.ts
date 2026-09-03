@@ -20,6 +20,26 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 /** Below this width the modal/bottom-sheet behaviour is kept. */
 const FLOAT_MIN_WIDTH = 640;
+
+/**
+ * Whether windows float at the current size, kept live.
+ *
+ * Exported because the caller often has to make the same call the hook makes —
+ * whether several lead cards may be open at once, for instance, turns on
+ * exactly this. Two separate width checks would eventually disagree, and the
+ * disagreement would show up as a second full-screen sheet hiding the first.
+ */
+export function useFloatingWidth(): boolean {
+  const [floating, setFloating] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= FLOAT_MIN_WIDTH,
+  );
+  useEffect(() => {
+    const onResize = () => setFloating(window.innerWidth >= FLOAT_MIN_WIDTH);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return floating;
+}
 /** Always leave this much of the window on screen, so it can be grabbed back. */
 const KEEP_VISIBLE = 80;
 
