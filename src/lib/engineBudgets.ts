@@ -40,7 +40,7 @@ export interface ProviderDef {
 
 export const PROVIDERS: ProviderDef[] = [
   { id: 'google',   label: 'Google (Imagen + Veo)', currency: 'ILS', engines: ['imagen', 'veo'], color: '#4285f4', billingUrl: 'https://aistudio.google.com/billing' },
-  { id: 'openai',   label: 'OpenAI (DALL·E)',       currency: 'USD', engines: ['dalle'],         color: '#10b981', billingUrl: 'https://platform.openai.com/settings/organization/billing' },
+  { id: 'openai',   label: 'OpenAI (GPT-Image + Sora)', currency: 'USD', engines: ['dalle', 'sora'], color: '#10b981', billingUrl: 'https://platform.openai.com/settings/organization/billing' },
   { id: 'ideogram', label: 'Ideogram',              currency: 'USD', engines: ['ideogram'],      color: '#8b5cf6', billingUrl: 'https://ideogram.ai/manage-api' },
   { id: 'kling',    label: 'Kling',                 currency: 'USD', engines: ['kling'],         color: '#ec4899', billingUrl: 'https://klingai.com/global/dev' },
   { id: 'runway',   label: 'Runway',                currency: 'USD', engines: ['runway'],        color: '#14b8a6', billingUrl: 'https://dev.runwayml.com/' },
@@ -49,7 +49,7 @@ export const PROVIDERS: ProviderDef[] = [
 export const PROVIDER_BY_ID: Record<string, ProviderDef> = Object.fromEntries(PROVIDERS.map(p => [p.id, p]));
 
 export const PROVIDER_OF_ENGINE: Partial<Record<EngineId, ProviderId>> = {
-  imagen: 'google', veo: 'google', dalle: 'openai', ideogram: 'ideogram', kling: 'kling', runway: 'runway',
+  imagen: 'google', veo: 'google', dalle: 'openai', sora: 'openai', ideogram: 'ideogram', kling: 'kling', runway: 'runway',
 };
 
 /**
@@ -61,7 +61,8 @@ export const PRICE: Record<EngineId, number> = {
   pollinations: 0,
   imagen: 0.15,      // ILS — Imagen 4 fast ≈ $0.04
   veo: 10,           // ILS — Veo 3 fast, 8s ≈ $2.8
-  dalle: 0.04,       // USD — 1024×1024 standard
+  dalle: 0.04,       // USD — 1024×1024 medium
+  sora: 0.8,         // USD — sora-2, 8 s
   ideogram: 0.08,    // USD
   kling: 0.14,       // USD — 5s std
   runway: 0.25,      // USD — 5s Gen-3 turbo

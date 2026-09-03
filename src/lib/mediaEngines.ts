@@ -19,7 +19,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 
 export type EngineKind = 'image' | 'video';
-export type EngineId = 'pollinations' | 'imagen' | 'dalle' | 'ideogram' | 'veo' | 'kling' | 'runway';
+export type EngineId = 'pollinations' | 'imagen' | 'dalle' | 'ideogram' | 'veo' | 'kling' | 'runway' | 'sora';
 export type MediaAspect = '1:1' | '16:9' | '9:16';
 
 export interface KeyField {
@@ -119,6 +119,20 @@ export const ENGINES: EngineDef[] = [
     ],
     caveats: ['היצירה לוקחת 1–3 דקות. הצ\'אט ממתין ומדווח.', 'מסנן הבטיחות של Google חוסם אנשים אמיתיים, אלימות ומותגים. אם נחסם — שנה את הפרומפט.'],
     color: '#0ea5e9',
+  },
+  {
+    id: 'sora', kind: 'video', label: 'OpenAI Sora 2', vendor: 'OpenAI',
+    bestFor: 'סרטוני 4–12 שניות עם סאונד מסונכרן, פיזיקה אמינה ותנועה קולנועית. אותו מפתח של GPT-Image.',
+    cost: 'כ-$0.10 לשנייה ב-sora-2 (סרטון 8 שניות ≈ $0.80). נמשך 1–5 דקות. נדרש קרדיט בחשבון ה-API של OpenAI.',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    keyFields: [{ name: 'openai', label: 'OpenAI API Key', placeholder: 'sk-…', secret: true }],
+    steps: [
+      'אותו מפתח של OpenAI GPT-Image — אם הגדרת אותו, אין מה להדביק שוב.',
+      'ב-platform.openai.com ← Settings ← Project ← Limits ← "Allow or block models" ← ודא ש-sora-2 מסומן (במצב Allow) או שהמצב Block בלי סימונים.',
+      'לחץ "בדוק חיבור" כאן. אמור להופיע "sora-2 זמין".',
+    ],
+    caveats: ['מסנן תוכן קפדני: אנשים אמיתיים, ילדים, מותגים ואלימות נחסמים.', 'זמן יצירה 1–5 דקות; הצ׳אט סוקר את המצב ומודיע כשמוכן.'],
+    color: '#0f766e',
   },
   {
     id: 'kling', kind: 'video', label: 'Kling 1.x', vendor: 'Kuaishou (klingai.com)',

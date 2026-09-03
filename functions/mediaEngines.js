@@ -40,6 +40,7 @@ const ENGINES = {
   veo:          { kind: 'video', keys: ['google'] },
   kling:        { kind: 'video', keys: ['klingAccessKey', 'klingSecretKey'] },
   runway:       { kind: 'video', keys: ['runway'] },
+  sora:         { kind: 'video', keys: ['openai'] },
 };
 
 /* ── Money ────────────────────────────────────────────────────────────────
@@ -49,9 +50,9 @@ const ENGINES = {
  * as Anthropic tokens — and records the real price on the operator's meter.
  * Pollinations is free and skips all of it.
  * Keep PRICE in step with src/lib/engineBudgets.ts, which shows these numbers. */
-const PROVIDER_OF = { imagen: 'google', veo: 'google', dalle: 'openai', ideogram: 'ideogram', kling: 'kling', runway: 'runway' };
+const PROVIDER_OF = { imagen: 'google', veo: 'google', dalle: 'openai', sora: 'openai', ideogram: 'ideogram', kling: 'kling', runway: 'runway' };
 const CURRENCY = { google: 'ILS', openai: 'USD', ideogram: 'USD', kling: 'USD', runway: 'USD' };
-const PRICE = { pollinations: 0, imagen: 0.15, veo: 10, dalle: 0.04, ideogram: 0.08, kling: 0.14, runway: 0.25 };
+const PRICE = { pollinations: 0, imagen: 0.15, veo: 10, dalle: 0.04, sora: 0.8, ideogram: 0.08, kling: 0.14, runway: 0.25 };
 const CLIENT_MULTIPLIER = 2;
 
 /** Refuse before spending the operator's money when the workspace has none of it. */
@@ -240,6 +241,17 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         const r = await fetch('https://api.klingai.com/v1/videos/text2video?pageNum=1&pageSize=1', { headers: { Authorization: `Bearer ${jwt}` } });
         const d = await r.json().catch(() => ({}));
         return d.code === 0 ? { ok: true, message: 'המפתחות תקינים' } : { ok: false, message: d.message ?? `HTTP ${r.status}` };
+      }
+      case 'sora': {
+        const r = await fetch('https://api.openai.com/v1/models/sora-2', { headers: { Authorization: `Bearer ${keys.openai}` } });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) return { ok: true, message: 'המפתח תקין · sora-2 זמין' };
+        const msg = d.error?.message ?? `HTTP ${r.status}`;
+        if (r.status === 401) return { ok: false, message: `המפתח נדחה (401). OpenAI: ${msg}` };
+        if (/does not exist|do not have access/i.test(msg)) {
+          return { ok: false, message: 'המפתח תקין, אבל הפרויקט לא מאפשר sora-2. Settings ← Project ← Limits ← "Allow or block models" ← סמן sora-2' };
+        }
+        return { ok: false, message: msg };
       }
       case 'runway': {
         const r = await fetch('https://api.dev.runwayml.com/v1/organization', {
@@ -468,6 +480,21 @@ exports.generateMedia = onCall(
           return { taskId: d.data.task_id, engine };
         }
 
+        case 'sora': {
+          // Sora 2: create a video job, poll /v1/videos/{id}, download /content.
+          const size = aspect === '9:16' ? '720x1280' : '1280x720';
+          const seconds = duration === 10 ? '12' : duration === 8 ? '8' : '4';
+          const r = await fetch('https://api.openai.com/v1/videos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${keys.openai}` },
+            body: JSON.stringify({ model: 'sora-2', prompt, size, seconds }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.error?.message ?? `Sora HTTP ${r.status}`);
+          if (!d.id) throw new Error('Sora returned no job id');
+          return { taskId: d.id, engine };
+        }
+
         case 'runway': {
           const body = imageUrl
             ? { promptImage: imageUrl, promptText: prompt, model: 'gen3a_turbo', duration: duration === 10 ? 10 : 5, ratio: aspect === '9:16' ? '768:1280' : '1280:768' }
@@ -518,6 +545,20 @@ exports.mediaTaskStatus = onCall({ region: 'us-central1', timeoutSeconds: 60 }, 
     const meta = { provider: 'kling', price: PRICE.kling, charged: PRICE.kling * CLIENT_MULTIPLIER };
     await chargeEngine(db, workspaceId, 'kling', meta);
     return { status: 'done', url, thumbnailUrl: v.cover_image_url ?? null, charged: meta.charged, currency: 'USD' };
+  }
+
+  if (engine === 'sora') {
+    const h = { Authorization: `Bearer ${keys.openai}` };
+    const r = await fetch(`https://api.openai.com/v1/videos/${encodeURIComponent(taskId)}`, { headers: h });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new HttpsError('internal', d.error?.message ?? 'Sora status error');
+    if (d.status === 'failed') return { status: 'failed', message: d.error?.message ?? 'Sora failed' };
+    if (d.status !== 'completed') return { status: 'processing', progress: (Number(d.progress) || 0) / 100 };
+    const bytes = await fetchBytes(`https://api.openai.com/v1/videos/${encodeURIComponent(taskId)}/content`, h);
+    const url = await store(workspaceId, bytes, 'video/mp4', 'mp4');
+    const meta = { provider: 'openai', price: PRICE.sora, charged: PRICE.sora * CLIENT_MULTIPLIER };
+    await chargeEngine(db, workspaceId, 'sora', meta);
+    return { status: 'done', url, charged: meta.charged, currency: 'USD' };
   }
 
   if (engine === 'runway') {

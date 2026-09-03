@@ -49,6 +49,7 @@ import {
   ENGINE_BY_ID, fetchEngineStatus, connectedEngines, getPreferredEngine, setPreferredEngine,
   generateImageWith, generateVideoWith,
 } from '../lib/mediaEngines';
+import { PROVIDER_OF_ENGINE, PROVIDER_BY_ID, PRICE, CLIENT_MULTIPLIER, fmtMoney } from '../lib/engineBudgets';
 
 const ACCENT = '#c026d3';       // fuchsia — distinct from the sales copilot's teal
 const WON_STATUSES = ['לקוח פעיל', 'נסגר', 'עסקה נסגרה'];
@@ -246,9 +247,22 @@ export default function MarketingCopilot({
     };
     fetchEngineStatus().then(apply).catch(() => {
       // Status unknown: still offer the free engine so image generation works.
-      apply({ pollinations: true, imagen: false, dalle: false, ideogram: false, veo: false, kling: false, runway: false });
+      apply({ pollinations: true, imagen: false, dalle: false, ideogram: false, veo: false, kling: false, runway: false, sora: false });
     });
   }, [workspaceId]);
+  /* What this workspace can still spend on the chosen engine, shown on the
+     chip. The failure this prevents: the operator tops up the PROVIDER meter
+     in the admin, sees nothing change here, and the next click fails with
+     "not enough balance" — the workspace grant is a separate step. */
+  const balanceFor = (eng: EngineId | null): string | null => {
+    if (!eng) return null;
+    const provider = PROVIDER_OF_ENGINE[eng];
+    if (!provider) return null;
+    const bal = Number(workspace?.engineBalances?.[provider] ?? 0);
+    const cur = PROVIDER_BY_ID[provider].currency;
+    const per = PRICE[eng] * CLIENT_MULTIPLIER;
+    return `${fmtMoney(bal, cur)} · ${fmtMoney(per, cur)} ליצירה`;
+  };
   const pickEngine = (kind: EngineKind, id: EngineId) => {
     setPreferredEngine(workspaceId ?? '', kind, id);
     if (kind === 'image') { setImageEngine(id); engineRef.current.image = id; }
@@ -1029,8 +1043,10 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
           <Chip icon={<Paperclip size={10} />} label={`${materials.length} חומרים`} color={materials.length ? '#7c3aed' : '#94a3b8'} />
           {/* The engine in use, and the switch. Only engines the admin connected
               are offered; an unconnected one would just fail on click. */}
-          <EnginePicker kind="image" label="תמונות" current={imageEngine} status={engineStatus} onPick={id => pickEngine('image', id)} />
-          <EnginePicker kind="video" label="וידאו" current={videoEngine} status={engineStatus} onPick={id => pickEngine('video', id)} />
+          <EnginePicker kind="image" label="תמונות" current={imageEngine} status={engineStatus} onPick={id => pickEngine('image', id)}
+            balance={balanceFor(imageEngine)} />
+          <EnginePicker kind="video" label="וידאו" current={videoEngine} status={engineStatus} onPick={id => pickEngine('video', id)}
+            balance={balanceFor(videoEngine)} />
           {pendingPlan && <Chip icon={<Rocket size={10} />} label="תוכנית ממתינה לאישור" color="#f59e0b" />}
         </div>
 
@@ -1157,9 +1173,11 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
  * A native <select> rather than a custom menu — it works with a keyboard, on
  * touch, and inside a draggable window without a positioning library.
  */
-function EnginePicker({ kind, label, current, status, onPick }: {
+function EnginePicker({ kind, label, current, status, onPick, balance }: {
   kind: EngineKind; label: string; current: EngineId | null; status: EngineStatus | null;
   onPick: (id: EngineId) => void;
+  /** "₪9.40 · ₪20.00 ליצירה" — null for a free engine. */
+  balance?: string | null;
 }) {
   const options = connectedEngines(status, kind);
   const cur = current ? ENGINE_BY_ID[current] : null;
@@ -1170,7 +1188,7 @@ function EnginePicker({ kind, label, current, status, onPick }: {
   return (
     <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold cursor-pointer"
       style={{ background: `${color}14`, color, border: `1px solid ${color}30` }}
-      title={cur ? `${cur.bestFor}\n${cur.cost}` : ''}>
+      title={cur ? `${cur.bestFor}\n${cur.cost}${balance ? `\nיתרה בסביבה זו: ${balance}` : ''}` : ''}>
       <Wand2 size={10} />
       <span>{label}:</span>
       <select
@@ -1182,6 +1200,7 @@ function EnginePicker({ kind, label, current, status, onPick }: {
         {options.map(e => <option key={e.id} value={e.id} style={{ color: '#111' }}>{e.label}</option>)}
       </select>
       {options.length > 1 && <span style={{ opacity: 0.6 }}>▾</span>}
+      {balance && <span className="font-normal" style={{ opacity: 0.75 }}>· {balance.split(' · ')[0]}</span>}
     </label>
   );
 }

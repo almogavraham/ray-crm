@@ -2393,7 +2393,9 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
         </div>
 
         {/* Per-workspace engine balances */}
-        {workspaces.some(w => w.engineBalances && Object.values(w.engineBalances).some(v => Number(v) > 0)) && (
+        {/* Every workspace, including the ones at zero — a zero row is the
+            answer to "why does the chat say no balance". */}
+        {workspaces.length > 0 && (
           <div className="overflow-x-auto" dir="ltr">
             <table className="w-full text-xs" dir="rtl">
               <thead>
@@ -2403,7 +2405,7 @@ function TokensTab({ workspaces, onToast, onRefresh }: {
                 </tr>
               </thead>
               <tbody>
-                {workspaces.filter(w => w.engineBalances && Object.values(w.engineBalances).some(v => Number(v) > 0)).map(w => (
+                {[...workspaces].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he')).map(w => (
                   <tr key={w.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                     <td className="px-3 py-2 text-white/80 font-semibold">{w.name}</td>
                     {PROVIDERS.map(pv => {
