@@ -1953,6 +1953,14 @@ function AppInner() {
 
       {selectedLead && (
         <LeadModal
+          /* Keyed by lead so switching cards remounts rather than reusing the
+             open one. The card copies the lead into local state on mount and
+             does not re-read the prop; now that the list behind stays clickable,
+             an un-keyed card would keep showing the previous lead's details
+             while autosaving edits onto the newly selected one. Remounting also
+             runs the unmount flush, so pending edits on the old lead land
+             before the new card opens. */
+          key={selectedLead.id}
           lead={selectedLead}
           onClose={() => setSelectedLead(null)}
           onSave={handleLeadSave}

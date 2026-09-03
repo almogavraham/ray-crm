@@ -24,6 +24,7 @@ import WhatsAppModal from './WhatsAppModal';
 import { useLang } from '../contexts/LangContext';
 import { getAnthropicProxy } from '../lib/anthropicClient';
 import { calculateCost, deductTokens, hasBalance } from '../lib/tokenTracker';
+import { useDraggableWindow } from '../lib/useDraggableWindow';
 
 const PRIORITY_OPTS: { value: 'high' | 'medium' | 'low'; label: string; active: string; idle: string }[] = [
   { value: 'high',   label: '🔴', active: 'bg-red-500 text-white ring-2 ring-red-300',    idle: 'bg-slate-700 text-slate-400 hover:bg-slate-600' },
@@ -95,6 +96,11 @@ interface LeadModalProps {
 
 export default function LeadModal({ lead, onClose, onSave, onUpdate, onDelete, workspace, currentUser, team = [], onToast, onWorkspaceUpdate, statusConfigs = DEFAULT_STATUS_CONFIGS }: LeadModalProps) {
   const { t, dir } = useLang();
+  /* Wider and taller than a chat window: the card carries two columns of detail
+     and a tab strip, and at chat width the fields wrap into unreadable slivers. */
+  const { floating, backdropProps, panelProps, handleProps } = useDraggableWindow(
+    'lead-card', { width: 'min(94vw, 760px)', height: 'min(88vh, 880px)' },
+  );
   // Dynamic status list from config
   const configStatuses = useMemo(() => statusConfigs.map(c => c.label), [statusConfigs]);
   // Solutions list: workspace-specific (from wizard) or fallback to hardcoded
@@ -912,15 +918,34 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
         />
       )}
 
-      <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm md:p-4 overflow-y-auto">
+      {/* On a wide screen the lead card is a floating window, not a modal.
+          A modal dims and blocks the leads list — the one thing you want to
+          keep reading while a card is open, whether to check the next lead or
+          to click straight through to it. Floating keeps the list live behind
+          the card and lets the card be moved off whatever it is covering.
+          Phones keep the full-screen sheet: there is nothing to see behind a
+          card on a 375px screen. */}
+      <div
+        className={`fixed inset-0 z-50 flex items-start justify-center md:p-4 ${floating ? '' : 'overflow-y-auto'}`}
+        style={floating ? backdropProps.style : { background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+      >
         {/* Status color accent — left border of the modal */}
         <div
-          className="bg-slate-900 text-white md:rounded-2xl w-full md:max-w-2xl md:my-4 shadow-2xl border-0 md:border border-slate-700/50 overflow-hidden min-h-screen md:min-h-0"
-          style={cardLayout.statusColors[data.status] ? { borderRight: `4px solid ${cardLayout.statusColors[data.status]}` } : {}}
+          {...(floating ? { ref: panelProps.ref } : {})}
+          className={floating
+            ? 'bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden flex flex-col'
+            : 'bg-slate-900 text-white md:rounded-2xl w-full md:max-w-2xl md:my-4 shadow-2xl border-0 md:border border-slate-700/50 overflow-hidden min-h-screen md:min-h-0'}
+          style={{
+            ...(floating ? panelProps.style : {}),
+            ...(cardLayout.statusColors[data.status] ? { borderRight: `4px solid ${cardLayout.statusColors[data.status]}` } : {}),
+          }}
         >
 
-          {/* ── Header ─────────────────────────────────────────────────────── */}
-          <div className="relative bg-gradient-to-l from-slate-800 to-slate-900 border-b border-slate-700/60">
+          {/* ── Header — also the drag handle when floating ─────────────────── */}
+          <div
+            {...(floating ? handleProps : {})}
+            className="relative bg-gradient-to-l from-slate-800 to-slate-900 border-b border-slate-700/60 flex-shrink-0"
+            style={floating ? handleProps.style : undefined}>
             <div className="flex items-center justify-between px-5 pt-5 pb-4">
               <button
                 onClick={onClose}
@@ -1172,7 +1197,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           </div>
 
           {/* ── Tabs ───────────────────────────────────────────────────────── */}
-          <div className="flex border-b border-slate-700/60 bg-slate-800/50">
+          <div className="flex border-b border-slate-700/60 bg-slate-800/50 flex-shrink-0">
             {tabs.map(tab => (
               <button
                 key={tab.key}
@@ -1197,7 +1222,13 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           </div>
 
           {/* ── Tab Content ────────────────────────────────────────────────── */}
-          <div className={`p-4 md:p-5 max-h-[calc(100vh-280px)] md:max-h-[55vh] overflow-y-auto ${cardLayout.viewMode === 'compact' ? 'space-y-2' : 'space-y-4'}`}>
+          {/* Floating: the window has a fixed height, so the body takes what
+              is left (`min-h-0` or a flex child refuses to shrink and the
+              footer is pushed off the bottom). Modal: keep the max-height that
+              sizes the card to its content. */}
+          <div className={`p-4 md:p-5 overflow-y-auto ${
+            floating ? 'flex-1 min-h-0' : 'max-h-[calc(100vh-280px)] md:max-h-[55vh]'
+          } ${cardLayout.viewMode === 'compact' ? 'space-y-2' : 'space-y-4'}`}>
 
             {/* DETAILS TAB */}
             {activeTab === 'details' && (
@@ -2039,7 +2070,7 @@ ${aiProfile?.uniqueValue ? `הייחוד שלנו: ${aiProfile.uniqueValue}` : '
           </div>
 
           {/* ── Footer ─────────────────────────────────────────────────────── */}
-          <div className="px-5 py-3 border-t border-slate-700/60 bg-slate-800/30 flex items-center justify-between">
+          <div className="px-5 py-3 border-t border-slate-700/60 bg-slate-800/30 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-3 text-xs text-slate-500">
               <span className="flex items-center gap-1">
                 <Star size={10} className="text-amber-400" />{data.source}

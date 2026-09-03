@@ -60,7 +60,20 @@ function defaultPos(key: string, el: HTMLElement | null): Pos {
   };
 }
 
-export function useDraggableWindow(key: string) {
+export interface WindowSize {
+  /** Any CSS width. Defaults to the chat window's size. */
+  width: string;
+  height: string;
+}
+
+const DEFAULT_SIZE: WindowSize = { width: 'min(92vw, 560px)', height: 'min(78vh, 700px)' };
+
+/**
+ * @param key   Identity for the remembered position — one per window.
+ * @param size  Overrides the chat-sized default. The lead card carries two
+ *              columns of detail and is unreadable at chat width.
+ */
+export function useDraggableWindow(key: string, size: WindowSize = DEFAULT_SIZE) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [floating, setFloating] = useState(
     () => typeof window !== 'undefined' && window.innerWidth >= FLOAT_MIN_WIDTH,
@@ -147,9 +160,9 @@ export function useDraggableWindow(key: string) {
           left: pos?.x ?? 0,
           top: pos?.y ?? 0,
           margin: 0,
-          width: 'min(92vw, 560px)',
-          height: 'min(78vh, 700px)',
-          maxHeight: 'min(78vh, 700px)',
+          width: size.width,
+          height: size.height,
+          maxHeight: size.height,
           pointerEvents: 'auto' as const,
           // Hidden until measured, so it never flashes at the top-left corner.
           visibility: (pos ? 'visible' : 'hidden') as 'visible' | 'hidden',
