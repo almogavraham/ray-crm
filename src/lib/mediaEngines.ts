@@ -233,9 +233,10 @@ export async function generateVideoWith(
 
 /* ── Admin ────────────────────────────────────────────────────────────────── */
 
-export async function saveMediaKeys(keys: Record<string, string | null>): Promise<string[]> {
-  const fn = httpsCallable<object, { saved: string[] }>(functions, 'saveMediaKeys');
-  return (await fn({ keys })).data.saved;
+export async function saveMediaKeys(keys: Record<string, string | null>): Promise<{ saved: string[]; cleaned: string[] }> {
+  const fn = httpsCallable<object, { saved: string[]; cleaned?: string[] }>(functions, 'saveMediaKeys');
+  const d = (await fn({ keys })).data;
+  return { saved: d.saved, cleaned: d.cleaned ?? [] };
 }
 
 export async function testEngine(engine: EngineId): Promise<{ ok: boolean; message: string }> {

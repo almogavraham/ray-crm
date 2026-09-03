@@ -148,17 +148,27 @@ exports.saveMediaKeys = onCall({ region: 'us-central1' }, async (request) => {
   const db = admin.firestore();
   const incoming = request.data?.keys ?? {};
   const patch = {};
+  const cleaned = [];
   for (const k of KEY_NAMES) {
     const v = incoming[k];
-    if (typeof v === 'string' && v.trim()) patch[k] = v.trim();
+    if (typeof v === 'string' && v.trim()) {
+      // API keys are ASCII. A paste from an RTL page can carry invisible
+      // direction marks or a smart quote, which read as "wrong key" downstream
+      // with no visible difference. Strip anything outside printable ASCII and
+      // say so, rather than store a key that can never match.
+      const raw = v.trim();
+      const ascii = raw.replace(/[^!-~]/g, '');
+      if (ascii !== raw) cleaned.push(k);
+      patch[k] = ascii;
+    }
     if (v === null) patch[k] = admin.firestore.FieldValue.delete();   // explicit clear
   }
-  if (!Object.keys(patch).length) return { saved: [] };
+  if (!Object.keys(patch).length) return { saved: [], cleaned };
   await db.doc('system/mediaKeys').set({ ...patch, updatedAt: new Date().toISOString() }, { merge: true });
   const legacy = {};
   for (const k of ['openai', 'google', 'heygen', 'canva']) if (k in patch) legacy[k] = patch[k];
   if (Object.keys(legacy).length) await db.doc('system/apiKeys').set(legacy, { merge: true });
-  return { saved: Object.keys(patch) };
+  return { saved: Object.keys(patch), cleaned };
 });
 
 /**
@@ -192,7 +202,9 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         // OpenAI answers "model does not exist" for a valid key whose project
         // has no access to the image model — a project/permissions problem,
         // not a wrong key. Say which, so the fix is in the right place.
-        if (r.status === 401) return { ok: false, message: 'המפתח נדחה (401) — בדוק שהודבק נכון ונשמר' };
+        // OpenAI's own 401 text names the key it saw, masked (sk-proj-***abcd),
+        // which is the one fact that settles "did my paste arrive intact".
+        if (r.status === 401) return { ok: false, message: `המפתח נדחה (401). OpenAI: ${msg}` };
         if (/does not exist|do not have access/i.test(msg)) {
           return { ok: false, message: 'המפתח תקין, אבל לפרויקט הזה אין גישה ל-DALL·E 3. ב-platform.openai.com ← Settings ← Project ← Limits ← אפשר Model access ל-dall-e-3, או צור מפתח בפרויקט ה-Default' };
         }

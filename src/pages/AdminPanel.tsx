@@ -3543,8 +3543,9 @@ function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|
     if (!Object.keys(keys).length) { onToast('לא הוזן מפתח חדש', 'info'); return; }
     setSaving(true);
     try {
-      const saved = await saveMediaKeys(keys);
+      const { saved, cleaned } = await saveMediaKeys(keys);
       onToast(`נשמרו ${saved.length} מפתחות ✅ — לחץ "בדוק חיבור" כדי לוודא`, 'success');
+      if (cleaned.length) onToast(`הוסרו תווים בלתי נראים מהמפתח (${cleaned.join(', ')}) — כנראה מהדבקה מדף בעברית`, 'info');
       setDraft(d => { const n = { ...d }; for (const k of saved) delete n[k]; return n; });
       setResults({});
       await load();
