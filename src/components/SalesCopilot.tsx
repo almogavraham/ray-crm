@@ -418,7 +418,7 @@ create_task | change_status | flag_lead | mark_hot | set_followup | open_lead | 
     if (leads.length) void ask(null);
     else setMsgs([{ role: 'assistant', text: 'אין עדיין לידים במערכת. ברגע שיהיו — אני אנתח אותם ואגיד לך על מה להתמקד.' }]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session.booted]); // re-brief after "נקה שיחה" resets booted — mount-only deps left the cleared chat empty
 
   /* ── Apply a suggested action ──────────────────────────────────────────── */
   const runAction = async (act: CopilotAction, msgIdx: number, key: string) => {

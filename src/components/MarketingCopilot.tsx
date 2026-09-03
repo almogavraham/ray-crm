@@ -454,13 +454,16 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
     }
   };
 
-  /* Opening briefing — the agent speaks first. */
+  /* Opening briefing — the agent speaks first.
+     Keyed on `booted`, not on mount: "נקה שיחה" resets booted to false, and
+     with mount-only deps the cleared chat just sat empty until the window was
+     closed and reopened. */
   useEffect(() => {
     if (session.booted || session.busy) return;
     updateSession('marketing', { booted: true });
     void ask(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session.booted]);
 
   /* ── Executing an action ────────────────────────────────────────────────── */
   const markDone = (msgIdx: number, key: string) =>

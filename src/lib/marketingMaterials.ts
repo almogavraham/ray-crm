@@ -163,7 +163,10 @@ export async function addMaterial(
     summary, ...(note ? { note } : {}), addedAt: Date.now(),
   };
 
-  const items = await loadMaterials(wid);
+  // Same file name replaces the earlier copy rather than sitting beside it.
+  // Re-uploading is how a bad read gets fixed — a summary that says "could
+  // not be read" must not stay in the prompt next to the good one.
+  const items = (await loadMaterials(wid)).filter(m => m.name !== material.name);
   await saveMaterials(wid, [...items, material]);
 
   if (kind === 'image') {
