@@ -191,9 +191,16 @@ exports.testMediaEngine = onCall({ region: 'us-central1', timeoutSeconds: 30 }, 
         return { ok: true, message: 'לא דורש מפתח' };
       case 'imagen':
       case 'veo': {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keys.google}&pageSize=1`);
-        const d = await r.json().catch(() => ({}));
-        return r.ok ? { ok: true, message: 'המפתח תקין' } : { ok: false, message: d.error?.message ?? `HTTP ${r.status}` };
+        // "Valid key" is not enough: say which of this engine's models the key
+        // can actually call, because that is what fails at generation time.
+        const method = engine === 'veo' ? 'predictLongRunning' : 'predict';
+        let ids;
+        try { ids = await googleModels(keys.google, method, engine); }
+        catch (e) { return { ok: false, message: String(e.message) }; }
+        if (!ids.length) {
+          return { ok: false, message: `המפתח תקין אבל לא רואה מודלי ${engine === 'veo' ? 'Veo' : 'Imagen'} — בדוק שהחיוב פעיל בפרויקט של המפתח (console.cloud.google.com ← Billing)` };
+        }
+        return { ok: true, message: `המפתח תקין · זמין: ${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ` (+${ids.length - 3})` : ''}` };
       }
       case 'dalle': {
         // Newest image model first. The engine id stays 'dalle' for the rest of
@@ -299,6 +306,41 @@ function klingJwt(accessKey, secretKey) {
   return `${data}.${sig}`;
 }
 
+/**
+ * Which Google models this key can actually use for a given method.
+ *
+ * The model ids change under us — a hard-coded list ("veo-2.0-generate-001")
+ * failed with "not found for API version v1beta" the week the id was retired.
+ * Google publishes the live list with each model's supported methods, so the
+ * list is asked for and filtered, newest first, instead of guessed. Cached for
+ * a few minutes per instance; it is one cheap GET.
+ */
+const modelCache = new Map();
+async function googleModels(key, method, needle) {
+  const ck = `${method}:${needle}`;
+  const hit = modelCache.get(ck);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.models;
+  const names = [];
+  let pageToken = '';
+  for (let i = 0; i < 5; i++) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=200${pageToken ? `&pageToken=${pageToken}` : ''}`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error?.message ?? `ListModels HTTP ${r.status}`);
+    for (const m of d.models ?? []) {
+      const id = String(m.name ?? '').replace(/^models\//, '');
+      if (id.includes(needle) && (m.supportedGenerationMethods ?? []).includes(method)) names.push(id);
+    }
+    pageToken = d.nextPageToken ?? '';
+    if (!pageToken) break;
+  }
+  // Newest first: "3.1" before "3.0" before "2.0"; within a version prefer the
+  // plain/fast generate ids over previews.
+  const ver = (id) => { const m = id.match(/(\d+)\.(\d+)/); return m ? Number(m[1]) * 100 + Number(m[2]) : 0; };
+  names.sort((a, b) => ver(b) - ver(a) || (a.includes('fast') ? -1 : 0) - (b.includes('fast') ? -1 : 0));
+  modelCache.set(ck, { at: Date.now(), models: names });
+  return names;
+}
+
 /** Provider wording for "you cannot pay for this" varies; group it. */
 const outOfCredit = (m) => /credit|quota|billing|insufficient|depleted|exceeded/i.test(String(m));
 
@@ -391,7 +433,10 @@ exports.generateMedia = onCall(
           // different endpoint, and one is often available when the other
           // has not been enabled on the account yet.
           let last = '';
-          for (const model of ['imagen-4.0-fast-generate-001', 'imagen-4.0-generate-001']) {
+          let imagenIds = [];
+          try { imagenIds = await googleModels(keys.google, 'predict', 'imagen'); } catch (e) { last = e.message; }
+          if (!imagenIds.length) imagenIds = ['imagen-4.0-fast-generate-001', 'imagen-4.0-generate-001'];
+          for (const model of imagenIds) {
             const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${keys.google}`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: aspect } }),
@@ -435,7 +480,12 @@ exports.generateMedia = onCall(
 
         case 'veo': {
           let op = '', used = '', last = '';
-          for (const model of ['veo-3.0-fast-generate-001', 'veo-3.0-generate-001', 'veo-2.0-generate-001']) {
+          let veoIds = [];
+          try { veoIds = await googleModels(keys.google, 'predictLongRunning', 'veo'); } catch (e) { last = e.message; }
+          if (!veoIds.length) {
+            throw new Error(`המפתח הזה לא רואה אף מודל Veo (${last || 'ListModels החזיר רשימה ריקה'}). ב-Google AI Studio ודא שהחיוב פעיל בפרויקט של המפתח; Veo זמין רק בפרויקטים עם חיוב.`);
+          }
+          for (const model of veoIds) {
             const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:predictLongRunning?key=${keys.google}`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ instances: [{ prompt }], parameters: { aspectRatio: aspect === '9:16' ? '9:16' : '16:9', sampleCount: 1 } }),
@@ -444,7 +494,7 @@ exports.generateMedia = onCall(
             if (!r.ok) { last = d.error?.message ?? `HTTP ${r.status}`; if (outOfCredit(last)) throw new Error(last); continue; }
             op = d.name; used = model; break;
           }
-          if (!op) throw new Error(`Veo: ${last || 'no model accepted the request'}`);
+          if (!op) throw new Error(`Veo: ${last || 'no model accepted the request'} (נוסו: ${veoIds.join(', ')})`);
           // Poll here: the operation is tied to the key.
           for (let i = 0; i < 26; i++) {
             await new Promise(res => setTimeout(res, 10000));
