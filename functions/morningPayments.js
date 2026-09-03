@@ -383,3 +383,108 @@ async function applyPayment(db, ref, payload) {
 
   console.log(`[morningWebhook] applied ${type} for ${workspaceId} (doc ${documentId}, ${paid} ILS, ${isProduction() ? 'prod' : 'sandbox'})`);
 }
+
+/* ── Operator view ───────────────────────────────────────────────────────── */
+
+/**
+ * What the payment channel has actually been doing.
+ *
+ * Every delivery was already written to Firestore, but nothing could read it:
+ * the only way to tell whether Morning was calling us — and whether a payment
+ * had been applied or had failed halfway — was the Cloud Functions log. A
+ * payment channel you cannot see is one you find out about from the customer.
+ *
+ * Deliberately a callable rather than opened-up security rules. A delivery
+ * carries Morning's raw notification, which includes customer details; the
+ * summary below is what an operator needs, and the raw payload stays server
+ * side unless it is asked for by id.
+ */
+exports.listMorningDeliveries = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    requireSuperAdmin(request);
+    const db = admin.firestore();
+
+    const limit = Math.min(Number(request.data?.limit) || 25, 100);
+    const snap = await db.collection('morningDeliveries')
+      .orderBy('receivedAt', 'desc').limit(limit).get();
+
+    return {
+      // Whether the operator still has to paste the URL into Morning, and
+      // whether deliveries can be signature-checked at all, are the two facts
+      // the panel exists to answer.
+      notifyUrl: NOTIFY_URL,
+      signingConfigured: Boolean(process.env.MORNING_WEBHOOK_SECRET),
+      environment: isProduction() ? 'production' : 'sandbox',
+      deliveries: snap.docs.map(d => {
+        const v = d.data();
+        return {
+          id: d.id,
+          topic: v.topic ?? null,
+          signed: Boolean(v.signed),
+          status: v.status ?? 'received',
+          receivedAt: v.receivedAt ?? null,
+          appliedAt: v.appliedAt ?? null,
+          workspaceId: v.workspaceId ?? null,
+          type: v.type ?? null,
+          planKey: v.planKey ?? null,
+          amount: v.amount ?? null,
+          documentId: v.documentId ?? null,
+          error: v.error ?? null,
+        };
+      }),
+    };
+  },
+);
+
+/**
+ * Re-run a delivery that was recorded but never applied.
+ *
+ * The webhook acknowledges a delivery before processing it, on purpose —
+ * Morning disables a webhook after 15 failures and a disabled webhook loses
+ * every future payment in silence. The cost of that choice is that a
+ * processing failure leaves a paid customer un-upgraded with no way back.
+ * This is the way back.
+ *
+ * It is safe to press twice. `applyPayment` claims the Morning document id
+ * with a `create()`, so a second run of an already-applied payment fails on
+ * the claim instead of granting the plan again.
+ */
+exports.replayMorningDelivery = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    requireSuperAdmin(request);
+    const db = admin.firestore();
+
+    const deliveryId = String(request.data?.deliveryId ?? '');
+    if (!deliveryId) throw new HttpsError('invalid-argument', 'deliveryId is required.');
+
+    const ref = db.collection('morningDeliveries').doc(deliveryId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', `No delivery ${deliveryId}.`);
+
+    const v = snap.data();
+    if (v.status === 'applied') {
+      return { status: 'applied', message: 'המשלוח כבר הוחל — לא נעשה דבר.' };
+    }
+
+    try {
+      await applyPayment(db, ref, v.payload ?? null);
+      return { status: 'applied', message: 'התשלום הוחל ✓' };
+    } catch (err) {
+      const message = String(err.message ?? err);
+      await ref.set({ status: 'failed', error: message }, { merge: true }).catch(() => {});
+      // Returned rather than thrown: "it failed again, and here is why" is the
+      // answer the operator needs, and an HttpsError would surface as a generic
+      // internal error with the reason buried in the logs.
+      return { status: 'failed', message };
+    }
+  },
+);
+
+function requireSuperAdmin(request) {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Must be signed in.');
+  if (request.auth.token.email !== SUPER_ADMIN_EMAIL) {
+    throw new HttpsError('permission-denied', 'Super admin only.');
+  }
+}

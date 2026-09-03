@@ -29,8 +29,10 @@ exports.revokeApiKey = publicApi.revokeApiKey;
 // successful charge issues the חשבונית מס itself. Replaces Stripe, which
 // cannot be used at all: it does not support Israel as a merchant country.
 const morningPayments = require('./morningPayments');
-exports.createMorningPayment = morningPayments.createMorningPayment;
-exports.morningWebhook       = morningPayments.morningWebhook;
+exports.createMorningPayment    = morningPayments.createMorningPayment;
+exports.morningWebhook          = morningPayments.morningWebhook;
+exports.listMorningDeliveries   = morningPayments.listMorningDeliveries;
+exports.replayMorningDelivery   = morningPayments.replayMorningDelivery;
 
 // Gmail authorization-code flow — a connection that outlives the browser.
 const gmailOAuth = require('./gmailOAuth');

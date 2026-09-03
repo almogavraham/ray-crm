@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import MorningPaymentsPanel from '../components/MorningPaymentsPanel';
 import {
   Users, Building2, TrendingUp, Shield, AlertTriangle, CheckCircle2,
   Clock, XCircle, RefreshCw, Search, BarChart3, Zap, Copy, ExternalLink,
@@ -11,7 +12,7 @@ import {
   Activity, Crown, UserCheck, Mail, Phone, Hash, Sparkles, ToggleLeft,
   ToggleRight, Send, Plus, Archive, Globe, GitBranch, Package,
   ArrowUpRight, ArrowDownRight, Minus, X, Info, ChevronDown,
-  KeyRound, AtSign, Unlink, Layers, Menu, DollarSign, LogIn,
+  KeyRound, AtSign, Unlink, Layers, Menu, DollarSign, LogIn, CreditCard,
 } from 'lucide-react';
 import {
   collection, getDocs, doc, updateDoc, deleteDoc,
@@ -32,7 +33,7 @@ import {
 import type { PlanTokenConfig, AdminQuota } from '../lib/tokenTracker';
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
-type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'tokens' | 'features' | 'announcements' | 'releases' | 'system' | 'emails' | 'integrations';
+type AdminTab = 'overview' | 'workspaces' | 'analytics' | 'users' | 'tokens' | 'payments' | 'features' | 'announcements' | 'releases' | 'system' | 'emails' | 'integrations';
 type PlanKey  = 'trial' | 'basic' | 'pro' | 'enterprise';
 type PlanPages = Record<PlanKey, Page[]>;
 
@@ -664,6 +665,7 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
     { key: 'analytics',     label: 'אנליטיקס',        icon: BarChart3,  group: 'main' },
     { key: 'users',         label: 'משתמשים',         icon: Users,      group: 'main' },
     { key: 'tokens',        label: 'טוקנים',           icon: Zap,        group: 'main' },
+    { key: 'payments',      label: 'תשלומים',          icon: CreditCard, group: 'main' },
     { key: 'features',      label: 'תכונות',           icon: Settings2,  group: 'ops'  },
     { key: 'announcements', label: 'הודעות',           icon: Megaphone,  group: 'ops'  },
     { key: 'releases',      label: 'פרסום גרסאות',    icon: Rocket,     group: 'ops'  },
@@ -774,6 +776,7 @@ export default function AdminPanel({ onToast }: { onToast?: (m: string, t?: 'suc
             {tab === 'features'      && <FeaturesTab flags={flags} onToggle={toggleFlag} onSave={saveFlags} saving={flagSaving} planPages={planPages} onTogglePage={togglePlanPage} onSavePlanPages={savePlanPages} planPagesSaving={planPagesSaving} planTokenAmounts={planTokenAmounts} onSavePlanTokenAmounts={savePlanTokenAmounts} tokenAmountsSaving={tokenAmountsSaving} />}
             {tab === 'announcements' && <AnnouncementsTab announcements={announcements} onRefresh={loadAll} onToast={toast} />}
             {tab === 'releases'      && <ReleasesTab releases={releases} workspaces={workspaces} onRefresh={loadAll} onToast={toast} />}
+            {tab === 'payments'      && <MorningPaymentsPanel onToast={toast} />}
             {tab === 'integrations'  && <IntegrationsTab onToast={toast} />}
             {tab === 'system'        && <SystemTab workspaces={workspaces} onToast={toast} />}
             {tab === 'emails'        && (
