@@ -44,6 +44,11 @@ import { loadMaterials, addMaterial, materialsContext, kindOf } from '../lib/mar
 import type { MarketingAgentConfig } from '../lib/facebookMarketing';
 import type { SocialConnection } from '../lib/socialConnections';
 import type { AutopilotPlan } from '../lib/marketingAutopilot';
+import type { EngineId, EngineStatus, EngineKind } from '../lib/mediaEngines';
+import {
+  ENGINE_BY_ID, fetchEngineStatus, connectedEngines, getPreferredEngine, setPreferredEngine,
+  generateImageWith, generateVideoWith,
+} from '../lib/mediaEngines';
 
 const ACCENT = '#c026d3';       // fuchsia — distinct from the sales copilot's teal
 const WON_STATUSES = ['לקוח פעיל', 'נסגר', 'עסקה נסגרה'];
@@ -55,6 +60,7 @@ type ToastFn = (msg: string, type?: 'success' | 'error' | 'info') => void;
 interface MktAction {
   type:
     | 'generate_image'    // create a visual right here in the chat
+    | 'generate_video'    // start a video with the selected video engine
     | 'publish_post'      // push a post to a live FB/IG page (confirmed)
     | 'schedule_post'     // queue a post for the server scheduler to publish
     | 'create_plan'       // full autopilot campaign plan + media + approval
@@ -80,6 +86,8 @@ interface MktAction {
   cta?: string;
   imageUrl?: string;
   imagePrompt?: string;
+  aspect?: '1:1' | '16:9' | '9:16';   // generate_image / generate_video
+  duration?: 5 | 10;                    // generate_video
   hoursFromNow?: number;  // schedule_post
   postsCount?: number;    // create_plan
   cadence?: 'daily' | '3x-week' | 'weekly';
@@ -216,6 +224,28 @@ export default function MarketingCopilot({
   const [plans, setPlans]           = useState<AutopilotPlan[]>([]);
   const [pendingImages, setPending] = useState<PendingImage[]>([]);
 
+  /* Which engines the admin connected, and which this workspace prefers.
+     The picker only offers connected ones — a choice that fails on click is
+     worse than no choice. */
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [imageEngine, setImageEngine]   = useState<EngineId | null>(null);
+  const [videoEngine, setVideoEngine]   = useState<EngineId | null>(null);
+  useEffect(() => {
+    fetchEngineStatus().then(st => {
+      setEngineStatus(st);
+      setImageEngine(getPreferredEngine(workspaceId ?? '', 'image', st));
+      setVideoEngine(getPreferredEngine(workspaceId ?? '', 'video', st));
+    }).catch(() => {
+      // Status unknown: still offer the free engine so image generation works.
+      setEngineStatus({ pollinations: true, imagen: false, dalle: false, ideogram: false, veo: false, kling: false, runway: false });
+      setImageEngine('pollinations');
+    });
+  }, [workspaceId]);
+  const pickEngine = (kind: EngineKind, id: EngineId) => {
+    setPreferredEngine(workspaceId ?? '', kind, id);
+    if (kind === 'image') setImageEngine(id); else setVideoEngine(id);
+  };
+
   const refreshKnowledge = useCallback(async () => {
     if (!workspaceId) return;
     const [{ loadMarketingConfig }, { loadSocialConnections }, { loadAutopilotPlans }] = await Promise.all([
@@ -329,6 +359,10 @@ export default function MarketingCopilot({
         ? `סוכן: ${cfg.agentName || 'RAY'} · טון: ${cfg.replyTone} · אמוג'י: ${cfg.emojiUsage} · CTA: ${cfg.ctaStyle} · האשטגים: ${cfg.hashtagStrategy} · תדירות: ${cfg.postFrequency} · אישור ידני לפני פרסום: ${cfg.requireApproval ? 'כן' : 'לא'} · אוטופיילוט: ${cfg.autopilotEnabled ? 'פעיל' : 'כבוי'}${cfg.contentPillars?.length ? ` · נושאי תוכן: ${cfg.contentPillars.join(', ')}` : ''}`
         : '(אין עדיין הגדרות סוכן — ברירות מחדל)';
 
+      const imgOpts = connectedEngines(engineStatus, 'image').map(e => e.label);
+      const vidOpts = connectedEngines(engineStatus, 'video').map(e => e.label);
+      const engineCtx = `תמונות: ${imageEngine ? ENGINE_BY_ID[imageEngine].label : 'אין'}${imgOpts.length > 1 ? ` (זמינים: ${imgOpts.join(', ')})` : ''} · וידאו: ${videoEngine ? ENGINE_BY_ID[videoEngine].label : 'לא מחובר מנוע וידאו — אמור שהאדמין צריך לחבר Veo/Kling/Runway בלוח האדמין ← אינטגרציות'}${vidOpts.length > 1 ? ` (זמינים: ${vidOpts.join(', ')})` : ''}`;
+
       const planCtx = pendingPlan
         ? `יש תוכנית אוטופיילוט שממתינה לאישור: "${pendingPlan.title}" (${pendingPlan.posts.length} פוסטים). אפשר להציע approve_plan.`
         : 'אין תוכנית שממתינה לאישור.';
@@ -354,6 +388,9 @@ ${settingsCtx}
 ## אוטופיילוט
 ${planCtx}
 
+## מנועי מדיה (המשתמש בוחר בכותרת הצ'אט)
+${engineCtx}
+
 ## הנתונים שתקבל
 1. **טבלת ביצועי ערוצים** מחושבת מראש — **המספרים נכונים, אל תחשב מחדש ואל תמציא.**
 2. **כל הלידים** ברשומה קומפקטית, ו**כרטיסים מלאים** לכמה מהם.
@@ -372,7 +409,8 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
 
 ## פעולות שאתה יכול להציע (המשתמש לוחץ כדי לאשר)
 יצירה ופרסום:
-- generate_image: {"prompt":"<english, detailed, style>","label":"..."}
+- generate_image: {"prompt":"<english, detailed, style>","aspect":"1:1|16:9|9:16","label":"..."} — במנוע התמונות שנבחר
+- generate_video: {"prompt":"<english, motion, camera, mood>","aspect":"16:9|9:16","duration":5,"imageUrl":"<אופציונלי: תמונה מהשיחה להנפשה>","label":"..."} — רק אם מחובר מנוע וידאו
 - publish_post: {"platform":"facebook|instagram","caption":"...","hashtags":[...],"imageUrl":"<רק URL שנוצר/הועלה בשיחה>"}
 - schedule_post: {"platform":"...","caption":"...","hashtags":[...],"hoursFromNow":24,"imageUrl":"..."}
 - create_plan: {"postsCount":6,"cadence":"3x-week","platforms":["facebook","instagram"]}
@@ -494,11 +532,32 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
         /* ── Create a real image, inline ──────────────────────────────────── */
         case 'generate_image': {
           if (!act.prompt) return;
-          setWorking('יוצר תמונה…');
-          const { pollinationsImage } = await import('../lib/marketingAutopilot');
-          const url = await pollinationsImage(act.prompt, workspaceId);
-          say('הנה התמונה 👇 אם היא מתאימה — אפשר לפרסם או לתזמן אותה.', [
+          const wid = needWid();
+          const eng = imageEngine ?? 'pollinations';
+          setWorking(`יוצר תמונה ב-${ENGINE_BY_ID[eng].label}…`);
+          const { url, model } = await generateImageWith(eng, act.prompt, act.aspect ?? '1:1', wid);
+          say(`הנה התמונה 👇 (${ENGINE_BY_ID[eng].label}${model ? ` · ${model}` : ''}) אם היא מתאימה — אפשר לפרסם, לתזמן, או להנפיש לסרטון.`, [
             { type: 'image', url, caption: act.label || act.prompt.slice(0, 80) },
+          ], videoEngine ? [{ type: 'generate_video', prompt: `${act.prompt}. Subtle natural motion, slow camera push-in.`, imageUrl: url, aspect: '16:9', label: `🎬 הנפש לסרטון (${ENGINE_BY_ID[videoEngine].label})` }] : undefined);
+          markDone(msgIdx, key);
+          break;
+        }
+
+        /* ── A video, with whichever engine the admin connected ───────────── */
+        case 'generate_video': {
+          if (!act.prompt) return;
+          const wid = needWid();
+          if (!videoEngine) {
+            say('אין מנוע וידאו מחובר. האדמין יכול לחבר Veo, Kling או Runway בלוח האדמין ← אינטגרציות — יש שם הוראות מדויקות לכל אחד.');
+            return;
+          }
+          const eng = videoEngine;
+          setWorking(`מייצר וידאו ב-${ENGINE_BY_ID[eng].label}…`);
+          const { url } = await generateVideoWith(eng, act.prompt, act.aspect ?? '16:9', wid, {
+            duration: act.duration ?? 5, imageUrl: act.imageUrl, onStage: setWorking,
+          });
+          say(`הסרטון מוכן 🎬 (${ENGINE_BY_ID[eng].label})\n${url}\nאפשר להוריד אותו מהקישור, או לבקש גרסה אחרת.`, [
+            { type: 'quote', label: 'פרומפט', text: act.prompt },
           ]);
           markDone(msgIdx, key);
           break;
@@ -855,7 +914,8 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
   const actionLabel = (a: MktAction) => {
     if (a.label) return a.label;
     switch (a.type) {
-      case 'generate_image':        return '🎨 צור את התמונה';
+      case 'generate_image':        return `🎨 צור את התמונה${imageEngine ? ` (${ENGINE_BY_ID[imageEngine].label})` : ''}`;
+      case 'generate_video':        return `🎬 צור סרטון${videoEngine ? ` (${ENGINE_BY_ID[videoEngine].label})` : ''}`;
       case 'publish_post':          return `📤 פרסם ב${a.platform === 'instagram' ? 'אינסטגרם' : 'פייסבוק'} עכשיו`;
       case 'schedule_post':         return `📅 תזמן לעוד ${a.hoursFromNow ?? 24} שעות`;
       case 'create_plan':           return `🚀 בנה תוכנית של ${a.postsCount ?? 6} פוסטים`;
@@ -878,7 +938,8 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
 
   const actionIcon = (t: MktAction['type']) => {
     switch (t) {
-      case 'generate_image':        return <Wand2 size={11} />;
+      case 'generate_image':
+      case 'generate_video':        return <Wand2 size={11} />;
       case 'publish_post':          return <Upload size={11} />;
       case 'schedule_post':         return <Calendar size={11} />;
       case 'create_plan':           return <Rocket size={11} />;
@@ -953,6 +1014,10 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
           <Chip icon={<Share2 size={10} />}  label={social.fb ? 'פייסבוק מחובר' : 'פייסבוק לא מחובר'}   color={social.fb ? '#1877f2' : '#94a3b8'} />
           <Chip icon={<Camera size={10} />} label={social.ig ? 'אינסטגרם מחובר' : 'אינסטגרם לא מחובר'} color={social.ig ? '#e1306c' : '#94a3b8'} />
           <Chip icon={<Paperclip size={10} />} label={`${materials.length} חומרים`} color={materials.length ? '#7c3aed' : '#94a3b8'} />
+          {/* The engine in use, and the switch. Only engines the admin connected
+              are offered; an unconnected one would just fail on click. */}
+          <EnginePicker kind="image" label="תמונות" current={imageEngine} status={engineStatus} onPick={id => pickEngine('image', id)} />
+          <EnginePicker kind="video" label="וידאו" current={videoEngine} status={engineStatus} onPick={id => pickEngine('video', id)} />
           {pendingPlan && <Chip icon={<Rocket size={10} />} label="תוכנית ממתינה לאישור" color="#f59e0b" />}
         </div>
 
@@ -1066,11 +1131,45 @@ ${attached.length ? `3. **תמונות שהמשתמש צירף להודעה הז
               onChange={e => void attachFiles(e.target.files)} />
           </div>
           <p className="text-[9px] text-slate-400 mt-1.5 text-right flex items-center gap-1 justify-end">
-            <ImageIcon size={9} /> תמונות נוצרות חינם · קבצים שתעלה נשמרים ונלמדים · פרסום דורש אישור שלך בלחיצה
+            <ImageIcon size={9} /> {imageEngine === 'pollinations' || !imageEngine ? 'תמונות נוצרות חינם' : `תמונות ב-${ENGINE_BY_ID[imageEngine].label} (בתשלום לפי שימוש)`} · קבצים שתעלה נשמרים ונלמדים · פרסום דורש אישור שלך בלחיצה
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The engine chip: shows what is in use, opens to the connected alternatives.
+ * A native <select> rather than a custom menu — it works with a keyboard, on
+ * touch, and inside a draggable window without a positioning library.
+ */
+function EnginePicker({ kind, label, current, status, onPick }: {
+  kind: EngineKind; label: string; current: EngineId | null; status: EngineStatus | null;
+  onPick: (id: EngineId) => void;
+}) {
+  const options = connectedEngines(status, kind);
+  const cur = current ? ENGINE_BY_ID[current] : null;
+  const color = cur?.color ?? '#94a3b8';
+  if (!options.length) {
+    return <Chip icon={<Wand2 size={10} />} label={`${label}: לא מחובר`} color="#94a3b8" />;
+  }
+  return (
+    <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold cursor-pointer"
+      style={{ background: `${color}14`, color, border: `1px solid ${color}30` }}
+      title={cur ? `${cur.bestFor}\n${cur.cost}` : ''}>
+      <Wand2 size={10} />
+      <span>{label}:</span>
+      <select
+        value={current ?? ''}
+        onChange={e => onPick(e.target.value as EngineId)}
+        disabled={options.length < 2}
+        className="bg-transparent outline-none cursor-pointer font-bold appearance-none pr-0.5"
+        style={{ color }}>
+        {options.map(e => <option key={e.id} value={e.id} style={{ color: '#111' }}>{e.label}</option>)}
+      </select>
+      {options.length > 1 && <span style={{ opacity: 0.6 }}>▾</span>}
+    </label>
   );
 }
 

@@ -65,6 +65,16 @@ exports.googleAdsToggleCampaign = googleAdsFunctions.googleAdsToggleCampaign;
 
 // AI media generation (Kling video, Nano Banana video)
 const mediaFunctions = require('./media');
+
+// Every image/video engine behind one door, with the operator's keys held
+// server-side. See mediaEngines.js for why the old client-side paths were a
+// key leak.
+const mediaEngines = require('./mediaEngines');
+exports.mediaEngineStatus = mediaEngines.mediaEngineStatus;
+exports.saveMediaKeys     = mediaEngines.saveMediaKeys;
+exports.testMediaEngine   = mediaEngines.testMediaEngine;
+exports.generateMedia     = mediaEngines.generateMedia;
+exports.mediaTaskStatus   = mediaEngines.mediaTaskStatus;
 exports.createKlingVideo        = mediaFunctions.createKlingVideo;
 exports.getKlingVideoStatus     = mediaFunctions.getKlingVideoStatus;
 exports.generateNanoBananaVideo = mediaFunctions.generateNanoBananaVideo;

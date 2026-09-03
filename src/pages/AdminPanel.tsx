@@ -5,6 +5,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import MorningPaymentsPanel from '../components/MorningPaymentsPanel';
+import type { EngineId, EngineKind, EngineStatus } from '../lib/mediaEngines';
+import { ENGINES, fetchEngineStatus, saveMediaKeys, testEngine } from '../lib/mediaEngines';
 import {
   Users, Building2, TrendingUp, Shield, AlertTriangle, CheckCircle2,
   Clock, XCircle, RefreshCw, Search, BarChart3, Zap, Copy, ExternalLink,
@@ -3340,94 +3342,197 @@ function AnalyticsTab({ workspaces }: { workspaces: WorkspaceProfile[] }) {
 /* ══════════════════════════════════════════════════════════════════════════
    TAB: System
 ══════════════════════════════════════════════════════════════════════════ */
-/* ─── IntegrationsTab — global API keys, admin-only ─────────────────────────
- * Stored in the GLOBAL `system/apiKeys` doc: only super-admin can write
- * (per firestore.rules), while any signed-in user can read them so the
- * Marketing Agent can use them for generation. Workspace users never see
- * this editor — it lives in the admin console only.
+/* ─── IntegrationsTab — media engines and their keys, admin-only ────────────
+ * Keys are written through the saveMediaKeys callable into `system/mediaKeys`,
+ * which no client can read (firestore.rules). This screen only ever learns
+ * "configured: yes/no" per engine from mediaEngineStatus. The earlier design
+ * kept keys in `system/apiKeys`, readable by every signed-in user — that doc
+ * is still written for the marketing page's remaining direct calls, and goes
+ * away when those move behind generateMedia too.
  * ──────────────────────────────────────────────────────────────────────── */
-type ApiKeyMap = { openai: string; google: string; heygen: string; canva: string };
 
 function IntegrationsTab({ onToast }: { onToast: (m:string,t?:'success'|'error'|'info')=>void }) {
-  const [keys, setKeys] = useState<ApiKeyMap>({ openai: '', google: '', heygen: '', canva: '' });
+  /*
+   * Every image and video engine, in one place, with the operator's keys.
+   *
+   * Keys are written through a callable and held server-side; this screen
+   * never receives a value back, only "configured: yes/no" per engine. That is
+   * on purpose: the old design stored keys in a document every signed-in user
+   * could read, and the browser called OpenAI with the raw key.
+   *
+   * Blank input = leave as is. So the admin can update one key without
+   * retyping the rest, and a ✓ can be shown for a key this screen cannot see.
+   */
+  const [status,  setStatus]  = useState<EngineStatus | null>(null);
+  const [draft,   setDraft]   = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [open,    setOpen]    = useState<string | null>(null);
 
-  useEffect(() => {
-    getDoc(doc(db, 'system', 'apiKeys'))
-      .then(snap => { if (snap.exists()) { const d = snap.data(); setKeys({ openai: d.openai ?? '', google: d.google ?? '', heygen: d.heygen ?? '', canva: d.canva ?? '' }); } })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const load = async () => {
+    setLoading(true);
+    try { setStatus(await fetchEngineStatus()); }
+    catch (e) { onToast(`לא ניתן לקרוא את מצב המנועים: ${(e as Error).message}`, 'error'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
 
   const handleSave = async () => {
+    const keys: Record<string, string> = {};
+    for (const [k, v] of Object.entries(draft)) if (v.trim()) keys[k] = v.trim();
+    if (!Object.keys(keys).length) { onToast('לא הוזן מפתח חדש', 'info'); return; }
     setSaving(true);
     try {
-      await setDoc(doc(db, 'system', 'apiKeys'), keys);
-      onToast('מפתחות API נשמרו ✅', 'success');
-    } catch { onToast('שגיאה בשמירת המפתחות', 'error'); }
+      const saved = await saveMediaKeys(keys);
+      onToast(`נשמרו ${saved.length} מפתחות ✅`, 'success');
+      setDraft({});
+      setResults({});
+      await load();
+    } catch (e) { onToast(`שגיאה בשמירה: ${(e as Error).message}`, 'error'); }
     finally { setSaving(false); }
   };
 
-  const FIELDS = [
-    { key: 'openai' as const, label: 'OpenAI API Key',      desc: 'עבור DALL-E 3 — יצירת תמונות',          placeholder: 'sk-...',   color: '#10b981', link: 'https://platform.openai.com/api-keys' },
-    { key: 'google' as const, label: 'Google AI Studio Key', desc: 'עבור Imagen 4 + Veo 3',                  placeholder: 'AIza...',  color: '#4285f4', link: 'https://aistudio.google.com/apikey' },
-    { key: 'heygen' as const, label: 'HeyGen API Key',       desc: 'עבור HyperFrames — יצירת וידאו AI',     placeholder: 'MjQ...',   color: '#8b5cf6', link: 'https://app.heygen.com/settings?nav=API' },
-    { key: 'canva'  as const, label: 'Canva Client ID',      desc: 'עבור ייצוא מצגות לקאנבה (Connect API)',  placeholder: 'OC-...',   color: '#00c4b4', link: 'https://www.canva.com/developers/' },
-  ];
+  const handleTest = async (id: EngineId) => {
+    setTesting(id);
+    try {
+      setResults(r => ({ ...r, [id]: { ok: false, message: '…' } }));
+      const res = await testEngine(id);
+      setResults(r => ({ ...r, [id]: res }));
+    } catch (e) {
+      setResults(r => ({ ...r, [id]: { ok: false, message: (e as Error).message } }));
+    } finally { setTesting(null); }
+  };
+
+  // A key shared by two engines (Google → Imagen + Veo) is entered once.
+  const seenKeys = new Set<string>();
+  const KIND_LABEL: Record<EngineKind, string> = { image: 'מנועי תמונות', video: 'מנועי וידאו' };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 overflow-y-auto h-full">
       <div>
-        <h1 className="text-xl font-black text-white/90">אינטגרציות — מפתחות API</h1>
-        <p className="text-white/45 text-sm mt-0.5">מפתחות גלובליים לכלי ה-AI. נראים ונערכים על ידי האדמין בלבד, ומשמשים את כל הסביבות.</p>
+        <h1 className="text-xl font-black text-white/90">אינטגרציות — מנועי תמונות ווידאו</h1>
+        <p className="text-white/45 text-sm mt-0.5">
+          מפתחות גלובליים, נשמרים בשרת בלבד. כל מנוע שמחובר כאן מופיע לבחירה בצ׳אט RAY Marketing של כל הסביבות.
+        </p>
       </div>
 
-      <div className="rounded-2xl p-5 space-y-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)' }}>
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center"><span className="text-base">⚡</span></div>
-          <div>
-            <h2 className="font-bold text-white/90 text-sm">כלי AI מתקדמים</h2>
-            <p className="text-[11px] text-white/45">DALL-E 3 · Google Imagen · HeyGen HyperFrames · Canva</p>
-          </div>
-        </div>
+      {loading && !status ? (
+        <div className="flex items-center gap-2 text-white/50 text-sm py-4"><div className="w-4 h-4 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"/> טוען...</div>
+      ) : (
+        (['image', 'video'] as EngineKind[]).map(kind => (
+          <section key={kind} className="space-y-3">
+            <h2 className="text-sm font-black text-white/80">{KIND_LABEL[kind]}</h2>
+            {ENGINES.filter(e => e.kind === kind).map(e => {
+              const connected = status?.[e.id] ?? e.id === 'pollinations';
+              const res = results[e.id];
+              const isOpen = open === e.id;
+              return (
+                <div key={e.id} className="rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${connected ? `${e.color}55` : 'rgba(255,255,255,0.08)'}` }}>
+                  <button type="button" onClick={() => setOpen(isOpen ? null : e.id)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 text-right">
+                    <span className="flex items-center gap-2 flex-shrink-0">
+                      {res && res.message !== '…' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={res.ok ? { background: 'rgba(16,185,129,0.15)', color: '#34d399' } : { background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
+                          {res.ok ? '✓ ' : '✗ '}{res.message}
+                        </span>
+                      )}
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full"
+                        style={connected ? { background: `${e.color}22`, color: e.color } : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                        {connected ? 'מחובר' : 'לא מחובר'}
+                      </span>
+                      <span className="text-white/40 text-xs">{isOpen ? '▴' : '▾'}</span>
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block font-bold text-sm" style={{ color: e.color }}>{e.label} <span className="text-white/35 font-normal text-[11px]">· {e.vendor}</span></span>
+                      <span className="block text-[11px] text-white/50 truncate">{e.bestFor}</span>
+                    </span>
+                  </button>
 
-        {loading ? (
-          <div className="flex items-center gap-2 text-white/50 text-sm py-4"><div className="w-4 h-4 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"/> טוען...</div>
-        ) : (
-          <div className="space-y-3">
-            {FIELDS.map(f => (
-              <div key={f.key} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold" style={{ color: f.color }}>{f.label}</label>
-                  <a href={f.link} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-300 hover:underline">קבל מפתח ↗</a>
+                  {isOpen && (
+                    <div className="px-4 pb-4 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-[11px] text-white/55 mt-3"><span className="font-bold text-white/70">עלות: </span>{e.cost}</p>
+
+                      <div className="rounded-xl p-3 space-y-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black text-white/70">איך מחברים</span>
+                          {e.keyUrl && <a href={e.keyUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-300 hover:underline">פתח את דף המפתחות ↗</a>}
+                        </div>
+                        <ol className="space-y-1 pr-4 list-decimal">
+                          {e.steps.map((st, i) => <li key={i} className="text-[11px] text-white/65 leading-relaxed">{st}</li>)}
+                        </ol>
+                      </div>
+                      {e.caveats?.length ? (
+                        <ul className="space-y-1 pr-4 list-disc">
+                          {e.caveats.map((c, i) => <li key={i} className="text-[10.5px] text-amber-200/70 leading-relaxed">{c}</li>)}
+                        </ul>
+                      ) : null}
+
+                      {e.keyFields.map(f => {
+                        const shared = seenKeys.has(f.name);
+                        seenKeys.add(f.name);
+                        return (
+                          <div key={f.name} className="space-y-1">
+                            <label className="text-[11px] font-bold" style={{ color: e.color }}>{f.label}{shared ? ' (משותף — כבר הוזן למעלה)' : ''}</label>
+                            <div className="flex gap-2">
+                              <input type="password" dir="ltr" autoComplete="off"
+                                value={draft[f.name] ?? ''}
+                                onChange={ev => setDraft(d => ({ ...d, [f.name]: ev.target.value }))}
+                                placeholder={connected ? '•••••••• (שמור — הזן רק כדי להחליף)' : f.placeholder}
+                                className="flex-1 rounded-xl px-3 py-2 text-sm outline-none font-mono"
+                                style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${draft[f.name] ? `${e.color}80` : 'rgba(255,255,255,0.1)'}`, color: 'white' }} />
+                              {connected && !draft[f.name] && <span className="flex items-center px-2 text-emerald-400 text-sm">✓</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      <div className="flex items-center gap-2 justify-end">
+                        {e.keyFields.length > 0 && (
+                          <button type="button" onClick={() => void handleTest(e.id)} disabled={testing === e.id || !connected}
+                            className="px-3 py-1.5 rounded-xl text-[11px] font-bold disabled:opacity-40"
+                            style={{ background: `${e.color}22`, color: e.color, border: `1px solid ${e.color}55` }}>
+                            {testing === e.id ? 'בודק…' : '🔌 בדוק חיבור'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <p className="text-[10px] text-white/40">{f.desc}</p>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={keys[f.key]}
-                    onChange={e => setKeys(prev => ({ ...prev, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder}
-                    className="flex-1 rounded-xl px-3 py-2 text-sm outline-none font-mono"
-                    style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${keys[f.key] ? `${f.color}60` : 'rgba(255,255,255,0.1)'}`, color: 'white' }}
-                    dir="ltr"
-                  />
-                  {keys[f.key] && <span className="flex items-center px-2 text-emerald-400 text-sm">✓</span>}
-                </div>
-              </div>
-            ))}
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="w-full py-2.5 rounded-xl text-sm font-black text-white disabled:opacity-50 flex items-center justify-center gap-2 mt-1"
-              style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)' }}>
-              {saving ? <><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"/><span>שומר...</span></> : '💾 שמור מפתחות API'}
-            </button>
-            <p className="text-[10px] text-center text-white/40">המפתחות נשמרים גלובלית ומשמשים את כל סביבות העבודה</p>
+              );
+            })}
+          </section>
+        ))
+      )}
+
+      <section className="rounded-2xl p-4 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <h2 className="text-sm font-black text-white/80">כלים נוספים</h2>
+        {[
+          { name: 'heygen', label: 'HeyGen API Key', desc: 'אווטאר מדבר (HyperFrames). נשמר להמשך — אין עדיין יצירה מהצ׳אט.', placeholder: 'MjQ…', link: 'https://app.heygen.com/settings?nav=API' },
+          { name: 'canva',  label: 'Canva Client ID', desc: 'ייצוא מצגות לקאנבה (Connect API).', placeholder: 'OC-…', link: 'https://www.canva.com/developers/' },
+        ].map(f => (
+          <div key={f.name} className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold text-white/70">{f.label}</label>
+              <a href={f.link} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-300 hover:underline">קבל מפתח ↗</a>
+            </div>
+            <p className="text-[10px] text-white/40">{f.desc}</p>
+            <input type="password" dir="ltr" autoComplete="off" value={draft[f.name] ?? ''}
+              onChange={ev => setDraft(d => ({ ...d, [f.name]: ev.target.value }))}
+              placeholder={f.placeholder}
+              className="w-full rounded-xl px-3 py-2 text-sm outline-none font-mono"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white' }} />
           </div>
-        )}
-      </div>
+        ))}
+      </section>
+
+      <button type="button" onClick={() => void handleSave()} disabled={saving || !Object.values(draft).some(v => v.trim())}
+        className="w-full py-2.5 rounded-xl text-sm font-black text-white disabled:opacity-40 flex items-center justify-center gap-2"
+        style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)' }}>
+        {saving ? <><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"/><span>שומר...</span></> : '💾 שמור מפתחות'}
+      </button>
+      <p className="text-[10px] text-center text-white/40">שדה ריק = המפתח הקיים נשאר. המפתחות לעולם לא נשלחים חזרה לדפדפן.</p>
     </div>
   );
 }

@@ -115,6 +115,13 @@ service cloud.firestore {
     }
 
     // ── System config (feature flags, deploy settings) ───────────────────────
+    // The media-engine keys are the exception: no client may read them. They
+    // are read only by Cloud Functions (Admin SDK bypasses rules) and written
+    // only through the saveMediaKeys callable. The legacy apiKeys doc stays
+    // readable until the marketing page stops calling providers directly.
+    match /system/mediaKeys {
+      allow read, write: if false;
+    }
     match /system/{docId} {
       allow read:  if isSignedIn();
       allow write: if isSuperAdmin();
